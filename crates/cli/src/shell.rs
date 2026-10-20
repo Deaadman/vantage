@@ -1131,13 +1131,18 @@ fn launch(data_dir: &Path) {
             if cfg.me.is_none() {
                 detect_me(data_dir);
             }
-            if cfg.rank.is_some() && !crate::my_matches(data_dir).is_empty() {
-                outln!();
-                crate::focus_line(data_dir);
-                dim("  /review for your newest match · /plan before you queue");
-            }
         }
-        _ => outln!("No replays yet. Download a match in the VALORANT client and it shows up here."),
+        // Matches stored earlier still count without the folder.
+        _ if !crate::my_matches(data_dir).is_empty() => {}
+        _ => {
+            outln!("No replays yet. Download a match in the VALORANT client and it shows up here.");
+            return;
+        }
+    }
+    if cfg.rank.is_some() && !crate::my_matches(data_dir).is_empty() {
+        outln!();
+        crate::focus_line(data_dir);
+        dim("  /review for your newest match · /plan before you queue");
     }
 }
 

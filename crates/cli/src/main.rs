@@ -841,10 +841,10 @@ fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
         }
         let time = played.get(11..16).unwrap_or("--:--");
         let map = m.map.as_deref().map(map_label).unwrap_or("?");
-        let mut row = vec![(Kind::Dim, format!("  {time}  ")), (Kind::Out, format!("{map:<8}"))];
+        let mut row = vec![(Kind::Dim, format!("  {time}  ")), (Kind::Out, format!("{map:<10}"))];
         if let Some(agent) = &m.agent {
             let (res, color) = review_view::result_style(m.won, m.lost);
-            row.push((Kind::Out, format!("{agent:<8}")));
+            row.push((Kind::Out, format!("{agent:<10}")));
             row.push((Kind::Paint(color, true), format!("{res} {}–{}", m.won, m.lost)));
         }
         out::row(row);

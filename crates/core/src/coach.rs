@@ -265,8 +265,19 @@ pub fn capitalise(s: &str) -> String {
     }
 }
 
+/// `1 match`, `2 matches`, `3 deaths`.
 pub fn plural(n: usize, word: &str) -> String {
-    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
+    let es = ["s", "x", "ch", "sh"].iter().any(|e| word.ends_with(e));
+    format!(
+        "{n} {word}{}",
+        if n == 1 {
+            ""
+        } else if es {
+            "es"
+        } else {
+            "s"
+        }
+    )
 }
 
 /// `3, 7 and 12`.
@@ -1240,6 +1251,9 @@ mod tests {
     fn wording() {
         assert_eq!(list_and(&["1".into(), "2".into(), "3".into()]), "1, 2 and 3");
         assert_eq!(words(3), "three");
+        assert_eq!(plural(2, "match"), "2 matches");
+        assert_eq!(plural(1, "match"), "1 match");
+        assert_eq!(plural(3, "death"), "3 deaths");
         assert_eq!(words(14), "14");
         assert_eq!(share_words(0.34), "about a third");
     }

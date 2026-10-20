@@ -209,3 +209,31 @@ fn settings_fit() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Every panel loaded from a real data folder, when `VALREVIEW_SMOKE_DATA` names one.
+#[test]
+fn real_data_panels_open_and_fit() {
+    let Some(dir) = std::env::var_os("VALREVIEW_SMOKE_DATA").map(std::path::PathBuf::from) else {
+        eprintln!("skipping: set VALREVIEW_SMOKE_DATA to a data folder with scanned matches");
+        return;
+    };
+    for m in crate::my_matches(&dir) {
+        let mut p = ReviewPanel::new(crate::load_review(&dir, Some(m.id.clone())).unwrap());
+        for tab in 0..8 {
+            p.key(key(KeyCode::Char(char::from(b'1' + tab as u8))));
+            for (w, h) in SIZES {
+                check(&format!("{} tab {tab}", m.id), &p.rows(w, h), w, h);
+            }
+        }
+    }
+    let mut p = PlanPanel::new(crate::load_plan(&dir, None).unwrap());
+    let (progress, focus, n) = crate::load_habits(&dir).unwrap();
+    let mut hp = HabitsPanel::new(progress, focus, n);
+    let (rank, standing, f) = crate::load_rank(&dir).unwrap();
+    let mut rp = RankPanel::new(rank, standing, f);
+    for (w, h) in SIZES {
+        check("plan", &p.rows(w, h), w, h);
+        check("habits", &hp.rows(w, h), w, h);
+        check("rank", &rp.rows(w, h), w, h);
+    }
+}
