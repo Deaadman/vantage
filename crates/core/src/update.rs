@@ -1,8 +1,13 @@
 //! Updates from GitHub releases. Each release carries `manifest.json`:
 //!
 //! ```json
-//! {"version": "0.2.0", "platforms": {"windows-x64": {"file": "valreview-windows-x64.exe", "sha256": "…"}}}
+//! {"version": "0.2.0", "platforms": {"windows-x64": {"file": "valreview-windows-x64.exe", "sha256": "…"}},
+//!  "notes": ["What's new, one line each"],
+//!  "vrfkit": {"tag": "v0.4.0", "notes": ["What's new in the vrfkit it pins"]}}
 //! ```
+//!
+//! `notes` and `vrfkit` are optional, written at release time; an update
+//! saves them so the first launch of the new version can say what's new.
 //!
 //! An update downloads the new exe into `versions\<version>`, checks its hash,
 //! and runs it as `valreview install --update`: the new version installs
@@ -34,6 +39,58 @@ static BUSY: Mutex<()> = Mutex::new(());
 pub struct Manifest {
     pub version: String,
     pub platforms: BTreeMap<String, Asset>,
+    #[serde(default)]
+    pub notes: Vec<String>,
+    #[serde(default)]
+    pub vrfkit: Option<VrfkitNotes>,
+}
+
+/// The vrfkit a release pins, and what's new in it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VrfkitNotes {
+    pub tag: String,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+pub const RELEASES: &str = "github.com/Deaadman/valreview/releases/tag";
+pub const VRFKIT_RELEASES: &str = "github.com/yakisoba0728/vrfkit/releases/tag";
+
+/// What an installed update brings, shown once on its first launch.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WhatsNew {
+    pub version: String,
+    pub notes: Vec<String>,
+    /// Set when the update brings a different vrfkit than the one before.
+    pub vrfkit: Option<VrfkitNotes>,
+}
+
+impl WhatsNew {
+    pub fn path(data_dir: &Path) -> PathBuf {
+        data_dir.join("whats-new.json")
+    }
+
+    /// Saved by the version doing the update, which knows the vrfkit it had.
+    pub fn save(data_dir: &Path, manifest: &Manifest) {
+        let w = WhatsNew {
+            version: manifest.version.clone(),
+            notes: manifest.notes.clone(),
+            vrfkit: manifest.vrfkit.clone().filter(|v| v.tag != crate::vrfkit::PINNED.tag),
+        };
+        if let Ok(json) = serde_json::to_string_pretty(&w) {
+            let _ = std::fs::write(Self::path(data_dir), json);
+        }
+    }
+
+    /// The notes for `version` (this build), removed so they show once.
+    pub fn take(data_dir: &Path, version: &str) -> Option<Self> {
+        let path = Self::path(data_dir);
+        let w: Self = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+        if !install::is_newer(version, &w.version) {
+            let _ = std::fs::remove_file(&path);
+        }
+        (w.version == version).then_some(w)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -125,6 +182,7 @@ pub fn apply(layout: &Layout, manifest: &Manifest, data_dir: &Path) -> Result<Pa
             .unwrap_or("no error output");
         bail!("valreview {} failed to install itself: {last}", manifest.version);
     }
+    WhatsNew::save(data_dir, manifest);
     Ok(exe)
 }
 

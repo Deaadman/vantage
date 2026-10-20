@@ -112,6 +112,12 @@ pub struct Duel {
     pub weapon: String,
     pub range: Option<String>,
     pub enemy_agent: String,
+    /// Where the reviewed player stood: minimap uv and nearest callout
+    /// (missing in reviews stored before they were recorded).
+    #[serde(default)]
+    pub uv: Option<[f64; 2]>,
+    #[serde(default)]
+    pub callout: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -547,12 +553,17 @@ fn duels(a: &Analysis, me: u32) -> Vec<Duel> {
                 range_band((x.pos[0] as f64 - y.pos[0] as f64).hypot(x.pos[1] as f64 - y.pos[1] as f64) / 100.0)
                     .to_owned()
             });
+            let (uv, callout) = pos(me).map_or((None, None), |s| {
+                deaths::place(a.map, [s.pos[0] as f64, s.pos[1] as f64, s.pos[2] as f64])
+            });
             Duel {
                 round: g.round(k).map(|r| r.number),
                 won: k.killer == me,
                 weapon,
                 range,
                 enemy_agent: a.catalog.agent_name(g.agent_id(enemy)),
+                uv,
+                callout,
             }
         })
         .collect()

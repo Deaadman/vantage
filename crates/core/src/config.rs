@@ -22,6 +22,20 @@ pub struct Config {
     pub watch: Option<bool>,
     /// `true` keeps each raw vrfkit export (about 45 MB a match) after a scan.
     pub keep_raw: Option<bool>,
+    /// Your rank, e.g. `Gold 2`, set by you: replays carry no rank.
+    pub rank: Option<String>,
+    /// The habit every new match checks first, by slug (see `habits`).
+    pub focus: Option<String>,
+    /// Where your clip app saves VALORANT clips.
+    pub clips_dir: Option<PathBuf>,
+    /// Screenshots per death: `strip` (3 moments in one image, the default), `one` or `three`.
+    pub shots: Option<String>,
+    /// The AI review's provider: `anthropic`, `openai`, `gemini` or `ollama`; unset is off.
+    pub ai: Option<String>,
+    /// That provider's API key (Ollama needs none). Stays in this file, on this computer.
+    pub ai_key: Option<String>,
+    /// A model other than the provider's default.
+    pub ai_model: Option<String>,
 }
 
 impl Config {
