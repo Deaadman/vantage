@@ -44,10 +44,23 @@ const TICK: Duration = Duration::from_millis(80);
 const WATCH_EVERY: Duration = Duration::from_secs(3);
 /// A catalog this many days old is refreshed in the background on launch.
 const SYNC_AFTER_DAYS: i64 = 1;
-pub(crate) const SPINNER: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
+
+/// The working spinner: a diamond that beeps like the planted spike, once
+/// every 1.2 s at first and quicker the longer the job runs, down to 0.24 s.
+pub(crate) fn spike(elapsed: Duration) -> (Style, &'static str) {
+    let tick = elapsed.as_millis() / TICK.as_millis();
+    let gap = 15u128.saturating_sub(elapsed.as_secs() as u128 / 4).max(3);
+    match tick % gap {
+        0 => (Style::fg(BRIGHT), "◆"),
+        1 => (Style::fg(RED), "◆"),
+        _ => (Style::fg(DIM_RED), "◇"),
+    }
+}
 
 /// Valorant red: the logo and problems.
 pub(crate) const RED: Color = Color::Rgb { r: 255, g: 70, b: 85 };
+/// The spike between beeps.
+const DIM_RED: Color = Color::Rgb { r: 137, g: 40, b: 48 };
 /// The highlighted menu row and command names.
 pub(crate) const ACCENT: Color = Color::Rgb { r: 177, g: 185, b: 249 };
 pub(crate) const YELLOW: Color = Color::Rgb { r: 255, g: 193, b: 7 };
@@ -79,8 +92,8 @@ enum UpdateNote {
 impl UpdateNote {
     fn text(self) -> (Color, &'static str) {
         match self {
-            UpdateNote::Available => (YELLOW, "New version available · /update installs it"),
-            UpdateNote::Installed => (ACCENT, "New version available · restart to apply"),
+            UpdateNote::Available => (YELLOW, "Update available! /update installs it"),
+            UpdateNote::Installed => (ACCENT, "Update available! Restart to apply"),
             UpdateNote::Failed => (YELLOW, "Update failed · /update tries again"),
         }
     }
@@ -273,7 +286,6 @@ struct App {
     /// Whether a rank is set, for the input's placeholder.
     ranked: bool,
     footer: String,
-    tick: usize,
     watch: Watch,
     /// The `/help` panel, drawn in place of the input while open.
     help: Option<HelpPanel>,
@@ -338,7 +350,6 @@ impl App {
             update_rx: None,
             ranked: false,
             footer: String::new(),
-            tick: 0,
             watch: Watch {
                 last_poll: Instant::now(),
                 seen: HashMap::new(),
@@ -465,7 +476,7 @@ impl App {
                 let flow = job.handle.join();
                 self.drain();
                 if let Some(Panel::Review(p)) = &mut self.panel {
-                    p.asking(None, 0);
+                    p.asking(None);
                 }
                 match flow {
                     Ok(Flow::Exit) => return Ok(()),
@@ -495,11 +506,10 @@ impl App {
                 self.poll_replays();
             }
             if let Some(job) = &self.job {
-                self.tick += 1;
                 if let Some(who) = job.label.strip_prefix("Asking ")
                     && let Some(Panel::Review(p)) = &mut self.panel
                 {
-                    p.asking(Some(who.to_owned()), self.tick);
+                    p.asking(Some((who.to_owned(), job.started)));
                 }
                 dirty = true;
             }
@@ -736,7 +746,8 @@ impl App {
         let mut row = Row::new();
         if let Some(job) = &self.job {
             let secs = job.started.elapsed().as_secs();
-            row.push((Style::fg(RED), format!("  {} ", SPINNER[self.tick / 2 % SPINNER.len()])));
+            let (style, glyph) = spike(job.started.elapsed());
+            row.push((style, format!("  {glyph} ")));
             row.push((Style::fg(ACCENT), format!("{}… ", job.label)));
             row.push((Style::fg(GREY), format!("({secs}s)")));
         } else if self.scroll > 0 {
@@ -1427,18 +1438,30 @@ mod tests {
     }
 
     #[test]
+    fn spike_beeps_faster_the_longer_a_job_runs() {
+        let beeps = |from: u64| {
+            (0..50)
+                .filter(|i| spike(Duration::from_millis(from * 1000 + i * 80)).0 == Style::fg(BRIGHT))
+                .count()
+        };
+        // 4 s of ticks: every 15th at first, every 3rd once the job is long.
+        assert_eq!(beeps(0), 4);
+        assert_eq!(beeps(120), 17);
+    }
+
+    #[test]
     fn status_bar_keeps_what_fits_most_important_first() {
         let msgs = || {
             vec![
-                (ACCENT, "New version available · restart to apply".to_owned()),
+                (ACCENT, "Update available! Restart to apply".to_owned()),
                 (YELLOW, "No replays yet · download a match in the client".to_owned()),
             ]
             .into_iter()
         };
         let wide = text(&status_right(Row::new(), msgs(), 140));
-        assert!(wide.contains("restart to apply") && wide.contains("No replays"));
+        assert!(wide.contains("Restart to apply") && wide.contains("No replays"));
         let narrow = text(&status_right(Row::new(), msgs(), 60));
-        assert!(narrow.contains("restart to apply") && !narrow.contains("No replays"));
+        assert!(narrow.contains("Restart to apply") && !narrow.contains("No replays"));
     }
 
     #[test]

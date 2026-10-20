@@ -4,6 +4,7 @@
 //! deaths) and the optional AI review. Rounds count from 1, as in the game.
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::Color;
@@ -16,7 +17,7 @@ use crate::panel::{
     Item, MapCache, bullet, field, frame, heading, is_close, list_rows, map_rows_h, pad, para, rule_line, scrolled,
     step, step_of, steps, tab_key,
 };
-use crate::shell::{ACCENT, GREY, RED, Row, SPINNER, Style, YELLOW, wrap};
+use crate::shell::{ACCENT, GREY, RED, Row, Style, YELLOW, spike, wrap};
 use crate::{ClipFolder, Clips, ReviewData};
 
 pub const GREEN: Color = Color::Rgb { r: 120, g: 200, b: 120 };
@@ -55,8 +56,8 @@ pub struct ReviewPanel {
     /// The AI tab shows the format and the raw answer.
     json: bool,
     flash: Option<String>,
-    /// While the AI review runs: who is asked, and the spinner frame.
-    asking: Option<(String, usize)>,
+    /// While the AI review runs: who is asked, and since when.
+    asking: Option<(String, Instant)>,
     map_cache: MapCache,
 }
 
@@ -86,8 +87,8 @@ impl ReviewPanel {
     }
 
     /// The shell is running the AI review: show the spinner.
-    pub fn asking(&mut self, who: Option<String>, tick: usize) {
-        self.asking = who.map(|w| (w, tick));
+    pub fn asking(&mut self, who: Option<(String, Instant)>) {
+        self.asking = who;
     }
 
     /// The AI review finished, or failed.
@@ -794,10 +795,11 @@ impl ReviewPanel {
     fn ai_tab(&mut self, w: usize, h: usize) -> Vec<Row> {
         let shots = self.data.shots().len();
         let provider = self.data.ai_provider;
-        if let Some((who, tick)) = &self.asking {
+        if let Some((who, started)) = &self.asking {
+            let (style, glyph) = spike(started.elapsed());
             let mut b = vec![
                 vec![
-                    (Style::fg(RED), format!("  {} ", SPINNER[tick / 2 % SPINNER.len()])),
+                    (style, format!("  {glyph} ")),
                     (Style::fg(ACCENT), format!("Asking {who}…")),
                 ],
                 vec![],
