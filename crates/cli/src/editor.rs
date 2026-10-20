@@ -205,6 +205,13 @@ impl Editor {
             .map(str::to_owned)
     }
 
+    /// Replace the line, cursor at the end.
+    pub fn set_line(&mut self, s: &str) {
+        self.buf.clear();
+        self.cursor = 0;
+        self.insert_str(s);
+    }
+
     pub fn insert_str(&mut self, s: &str) {
         for c in s.chars().filter(|c| !c.is_control()) {
             self.buf.insert(self.cursor, c);

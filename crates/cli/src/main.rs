@@ -1,6 +1,7 @@
 #[macro_use]
 mod out;
 mod editor;
+mod help;
 mod shell;
 
 use std::io::IsTerminal;
@@ -82,7 +83,9 @@ enum Command {
         #[arg(long, default_value = ".")]
         out: PathBuf,
     },
+    // Hidden: the shell syncs on launch once the cache is a day old.
     /// Download agents, maps, weapons and seasons from valorant-api.com into the local cache.
+    #[command(hide = true)]
     Sync,
     /// Check vrfkit, the catalog, the database and the replay folder, and say what to update.
     Status,
@@ -99,9 +102,11 @@ enum Command {
         #[arg(long)]
         demos_dir: Option<PathBuf>,
     },
+    // Hidden: the shell updates in the background on launch.
     /// Download and install the newest valreview and the vrfkit it needs (restart to use it).
+    #[command(hide = true)]
     Update,
-    /// Install this exe and its vrfkit into %LOCALAPPDATA%alreview (install.ps1 runs this).
+    /// Install this exe and its vrfkit into %LOCALAPPDATA%\valreview (install.ps1 runs this).
     #[command(hide = true)]
     Install {
         /// Run by an older valreview applying an update: print nothing on success.

@@ -22,19 +22,19 @@ Replays are decoded by [vrfkit](https://github.com/yakisoba0728/vrfkit), which t
 
 2. Download your replays in the Valorant client, open a new terminal and run `valreview`.
 
-The interactive shell scans your replay folder, works out which account is yours and lists your recent matches. Type `/` to see the commands:
+The interactive shell looks after itself. When it opens, it scans your replay folder, works out which account is yours and lists your recent matches. It then keeps watching the folder, so a replay you download while it's open is processed as soon as the download finishes. Agent, map and weapon names are refreshed from valorant-api.com once a day, and valreview updates itself (see below).
+
+Type `/` to see the commands, or `/help` for an overview, every command and the keyboard shortcuts:
 
 | Command | Does |
 | --- | --- |
-| `/scan` | Processes new replays into the local database |
-| `/matches` | Lists stored matches |
 | `/packet` | Writes `packet.md`, `deaths.jsonl` and `rounds.jsonl` for a match (newest by default) for an AI to review |
 | `/trends` | Compares your last 20 matches with the 20 before and lists repeated death spots |
+| `/matches` | Lists stored matches |
+| `/scan` | Processes the replay folder now (`--retry-failed` tries failed replays again) |
 | `/status` | Checks vrfkit, the catalog, the database and the replay folder |
-| `/sync` | Refreshes agents, maps and weapons from valorant-api.com |
-| `/update` | Installs the newest valreview now |
 
-Each one also works as a plain command, for example `valreview packet --match <id>`. Add `--help` to any of them for its flags.
+Each one also works as a plain command, for example `valreview packet --match <id>`. Add `--help` to any of them for its flags. `valreview sync` and `valreview update` also still work by hand, although the shell runs them for you.
 
 ## Updates
 

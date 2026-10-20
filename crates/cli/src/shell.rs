@@ -3,6 +3,7 @@
 //! menu opening above it. Commands run on a worker thread and print into the
 //! transcript through `out`, so the screen keeps drawing while they work.
 
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -27,6 +28,7 @@ use valreview_core::vrfkit::Vrfkit;
 
 use crate::Cli;
 use crate::editor::{Action, CommandInfo, Context, Editor, FlagInfo, MatchInfo};
+use crate::help::{HelpAction, HelpPanel};
 use crate::out::{self, Kind};
 
 const PROMPT: &str = "❯ ";
@@ -34,16 +36,20 @@ const MENU_ROWS: usize = 8;
 const HISTORY_LINES: usize = 500;
 const RECENT_MATCHES: usize = 5;
 const TICK: Duration = Duration::from_millis(80);
+/// How often the replay folder is checked for new downloads.
+const WATCH_EVERY: Duration = Duration::from_secs(3);
+/// A catalog this many days old is refreshed in the background on launch.
+const SYNC_AFTER_DAYS: i64 = 1;
 const SPINNER: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
 
 /// Valorant red: the logo and problems.
 const RED: Color = Color::Rgb { r: 255, g: 70, b: 85 };
 /// The highlighted menu row and command names.
-const ACCENT: Color = Color::Rgb { r: 177, g: 185, b: 249 };
+pub(crate) const ACCENT: Color = Color::Rgb { r: 177, g: 185, b: 249 };
 const YELLOW: Color = Color::Rgb { r: 255, g: 193, b: 7 };
-const GREY: Color = Color::Rgb { r: 140, g: 140, b: 140 };
+pub(crate) const GREY: Color = Color::Rgb { r: 140, g: 140, b: 140 };
 const RULE: Color = Color::Rgb { r: 110, g: 110, b: 110 };
-const BRIGHT: Color = Color::Rgb { r: 240, g: 240, b: 240 };
+pub(crate) const BRIGHT: Color = Color::Rgb { r: 240, g: 240, b: 240 };
 const ECHO_BG: Color = Color::Rgb { r: 45, g: 45, b: 45 };
 
 /// The terminal tab title while the shell runs.
@@ -71,8 +77,21 @@ pub fn run(data_dir: &Path) -> Result<()> {
             let dir = data_dir.to_path_buf();
             std::thread::spawn(move || check_for_update(&dir, &update_tx));
         }
+        // With no catalog yet, `launch` fetches one first; an old one refreshes quietly.
+        let path = paths::catalog_path(data_dir);
+        let stale = Catalog::load(&path).ok().is_some_and(|c| {
+            c.age_days(valreview_core::time::now_unix())
+                .is_none_or(|d| d >= SYNC_AFTER_DAYS)
+        });
+        if stale {
+            std::thread::spawn(move || {
+                if let Ok(cat) = valreview_core::catalog::fetch() {
+                    let _ = cat.save(&path);
+                }
+            });
+        }
         let dir = data_dir.to_path_buf();
-        app.start("Scanning replays", move || {
+        app.start("Scanning replays", true, move || {
             launch(&dir);
             Flow::Continue
         });
@@ -163,6 +182,33 @@ struct App {
     update_rx: Option<Receiver<(Color, String)>>,
     footer: String,
     tick: usize,
+    watch: Watch,
+    /// The `/help` panel, drawn in place of the input while open.
+    help: Option<HelpPanel>,
+}
+
+/// The replay folder as of the last scan, and what has changed since.
+struct Watch {
+    last_poll: Instant,
+    seen: HashMap<PathBuf, u64>,
+    /// Changed files and their sizes at the previous poll.
+    pending: HashMap<PathBuf, u64>,
+}
+
+/// Every replay in the configured folder with its size.
+fn replay_sizes(data_dir: &Path) -> HashMap<PathBuf, u64> {
+    let Some(dir) = Config::load(data_dir).ok().and_then(|c| c.demos_dir()) else {
+        return HashMap::new();
+    };
+    valreview_core::scan::find_replays(&dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| Some((p.clone(), std::fs::metadata(&p).ok()?.len())))
+        .collect()
+}
+
+fn is_help(line: &str) -> bool {
+    line.trim().trim_start_matches('/').eq_ignore_ascii_case("help")
 }
 
 impl App {
@@ -185,6 +231,12 @@ impl App {
             update_rx: None,
             footer: String::new(),
             tick: 0,
+            watch: Watch {
+                last_poll: Instant::now(),
+                seen: HashMap::new(),
+                pending: HashMap::new(),
+            },
+            help: None,
         };
         app.clear();
         app.refresh();
@@ -207,17 +259,52 @@ impl App {
             .and_then(|c| c.me)
             .map_or_else(|| "me not set".to_owned(), |m| format!("me {}", &m[..m.len().min(8)]));
         let n = self.ctx.matches.len();
-        self.footer = format!("{me} · {n} match{} · /help for keys", if n == 1 { "" } else { "es" });
+        self.footer = format!(
+            "{me} · {n} match{} · /help for commands and keys",
+            if n == 1 { "" } else { "es" }
+        );
         if let Some(Item::Header { setup, folder }) = self.transcript.first_mut() {
             (*setup, *folder) = header_text(&self.data_dir);
         }
     }
 
-    fn start(&mut self, label: &str, job: impl FnOnce() -> Flow + Send + 'static) {
+    /// Run `job` on a worker thread. A job that `scans` marks the replay
+    /// folder's current files as seen, so the watcher only picks up later ones.
+    fn start(&mut self, label: &str, scans: bool, job: impl FnOnce() -> Flow + Send + 'static) {
+        if scans {
+            self.watch.seen = replay_sizes(&self.data_dir);
+            self.watch.pending.clear();
+        }
         self.job = Some(Job {
             label: label.to_owned(),
             started: Instant::now(),
             handle: std::thread::spawn(job),
+        });
+    }
+
+    /// Scan replays that appeared or changed since the last scan, once their
+    /// size holds still for a poll (a download in progress keeps growing).
+    fn poll_replays(&mut self) {
+        let changed: HashMap<PathBuf, u64> = replay_sizes(&self.data_dir)
+            .into_iter()
+            .filter(|(p, size)| self.watch.seen.get(p) != Some(size))
+            .collect();
+        if changed.is_empty() || changed != self.watch.pending {
+            self.watch.pending = changed;
+            return;
+        }
+        let n = changed.len();
+        let dir = self.data_dir.clone();
+        self.start("Scanning new replays", true, move || {
+            outln!();
+            dim(&format!("{n} new replay{} downloaded", if n == 1 { "" } else { "s" }));
+            if let Err(e) = crate::scan_cmd(&dir, None, false, false, false) {
+                out::emit(Kind::Error, format!("scan failed: {e:#}"));
+            }
+            if Config::load(&dir).is_ok_and(|c| c.me.is_none()) {
+                detect_me(&dir);
+            }
+            Flow::Continue
         });
     }
 
@@ -256,6 +343,10 @@ impl App {
                 self.refresh();
                 dirty = true;
             }
+            if self.job.is_none() && self.watch.last_poll.elapsed() >= WATCH_EVERY {
+                self.watch.last_poll = Instant::now();
+                self.poll_replays();
+            }
             if self.job.is_some() {
                 self.tick += 1;
                 dirty = true;
@@ -282,6 +373,23 @@ impl App {
 
     /// Handle one key. False to quit.
     fn key(&mut self, key: KeyEvent) -> bool {
+        if let Some(panel) = &mut self.help {
+            match panel.key(key, &self.ctx.commands) {
+                HelpAction::None => {}
+                HelpAction::Close => self.help = None,
+                HelpAction::Use(line) => {
+                    self.help = None;
+                    self.editor.set_line(&line);
+                }
+            }
+            return true;
+        }
+        // Help opens even while a command runs.
+        if key.code == KeyCode::Enter && self.job.is_some() && is_help(&self.editor.line()) {
+            self.editor.set_line("");
+            self.help = Some(HelpPanel::default());
+            return true;
+        }
         let page = terminal::size().map_or(10, |(_, h)| (h as usize / 2).max(1));
         match key.code {
             KeyCode::PageUp => {
@@ -303,11 +411,17 @@ impl App {
             Action::Submit(line) if line.is_empty() => {}
             Action::Submit(line) => {
                 save_history(&self.history_path, &line);
+                if is_help(&line) {
+                    self.help = Some(HelpPanel::default());
+                    return true;
+                }
                 self.transcript.push(Item::Echo(line.clone()));
                 self.scroll = 0;
-                let label = format!("Running {}", line.split_whitespace().next().unwrap_or(&line));
+                let name = line.split_whitespace().next().unwrap_or(&line);
+                let scans = name.trim_start_matches('/').eq_ignore_ascii_case("scan");
+                let label = format!("Running {name}");
                 let dir = self.data_dir.clone();
-                self.start(&label, move || execute_line(&line, &dir));
+                self.start(&label, scans, move || execute_line(&line, &dir));
             }
         }
         true
@@ -318,6 +432,12 @@ impl App {
     fn draw(&mut self, out: &mut impl Write) -> io::Result<()> {
         let (w, h) = terminal::size().map(|(w, h)| (w as usize, h as usize))?;
         let (w, h) = (w.max(20), h.max(8));
+
+        if let Some(panel) = &mut self.help {
+            let panel_h = (h * 4 / 5).max(14).min(h);
+            let bottom = panel.rows(&self.ctx.commands, w, panel_h);
+            return self.paint(out, w, h, &bottom, None);
+        }
 
         let s = self.editor.suggestions(&self.ctx);
         let above = if s.items.is_empty() {
@@ -343,7 +463,19 @@ impl App {
             self.footer.as_str()
         };
         bottom.push(vec![(Style::fg(GREY), format!("  {footer}"))]);
+        self.paint(out, w, h, &bottom, Some((cursor_col, h - 3)))
+    }
 
+    /// The transcript in the rows `bottom` leaves, then `bottom`; the cursor
+    /// at `cursor` or hidden.
+    fn paint(
+        &mut self,
+        out: &mut impl Write,
+        w: usize,
+        h: usize,
+        bottom: &[Row],
+        cursor: Option<(usize, usize)>,
+    ) -> io::Result<()> {
         let area = h.saturating_sub(bottom.len());
         let rows = transcript_rows(&self.transcript, w);
         let max_scroll = rows.len().saturating_sub(area);
@@ -364,8 +496,9 @@ impl App {
             print_row(out, row, w)?;
             queue!(out, Clear(ClearType::UntilNewLine))?;
         }
-        let input_y = h - 3;
-        queue!(out, MoveTo(cursor_col as u16, input_y as u16), Show)?;
+        if let Some((x, y)) = cursor {
+            queue!(out, MoveTo(x as u16, y as u16), Show)?;
+        }
         out.flush()
     }
 
@@ -430,27 +563,27 @@ impl App {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct Style {
-    fg: Option<Color>,
-    bg: Option<Color>,
-    bold: bool,
+pub(crate) struct Style {
+    pub(crate) fg: Option<Color>,
+    pub(crate) bg: Option<Color>,
+    pub(crate) bold: bool,
 }
 
 impl Style {
-    fn fg(c: Color) -> Self {
+    pub(crate) fn fg(c: Color) -> Self {
         Style {
             fg: Some(c),
             ..Style::default()
         }
     }
 
-    fn bold(self) -> Self {
+    pub(crate) fn bold(self) -> Self {
         Style { bold: true, ..self }
     }
 }
 
 /// One screen row as styled pieces.
-type Row = Vec<(Style, String)>;
+pub(crate) type Row = Vec<(Style, String)>;
 
 fn row_width(row: &Row) -> usize {
     row.iter().map(|(_, s)| s.chars().count()).sum()
@@ -541,7 +674,7 @@ fn transcript_rows(items: &[Item], w: usize) -> Vec<Row> {
 
 /// Wrap at spaces into rows of at most `w` chars, breaking a longer word
 /// where it must. Continuation rows keep the line's indent.
-fn wrap(text: &str, w: usize) -> Vec<String> {
+pub(crate) fn wrap(text: &str, w: usize) -> Vec<String> {
     let w = w.max(1);
     let chars: Vec<char> = text.chars().collect();
     let indent = chars.iter().take_while(|c| **c == ' ').count().min(w / 2);
@@ -868,10 +1001,6 @@ fn execute_line(line: &str, data_dir: &Path) -> Flow {
     match first.as_str() {
         "exit" | "quit" => return Flow::Exit,
         "clear" => return Flow::Clear,
-        "help" => {
-            help();
-            return Flow::Continue;
-        }
         _ => {}
     }
     let cli = match Cli::try_parse_from(std::iter::once("valreview".to_owned()).chain(words)) {
@@ -891,17 +1020,6 @@ fn execute_line(line: &str, data_dir: &Path) -> Flow {
         out::emit(Kind::Error, format!("error: {e:#}"));
     }
     Flow::Continue
-}
-
-fn help() {
-    for c in commands() {
-        outln!("  {:<10} {}", format!("/{}", c.name), c.about);
-    }
-    outln!();
-    dim("Keys: Tab or → completes, ↑↓ move in the menu (or through history), Enter runs,");
-    dim("Esc hides the menu, PgUp/PgDn scroll the output, Ctrl+U clears to the start,");
-    dim("Ctrl+W deletes a word, Ctrl+L clears the screen, Ctrl+C twice quits.");
-    dim("Every command takes --help, e.g. /packet --help.");
 }
 
 /// Split on whitespace; double quotes group. Backslashes stay literal for Windows paths.
@@ -983,9 +1101,13 @@ mod tests {
         let cmds = commands();
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
         for n in [
-            "scan", "packet", "matches", "trends", "status", "sync", "init", "players", "help", "exit",
+            "scan", "packet", "matches", "trends", "status", "init", "players", "help", "exit",
         ] {
             assert!(names.contains(&n), "{n}");
+        }
+        // Automatic in the shell; still typed by hand if needed.
+        for n in ["sync", "update", "install"] {
+            assert!(!names.contains(&n), "{n}");
         }
         assert!(cmds.iter().all(|c| !c.about.is_empty()));
         let packet = cmds.iter().find(|c| c.name == "packet").unwrap();
