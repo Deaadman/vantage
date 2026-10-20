@@ -1,1131 +1,927 @@
-//! The `/review` and `/summary` panel, drawn over the whole screen until Esc.
-//! For one match: Overview, Work on, Rounds, Deaths, Map. For all matches on
-//! a map: Overview, Work on, Matches, Deaths, Map. Rounds count from 1 here,
-//! as in the game.
+//! The `/review` panel, drawn over the whole screen until Esc: the debrief
+//! of one match in plain English. Tabs: Debrief, Fixes, Moments, Rounds,
+//! Map, then Clips and Screenshots (your clip app's clips matched to your
+//! deaths) and the optional AI review. Rounds count from 1, as in the game.
+
+use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::Color;
+use valreview_core::ai::{self, Saved};
 use valreview_core::analysis::Side;
-use valreview_core::catalog::MapInfo;
-use valreview_core::deaths::DeathFact;
-use valreview_core::facts::RoundFact;
-use valreview_core::minimap::Minimap;
-use valreview_core::export::MatchReview;
-use valreview_core::review::{self, Finding, ordinal, percent};
-use valreview_core::summary;
+use valreview_core::coach::{list_and, plural};
+use valreview_core::habits::{self, Check};
 
-use crate::shell::{ACCENT, BRIGHT, GREY, RED, Row, Style, YELLOW, wrap};
-use crate::{ReviewData, SummaryData};
+use crate::panel::{
+    Item, MapCache, bullet, field, frame, heading, is_close, list_rows, map_rows_h, pad, para, rule_line,
+    scrolled, step, step_of, steps, tab_key,
+};
+use crate::shell::{ACCENT, GREY, RED, Row, SPINNER, Style, YELLOW, wrap};
+use crate::{ClipFolder, Clips, ReviewData};
 
 pub const GREEN: Color = Color::Rgb { r: 120, g: 200, b: 120 };
-const MATCH_TABS: [&str; 5] = ["Overview", "Work on", "Rounds", "Deaths", "Map"];
-const MAP_TABS: [&str; 5] = ["Overview", "Work on", "Matches", "Deaths", "Map"];
+const TABS: [&str; 8] = ["Debrief", "Fixes", "Moments", "Rounds", "Map", "Clips", "Screenshots", "AI"];
+const T_CLIPS: usize = 5;
+const T_SHOTS: usize = 6;
+const T_AI: usize = 7;
 const LEGEND_W: usize = 44;
 
 pub enum ReviewAction {
     None,
     Close,
-    /// Open this match's review (from a summary's Matches tab).
-    Open(String),
-}
-
-/// What the panel shows: one match, or every match on one map.
-pub enum Content {
-    Match(Box<ReviewData>),
-    Map(Box<SummaryData>),
+    /// Use this clip folder, then open the review again.
+    SetClips(PathBuf),
+    /// Run the AI review of this match.
+    RunAi,
 }
 
 pub struct ReviewPanel {
-    data: Content,
+    data: Box<ReviewData>,
     tab: usize,
-    /// First row shown on the Overview tab.
+    sel: usize,
     scroll: usize,
-    finding: usize,
-    /// Selected round (one match) or match (a map).
     round: usize,
     death: usize,
-    /// The minimap shrunk to a size, kept between frames: (pixels a side, cells).
-    map_cache: Option<(usize, Vec<[u8; 4]>)>,
+    clip_pick: usize,
+    /// The AI tab shows the format and the raw answer.
+    json: bool,
+    flash: Option<String>,
+    /// While the AI review runs: who is asked, and the spinner frame.
+    asking: Option<(String, usize)>,
+    map_cache: MapCache,
 }
 
 impl ReviewPanel {
     pub fn new(data: ReviewData) -> Self {
-        Self::with(Content::Match(Box::new(data)))
-    }
-
-    pub fn summary(data: SummaryData) -> Self {
-        Self::with(Content::Map(Box::new(data)))
-    }
-
-    fn with(data: Content) -> Self {
         ReviewPanel {
-            data,
+            data: Box::new(data),
             tab: 0,
+            sel: 0,
             scroll: 0,
-            finding: 0,
             round: 0,
             death: 0,
-            map_cache: None,
+            clip_pick: 0,
+            json: false,
+            flash: None,
+            asking: None,
+            map_cache: MapCache::default(),
         }
     }
 
-    fn one(&self) -> Option<&ReviewData> {
-        match &self.data {
-            Content::Match(d) => Some(d),
-            Content::Map(_) => None,
-        }
+    pub fn match_id(&self) -> &str {
+        &self.data.debrief.match_id
     }
 
-    fn tabs(&self) -> [&'static str; 5] {
-        match self.data {
-            Content::Match(_) => MATCH_TABS,
-            Content::Map(_) => MAP_TABS,
-        }
+    pub fn data(&self) -> &ReviewData {
+        &self.data
     }
 
-    fn findings(&self) -> &[Finding] {
-        match &self.data {
-            Content::Match(d) => &d.overview.work_on,
-            Content::Map(d) => &d.summary.work_on,
-        }
+    /// The shell is running the AI review: show the spinner.
+    pub fn asking(&mut self, who: Option<String>, tick: usize) {
+        self.asking = who.map(|w| (w, tick));
     }
 
-    /// One match's deaths (empty for a map).
-    fn deaths(&self) -> &[DeathFact] {
-        self.one().map_or(&[], |d| &d.review.death_facts)
-    }
-
-    /// One match's rounds (empty for a map).
-    fn rounds(&self) -> &[RoundFact] {
-        self.one().map_or(&[], |d| &d.review.round_facts)
-    }
-
-    /// Every death shown, with its match: newest match first for a map.
-    fn all_deaths(&self) -> Vec<(&MatchReview, &DeathFact)> {
-        match &self.data {
-            Content::Match(d) => d.review.death_facts.iter().map(|f| (&d.review, f)).collect(),
-            Content::Map(d) => d
-                .reviews
-                .iter()
-                .rev()
-                .flat_map(|r| r.death_facts.iter().map(move |f| (r, f)))
-                .collect(),
-        }
-    }
-
-    fn minimap(&self) -> &Result<Minimap, String> {
-        match &self.data {
-            Content::Match(d) => &d.minimap,
-            Content::Map(d) => &d.minimap,
-        }
-    }
-
-    fn map_info(&self) -> Option<&MapInfo> {
-        match &self.data {
-            Content::Match(d) => d.map.as_ref(),
-            Content::Map(d) => d.map.as_ref(),
-        }
-    }
-
-    /// The selectable rows of the third tab: rounds, or matches.
-    fn third_len(&self) -> usize {
-        match &self.data {
-            Content::Match(d) => d.review.round_facts.len(),
-            Content::Map(d) => d.summary.matches.len(),
+    /// The AI review finished, or failed.
+    pub fn ai_done(&mut self, result: Result<Saved, String>) {
+        self.asking = None;
+        match result {
+            Ok(s) => {
+                self.data.ai = Some(s);
+                self.sel = 0;
+                self.flash = None;
+            }
+            Err(e) => self.flash = Some(e),
         }
     }
 
     pub fn key(&mut self, key: KeyEvent) -> ReviewAction {
-        let n_find = self.findings().len();
-        let n_rounds = self.third_len();
-        let n_deaths = self.all_deaths().len();
-        let n_tabs = self.tabs().len();
-        let step = |v: &mut usize, by: isize, n: usize| {
-            *v = (*v as isize + by).clamp(0, n.saturating_sub(1) as isize) as usize;
-        };
-        let by = match key.code {
-            KeyCode::Up => -1,
-            KeyCode::Down => 1,
-            KeyCode::PageUp => -10,
-            KeyCode::PageDown => 10,
-            KeyCode::Home => -10_000,
-            KeyCode::End => 10_000,
-            _ => 0,
-        };
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => return ReviewAction::Close,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return ReviewAction::Close,
-            KeyCode::Left | KeyCode::BackTab => self.tab = (self.tab + n_tabs - 1) % n_tabs,
-            KeyCode::Right | KeyCode::Tab => self.tab = (self.tab + 1) % n_tabs,
-            KeyCode::Char(c @ '1'..='5') => self.tab = c as usize - '1' as usize,
-            KeyCode::Enter => return self.enter(),
-            _ if by != 0 => match self.tab {
-                0 => self.scroll = (self.scroll as isize + by).max(0) as usize,
-                1 => step(&mut self.finding, by, n_find),
-                2 => step(&mut self.round, by, n_rounds),
-                _ => step(&mut self.death, by, n_deaths),
-            },
-            _ => {}
+        if is_close(&key) {
+            return ReviewAction::Close;
         }
-        ReviewAction::None
-    }
-
-    /// Enter follows a link to the next level of detail.
-    fn enter(&mut self) -> ReviewAction {
-        if let Content::Map(d) = &self.data {
-            match self.tab {
-                2 => {
-                    if let Some(m) = d.summary.matches.get(self.round) {
-                        return ReviewAction::Open(m.id.clone());
-                    }
-                }
-                3 => self.tab = 4,
+        if tab_key(&mut self.tab, &key, TABS.len()) {
+            self.sel = 0;
+            self.scroll = 0;
+            self.flash = None;
+            return ReviewAction::None;
+        }
+        let ch = match key.code {
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => Some(c),
+            _ => None,
+        };
+        let d = &self.data.debrief;
+        if self.tab == T_CLIPS
+            && let Clips::NotSet(folders) = &self.data.clips
+        {
+            match key.code {
+                KeyCode::Up => self.clip_pick = self.clip_pick.saturating_sub(1),
+                KeyCode::Down => self.clip_pick = (self.clip_pick + 1).min(folders.len().saturating_sub(1)),
+                KeyCode::Enter => match folders.get(self.clip_pick).and_then(|f| f.path.clone()) {
+                    Some(p) => return ReviewAction::SetClips(p),
+                    None => self.flash = Some("Type the path in /settings → Config → Clip folder.".into()),
+                },
                 _ => {}
             }
             return ReviewAction::None;
         }
-        match self.tab {
-            // A finding: its first round in the Rounds tab.
-            1 => {
-                if let Some(r) = self.findings().get(self.finding).and_then(|f| f.rounds.first())
-                    && let Some(i) = self.rounds().iter().position(|f| f.round + 1 == *r)
-                {
-                    self.round = i;
-                    self.tab = 2;
-                }
+        if self.tab == T_SHOTS && ch == Some('o') {
+            if let Clips::Set { shots_dir, .. } = &self.data.clips {
+                let _ = std::fs::create_dir_all(shots_dir);
+                self.flash = Some(match std::process::Command::new("explorer").arg(shots_dir).spawn() {
+                    Ok(_) => format!("Opened {} in File Explorer.", shots_dir.display()),
+                    Err(e) => format!("Couldn't open File Explorer: {e}"),
+                });
             }
-            // A round: my death in it, if any.
-            2 => {
-                let round = self.rounds().get(self.round).map(|f| f.round);
-                if let Some(i) = self.deaths().iter().position(|d| d.round == round) {
-                    self.death = i;
-                    self.tab = 3;
-                }
+            return ReviewAction::None;
+        }
+        if self.tab == T_AI {
+            if ch == Some('a') {
+                return self.run_ai();
             }
-            // A death: where it was.
-            3 => self.tab = 4,
-            _ => {}
+            if ch == Some('j') && self.data.ai.is_some() {
+                self.json = !self.json;
+                self.scroll = 0;
+                return ReviewAction::None;
+            }
+            if self.json {
+                self.scroll = (self.scroll as isize + step_of(&key)).max(0) as usize;
+                return ReviewAction::None;
+            }
+        }
+        let n = match self.tab {
+            0 => d.fixes.len().min(3),
+            1 => d.fixes.len(),
+            2 => d.moments.len(),
+            3 => d.rounds.len(),
+            4 | T_CLIPS => d.deaths.len(),
+            T_AI => self.data.ai.as_ref().map_or(0, |a| a.output.findings.len()),
+            _ => 0,
+        };
+        let by = step_of(&key);
+        if by != 0 {
+            match self.tab {
+                3 => step(&mut self.round, by, n),
+                4 => step(&mut self.death, by, n),
+                _ => step(&mut self.sel, by, n),
+            }
+        } else if key.code == KeyCode::Enter {
+            match self.tab {
+                0 => self.tab = 1,
+                1 => {
+                    if let Some(r) = d.fixes.get(self.sel).and_then(|f| f.rounds.first()) {
+                        self.round = d.rounds.iter().position(|x| x.round == *r).unwrap_or(0);
+                        self.tab = 3;
+                    }
+                }
+                2 => {
+                    if let Some(m) = d.moments.get(self.sel) {
+                        self.round = d.rounds.iter().position(|x| x.round == m.round).unwrap_or(0);
+                        self.tab = 3;
+                    }
+                }
+                3 => {
+                    if let Some(i) = d.rounds.get(self.round).and_then(|r| r.death) {
+                        self.death = i;
+                        self.tab = 4;
+                    }
+                }
+                T_CLIPS | T_SHOTS => {
+                    self.tab += 1;
+                    self.sel = 0;
+                    self.flash = None;
+                }
+                _ => {}
+            }
         }
         ReviewAction::None
     }
 
+    fn run_ai(&mut self) -> ReviewAction {
+        if self.asking.is_some() {
+            return ReviewAction::None;
+        }
+        if self.data.ai_provider.is_none() {
+            self.flash = Some("Connect an AI first, in /settings → Config → AI review.".into());
+        } else if self.data.ai.is_some() {
+            self.flash = Some("This match already has an AI review. It's saved and can't be rerun.".into());
+        } else if self.data.shots().is_empty() {
+            self.flash = Some("There are no screenshots to send yet. Set up the Clips tab first.".into());
+        } else {
+            return ReviewAction::RunAi;
+        }
+        ReviewAction::None
+    }
+
+    fn title(&self) -> Row {
+        let d = &self.data.debrief;
+        let (res, color) = result_style(d.won, d.lost);
+        vec![
+            (Style::fg(ACCENT).bold(), "  Review  ".into()),
+            (Style::default().bold(), format!("{} on {} ", d.agent, d.map)),
+            (Style::fg(GREY), "· ".into()),
+            (Style::fg(color).bold(), format!("{res} {}–{}", d.won, d.lost)),
+            (
+                Style::fg(GREY),
+                format!(
+                    " · {}, {}{}",
+                    plural(d.kills, "kill"),
+                    plural(d.deaths_n, "death"),
+                    d.played_at.as_deref().map(|t| format!(" · {}", crate::short_when(t))).unwrap_or_default()
+                ),
+            ),
+        ]
+    }
+
     /// The panel, exactly `h` rows for a `w`-column screen.
     pub fn rows(&mut self, w: usize, h: usize) -> Vec<Row> {
-        let title = match &self.data {
-            Content::Match(d) => match_title(d),
-            Content::Map(d) => map_title(d),
+        let body_h = h.saturating_sub(7).max(1);
+        let body = match self.tab {
+            0 => self.debrief(w, body_h),
+            1 => self.fixes(w, body_h),
+            2 => self.moments(w, body_h),
+            3 => self.rounds(w, body_h),
+            4 => self.map(w, body_h),
+            T_CLIPS => self.clips(w, body_h),
+            T_SHOTS => self.shots(w, body_h),
+            _ => self.ai_tab(w, body_h),
         };
-        let mut rows: Vec<Row> = vec![
-            vec![(Style::fg(ACCENT), "─".repeat(w.saturating_sub(1)))],
-            title,
-            vec![],
-        ];
-        let mut tabs: Row = vec![(Style::default(), " ".into())];
-        for (i, name) in self.tabs().iter().enumerate() {
-            tabs.push((Style::default(), " ".into()));
-            let style = if i == self.tab {
-                Style {
-                    fg: Some(Color::Black),
-                    bg: Some(BRIGHT),
-                    bold: false,
-                }
-            } else {
-                Style::default()
-            };
-            tabs.push((style, format!(" {name} ")));
-        }
-        rows.push(tabs);
-        rows.push(vec![]);
+        let clips_set = matches!(self.data.clips, Clips::Set { .. });
+        let what = match self.tab {
+            0 => "↑↓ select · Enter: the full fix",
+            1 => "↑↓ select · Enter: its rounds",
+            2 => "↑↓ select · Enter: the round",
+            3 => "↑↓ select · Enter: on the map",
+            4 => "↑↓ step through deaths",
+            T_CLIPS if clips_set => "↑↓ select · Enter: the screenshots",
+            T_CLIPS => "↑↓ choose · Enter picks · change it later in /settings",
+            T_SHOTS => "o opens the folder · Enter: the AI review",
+            _ if self.data.ai.is_some() && self.json => "↑↓ scroll · j: back to the review",
+            _ if self.data.ai.is_some() => "↑↓ select · j: the format and saved answer",
+            _ if self.data.ai_provider.is_some() => "a: run the AI review",
+            _ => "connect an AI in /settings → Config",
+        };
+        frame(
+            w,
+            h,
+            self.title(),
+            Some((&TABS, self.tab)),
+            body,
+            &format!("←→ or 1-8 tabs · {what} · Esc closes"),
+        )
+    }
 
-        let map = matches!(self.data, Content::Map(_));
-        let enter = match (map, self.tab) {
-            (false, 1) => " · Enter: its rounds",
-            (false, 2) => " · Enter: your death",
-            (true, 2) => " · Enter: open the match",
-            (_, 3) => " · Enter: on the map",
-            _ => "",
-        };
-        let tail = if map {
-            "Esc in a match comes back here"
+    fn flash_rows(&self, b: &mut Vec<Row>) {
+        if let Some(f) = &self.flash {
+            b.push(vec![]);
+            b.push(vec![(Style::fg(YELLOW), format!("  ◆ {f}"))]);
+        }
+    }
+
+    fn debrief(&mut self, w: usize, h: usize) -> Vec<Row> {
+        let d = &self.data.debrief;
+        let mut b: Vec<Row> = vec![heading("The short version", None)];
+        b.extend(para(&d.summary, 4, w, Style::default()));
+        b.push(vec![]);
+        let top: Vec<_> = d.fixes.iter().take(3).collect();
+        if top.is_empty() {
+            b.push(heading("Nothing to fix first", Some(GREEN)));
+            b.extend(para("No mistake repeated enough in this match to call it a pattern.", 4, w, Style::fg(GREY)));
         } else {
-            "/export exports this match for an AI"
-        };
-        let footer = vec![
-            vec![],
-            vec![(
-                Style::fg(GREY),
-                format!("  ←→ or 1-5 tabs · ↑↓ select{enter} · Esc closes · {tail}"),
-            )],
-        ];
-        let body_h = h.saturating_sub(rows.len() + footer.len()).max(1);
-        let mut body = match (map, self.tab) {
-            (false, 0) => self.overview(w, body_h),
-            (true, 0) => self.summary_overview(w, body_h),
-            (_, 1) => self.work_on(w, body_h),
-            (false, 2) => self.rounds_tab(w, body_h),
-            (true, 2) => self.matches_tab(w, body_h),
-            (_, 3) => self.deaths_tab(w, body_h),
-            _ => self.map(w, body_h),
-        };
-        body.resize(body_h, vec![]);
-        rows.extend(body);
-        rows.extend(footer);
-        rows.truncate(h);
-        rows
-    }
-
-    // ------------------------------------------------------------ overview
-
-    fn overview(&mut self, w: usize, h: usize) -> Vec<Row> {
-        let Content::Match(d) = &self.data else {
-            return vec![];
-        };
-        let o = &d.overview;
-        let mut lines: Vec<Row> = vec![title("You against the lobby")];
-        for s in &o.stats {
-            let (rank, color) = match s.rank {
-                Some(r) if r <= 3 => (format!("{} of {}", ordinal(r), s.of), GREEN),
-                Some(r) if r + 2 >= s.of => (format!("{} of {}", ordinal(r), s.of), YELLOW),
-                Some(r) => (format!("{} of {}", ordinal(r), s.of), GREY),
-                None => (String::new(), GREY),
-            };
-            lines.push(vec![
-                (Style::default(), format!("    {:<26}", s.label)),
-                (Style::default().bold(), format!("{:<18}", s.value)),
-                (Style::fg(color), rank),
+            b.push(vec![
+                (Style::fg(YELLOW).bold(), "  Fix first".into()),
+                (Style::fg(GREY), "  the three that cost you the most rounds".into()),
             ]);
-        }
-        lines.push(vec![]);
-
-        lines.push(title("Scoreboard"));
-        lines.push(vec![(
-            Style::fg(GREY),
-            format!(
-                "    {:<12}{:>4}{:>4}{:>9}{:>6}{:>5}{:>5}{:>6}",
-                "", "K", "D", "dmg/rnd", "HS", "FK", "FD", "KST"
-            ),
-        )]);
-        let mut enemies = false;
-        for p in &o.players {
-            if !p.ally && !enemies {
-                enemies = true;
-                lines.push(vec![(Style::fg(GREY), "    enemies".into())]);
-            }
-            let style = if p.me {
-                Style::fg(ACCENT).bold()
-            } else if p.ally {
-                Style::default()
-            } else {
-                Style::fg(GREY)
-            };
-            lines.push(vec![(
-                style,
-                format!(
-                    "  {} {:<12}{:>4}{:>4}{:>9.0}{:>6}{:>5}{:>5}{:>6}",
-                    if p.me { "❯" } else { " " },
-                    p.agent,
-                    p.kills,
-                    p.deaths,
-                    p.adr,
-                    p.hs.map_or("-".into(), percent),
-                    p.first_kills,
-                    p.first_deaths,
-                    p.kst.map_or("-".into(), percent)
-                ),
-            )]);
-        }
-        if !o.has_lobby {
-            lines.push(vec![(
-                Style::fg(GREY),
-                "    Only your review is stored for this match, so there is no lobby to compare with.".into(),
-            )]);
-        }
-        lines.push(vec![(
-            Style::fg(GREY),
-            "    KST: rounds with a kill, survived or traded (the replay has no assists).".into(),
-        )]);
-        lines.push(vec![]);
-
-        lines.push(vec![(Style::fg(GREEN).bold(), "  Went well".into())]);
-        if o.went_well.is_empty() {
-            lines.push(vec![(Style::fg(GREY), "    Nothing stood out.".into())]);
-        }
-        for f in &o.went_well {
-            lines.push(vec![
-                (Style::fg(GREEN), "    + ".into()),
-                (Style::default(), f.title.clone()),
-            ]);
-        }
-        lines.push(vec![]);
-        lines.push(vec![
-            (Style::fg(YELLOW).bold(), "  Work on".into()),
-            (Style::fg(GREY), "  (the Work on tab has the evidence)".into()),
-        ]);
-        if o.work_on.is_empty() {
-            lines.push(vec![(Style::fg(GREY), "    Nothing stood out.".into())]);
-        }
-        for (i, f) in o.work_on.iter().take(3).enumerate() {
-            lines.push(vec![
-                (Style::fg(YELLOW), format!("    {} ", i + 1)),
-                (Style::default(), f.title.clone()),
-            ]);
-        }
-        let notes: Vec<&String> = d.review.warnings.iter().chain(&d.review.context.build_note).collect();
-        if !notes.is_empty() {
-            lines.push(vec![]);
-            for n in notes {
-                for piece in wrap(&format!("Note: {n}"), w.saturating_sub(6).max(10)) {
-                    lines.push(vec![(Style::fg(GREY), format!("    {piece}"))]);
-                }
+            self.sel = self.sel.min(top.len() - 1);
+            b.extend(list_rows(
+                top.iter()
+                    .enumerate()
+                    .map(|(i, f)| Item::new(format!("{}  {} ", i + 1, pad(&f.title, 50))).tail(&f.cost, GREY))
+                    .collect(),
+                self.sel,
+                top.len(),
+            ));
+            let f = top[self.sel];
+            b.push(vec![]);
+            b.push(rule_line(w));
+            b.push(vec![(Style::default().bold(), format!("    {}", f.title))]);
+            b.extend(para(&f.short, 4, w, Style::default()));
+            for (i, p) in wrap(&f.try_short, w.saturating_sub(12).max(10)).into_iter().enumerate() {
+                b.push(vec![
+                    (Style::fg(GREEN).bold(), if i == 0 { "    Try  ".into() } else { "         ".into() }),
+                    (Style::default(), p),
+                ]);
             }
         }
-        self.scrolled(lines, h)
-    }
-
-    /// `lines` from the Overview's scroll position, with a "more" line.
-    fn scrolled(&mut self, lines: Vec<Row>, h: usize) -> Vec<Row> {
-        let max = lines.len().saturating_sub(h);
-        self.scroll = self.scroll.min(max);
-        let mut rows: Vec<Row> = lines.into_iter().skip(self.scroll).take(h).collect();
-        if self.scroll < max
-            && let Some(last) = rows.last_mut()
-        {
-            *last = vec![(Style::fg(GREY), format!("    ↓ {} more", max - self.scroll))];
-        }
-        rows
-    }
-
-    /// A map's Overview: totals against the lobbies, matches, what went well.
-    fn summary_overview(&mut self, w: usize, h: usize) -> Vec<Row> {
-        let Content::Map(d) = &self.data else {
-            return vec![];
-        };
-        let s = &d.summary;
-        let mut lines: Vec<Row> = Vec::new();
-        if let Some(note) = &s.note {
-            for piece in wrap(note, w.saturating_sub(6).max(10)) {
-                lines.push(vec![(Style::fg(YELLOW), format!("  {piece}"))]);
+        if !d.keep.is_empty() {
+            b.push(vec![]);
+            b.push(heading("Keep doing", Some(GREEN)));
+            for k in &d.keep {
+                b.extend(bullet("+", GREEN, k, w));
             }
-            lines.push(vec![]);
         }
-        lines.push(title("Across these matches"));
-        for st in &s.stats {
-            lines.push(vec![
-                (Style::default(), format!("    {:<26}", st.label)),
-                (Style::default().bold(), st.value.clone()),
+        if let Some(c) = &self.data.focus {
+            b.push(vec![]);
+            b.push(vec![
+                (Style::fg(YELLOW), "  ◆ ".into()),
+                (Style::default(), format!("Your focus, {}: ", c.habit.name)),
+                (Style::default().bold(), focus_result(c)),
             ]);
         }
-        lines.push(vec![]);
-        lines.push(title("Matches"));
-        for m in &s.matches {
-            let (res, color) = if m.won > m.lost {
-                ("W", GREEN)
-            } else if m.won < m.lost {
-                ("L", RED)
-            } else {
-                ("D", YELLOW)
-            };
-            lines.push(vec![
-                (Style::default(), format!("    {}  {:<10} ", m.label, m.agent)),
-                (Style::fg(color).bold(), format!("{res} {:>2}–{:<2}", m.won, m.lost)),
-                (
-                    Style::fg(GREY),
-                    format!(
-                        "  {:>2}/{:<2}  {:>4.0} dmg/round{}",
-                        m.kills,
-                        m.deaths,
-                        m.adr,
-                        m.adr_rank
-                            .map(|r| format!(" ({} of {})", ordinal(r), m.of))
-                            .unwrap_or_default()
-                    ),
-                ),
-            ]);
+        for n in &self.data.notes {
+            b.push(vec![]);
+            b.extend(para(&format!("Note: {n}"), 4, w, Style::fg(GREY)));
         }
-        lines.push(vec![]);
-        lines.push(vec![(Style::fg(GREEN).bold(), "  Went well".into())]);
-        if s.went_well.is_empty() {
-            lines.push(vec![(Style::fg(GREY), "    Nothing stood out.".into())]);
-        }
-        for f in &s.went_well {
-            lines.push(vec![
-                (Style::fg(GREEN), "    + ".into()),
-                (Style::default(), f.title.clone()),
-            ]);
-        }
-        lines.push(vec![]);
-        lines.push(vec![
-            (Style::fg(YELLOW).bold(), "  Work on".into()),
-            (Style::fg(GREY), "  (the Work on tab has the evidence)".into()),
-        ]);
-        if s.work_on.is_empty() {
-            lines.push(vec![(Style::fg(GREY), "    Nothing repeats yet.".into())]);
-        }
-        for (i, f) in s.work_on.iter().take(3).enumerate() {
-            lines.push(vec![
-                (Style::fg(YELLOW), format!("    {} ", i + 1)),
-                (Style::default(), f.title.clone()),
-            ]);
-        }
-        self.scrolled(lines, h)
+        scrolled(&mut self.scroll, b, h)
     }
 
-    /// A map's matches; Enter opens one.
-    fn matches_tab(&mut self, w: usize, h: usize) -> Vec<Row> {
-        let Content::Map(d) = &self.data else {
-            return vec![];
-        };
-        let ms = &d.summary.matches;
-        if ms.is_empty() {
-            return vec![];
+    fn fixes(&mut self, w: usize, h: usize) -> Vec<Row> {
+        let d = &self.data.debrief;
+        if d.fixes.is_empty() {
+            return para("Nothing repeated enough in this match to make a fix of it. See the Moments tab for single rounds.", 2, w, Style::fg(GREY));
         }
-        self.round = self.round.min(ms.len() - 1);
-        let header = format!(
-            "{:<11}  {:<10} {:<7} {:>5}  {:>7}  {:<10} {}",
-            "played", "agent", "score", "K/D", "dmg/rnd", "place", "HS"
-        );
-        let lines = ms.iter().map(|m| {
-            format!(
-                "{:<11}  {:<10} {:<7} {:>5}  {:>7.0}  {:<10} {}",
-                m.label,
-                m.agent,
-                format!("{}–{}", m.won, m.lost),
-                format!("{}/{}", m.kills, m.deaths),
-                m.adr,
-                m.adr_rank
-                    .map(|r| format!("{} of {}", ordinal(r), m.of))
-                    .unwrap_or_default(),
-                m.hs.map_or("-".into(), percent)
-            )
-        });
-        let mut rows = vec![vec![(Style::fg(GREY), format!("    {header}"))]];
-        rows.extend(list_rows(lines, self.round, h.saturating_sub(3).min(ms.len())));
-        rows.push(vec![]);
-        let detail = vec![
-            format!("Enter opens the full review of the {} match.", ms[self.round].label),
-            "Esc in that review comes back to this summary.".to_owned(),
-        ];
-        rows.extend(detail_rows(&detail, w));
-        rows.truncate(h);
-        rows
-    }
-
-    // ------------------------------------------------------------- work on
-
-    fn work_on(&mut self, w: usize, h: usize) -> Vec<Row> {
-        if self.findings().is_empty() {
-            let text = match self.data {
-                Content::Match(_) => "  Nothing stood out in this match.",
-                Content::Map(_) => "  Nothing repeats across these matches yet.",
-            };
-            return vec![(vec![(Style::fg(GREY), text.into())])];
-        }
-        self.finding = self.finding.min(self.findings().len() - 1);
-        let findings = self.findings();
-        let list_h = findings.len().min((h / 2).max(3));
-        let mut rows = list_rows(
-            findings
+        self.sel = self.sel.min(d.fixes.len() - 1);
+        let mut b = list_rows(
+            d.fixes
                 .iter()
                 .enumerate()
-                .map(|(i, f)| format!("{:>2}  {}", i + 1, f.title)),
-            self.finding,
-            list_h,
+                .map(|(i, f)| Item::new(format!("{}  {} ", i + 1, pad(&f.title, 50))).tail(&f.cost, GREY))
+                .collect(),
+            self.sel,
+            d.fixes.len().min(8),
         );
-        rows.push(vec![]);
-        rows.extend(evidence(&findings[self.finding], w));
-        rows.truncate(h);
-        rows
+        let f = &d.fixes[self.sel];
+        b.push(vec![]);
+        b.push(rule_line(w));
+        b.push(vec![(Style::default().bold(), format!("    {}", f.title))]);
+        b.extend(field("What happened", &f.happened, w, Style::default()));
+        b.extend(field("Why it costs", &f.why, w, Style::default()));
+        b.extend(steps("Try this", &f.tries, w));
+        b.extend(field("Next match", &f.check, w, Style::fg(ACCENT)));
+        b.truncate(h);
+        b
     }
 
-    // -------------------------------------------------------------- rounds
-
-    fn rounds_tab(&mut self, w: usize, h: usize) -> Vec<Row> {
-        if self.rounds().is_empty() {
-            return vec![(vec![(Style::fg(GREY), "  No rounds in this review.".into())])];
+    fn moments(&mut self, w: usize, h: usize) -> Vec<Row> {
+        let d = &self.data.debrief;
+        let mut b: Vec<Row> = vec![
+            vec![(
+                Style::fg(GREY),
+                "  The deaths that decided a round, and what would have been better".into(),
+            )],
+            vec![],
+        ];
+        if d.moments.is_empty() {
+            b.extend(para("None of your deaths in lost rounds fits a pattern worth calling out.", 4, w, Style::fg(GREY)));
+            return b;
         }
-        self.round = self.round.min(self.rounds().len() - 1);
-        let rf = self.rounds();
-        let detail = self.round_detail(&rf[self.round], w);
-        let list_h = h.saturating_sub(detail.len() + 2).max(3).min(rf.len());
-        let header = format!(
-            "{:>3}  {:<4} {:<15} {:<7} {:<10} {:>2} {:>4}  {}",
-            "rnd", "side", "result", "buy", "gun", "K", "dmg", "you"
-        );
-        let lines = rf.iter().map(|f| {
-            let death = self.deaths().iter().find(|d| d.round == Some(f.round));
-            let you = match death {
-                Some(d) => format!(
-                    "died to {}{}",
-                    d.killer_agent,
-                    d.nearest_callout
-                        .as_ref()
-                        .map(|c| format!(" at {c}"))
-                        .unwrap_or_default()
-                ),
-                None => "survived".into(),
-            };
-            let first = match (f.first_kill, f.first_death) {
-                (true, _) => " · first kill",
-                (_, true) => " · first death",
-                _ => "",
-            };
-            format!(
-                "{:>3}  {:<4} {:<15} {:<7} {:<10} {:>2} {:>4.0}  {you}{first}",
-                f.round + 1,
-                side(f.side),
-                result(f),
-                f.economy.buy_type,
-                f.economy.primary.as_deref().unwrap_or("-"),
-                f.kills,
-                f.damage_dealt
-            )
-        });
-        let mut rows = vec![vec![(Style::fg(GREY), format!("    {header}"))]];
-        rows.extend(list_rows(lines, self.round, list_h));
-        rows.push(vec![]);
-        rows.extend(detail);
-        rows.truncate(h);
-        rows
-    }
-
-    fn round_detail(&self, f: &RoundFact, w: usize) -> Vec<Row> {
-        let mut lines = vec![format!(
-            "Round {} · {} · {}",
-            f.round + 1,
-            match f.side {
-                Some(Side::Attack) => "attack",
-                Some(Side::Defense) => "defense",
-                None => "side unknown",
-            },
-            match f.won {
-                Some(true) => format!("won ({})", f.result.as_deref().unwrap_or("?")),
-                Some(false) => format!("lost ({})", f.result.as_deref().unwrap_or("?")),
-                None => "result unknown".into(),
-            }
-        )];
-        let e = &f.economy;
-        lines.push(format!(
-            "Buy: {}{}, {} credits of guns and armour{}",
-            e.buy_type,
-            e.primary.as_deref().map(|g| format!(" with {g}")).unwrap_or_default(),
-            e.loadout_value,
-            e.credits_start
-                .map(|c| format!(", {c} credits at the start"))
-                .unwrap_or_default()
+        self.sel = self.sel.min(d.moments.len() - 1);
+        b.extend(list_rows(
+            d.moments
+                .iter()
+                .map(|m| {
+                    Item::new(format!("{}{} ", pad(&format!("R{}", m.round), 5), pad(&m.situation, 38)))
+                        .tail(format!("→ {}", m.better), GREY)
+                })
+                .collect(),
+            self.sel,
+            d.moments.len(),
         ));
-        let hits = f.hits_head + f.hits_body + f.hits_legs;
-        lines.push(format!(
-            "You: {} kill{}, {:.0} damage dealt, {:.0} taken, {} hits ({} head) from {} shots",
-            f.kills,
-            if f.kills == 1 { "" } else { "s" },
-            f.damage_dealt,
-            f.damage_taken,
-            hits,
-            f.hits_head,
-            f.shots
-        ));
-        let mut extra = Vec::new();
-        if f.first_kill {
-            extra.push("first kill of the round".to_owned());
-        }
-        if f.first_death {
-            extra.push("first death of the round".to_owned());
-        }
-        if let Some(n) = f.clutch_vs {
-            extra.push(format!("clutch 1v{n}"));
-        }
-        if f.carried_spike {
-            extra.push("carried the spike".into());
-        }
-        if f.planted {
-            extra.push("planted".into());
-        }
-        if f.defused {
-            extra.push("defused".into());
-        }
-        if f.ult_used {
-            extra.push("used your ult".into());
-        }
-        if !f.casts.is_empty() {
-            extra.push(format!(
-                "casts {}",
-                f.casts
-                    .iter()
-                    .map(|(k, n)| format!("{k}×{n}"))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ));
-        }
-        if !extra.is_empty() {
-            lines.push(capitalise(&extra.join(", ")));
-        }
-        for d in self.deaths().iter().filter(|d| d.round == Some(f.round)) {
-            let line = review::death_line(d);
-            let what = line.split_once(": ").map_or(line.as_str(), |(_, rest)| rest);
-            lines.push(format!("Died: {what}"));
-        }
-        detail_rows(&lines, w)
+        let m = &d.moments[self.sel];
+        b.push(vec![]);
+        b.push(rule_line(w));
+        b.push(vec![(Style::default().bold(), format!("    Round {}: {}", m.round, m.situation))]);
+        b.extend(para(&m.text, 4, w, Style::default()));
+        b.truncate(h);
+        b
     }
 
-    // -------------------------------------------------------------- deaths
-
-    fn deaths_tab(&mut self, w: usize, h: usize) -> Vec<Row> {
-        let n = self.all_deaths().len();
-        if n == 0 {
-            return vec![(vec![(Style::fg(GREY), "  No deaths to show.".into())])];
+    fn rounds(&mut self, w: usize, h: usize) -> Vec<Row> {
+        let d = &self.data.debrief;
+        if d.rounds.is_empty() {
+            return vec![vec![(Style::fg(GREY), "  No rounds were stored for this match.".into())]];
         }
-        self.death = self.death.min(n - 1);
-        let map = matches!(self.data, Content::Map(_));
-        let d = self.all_deaths();
-        let (r, f) = d[self.death];
-        let mut detail_lines = death_detail(f);
-        if map {
-            detail_lines[0] = summary::death_line(r, f);
-        }
-        let detail = detail_rows(&detail_lines, w);
-        let list_h = h.saturating_sub(detail.len() + 2).max(3).min(n);
-        let lead = |r: &MatchReview| {
-            if map {
-                format!("{:<11}  ", summary::match_label(r))
-            } else {
-                String::new()
-            }
-        };
-        let header = format!(
-            "{}{:>3}  {:<10} {:<20} {:<16} {:>5}  {:<8} {}",
-            if map {
-                format!("{:<11}  ", "match")
-            } else {
-                String::new()
-            },
-            "rnd",
-            "killer",
-            "weapon",
-            "where",
-            "dist",
-            "hit them",
-            "traded"
-        );
-        let lines = d.iter().map(|(r, f)| {
-            format!(
-                "{}{:>3}  {:<10} {:<20} {:<16} {:>5}  {:<8} {}",
-                lead(r),
-                f.round.map_or("?".into(), |r| (r + 1).to_string()),
-                f.killer_agent,
-                f.context.killer_weapon.as_deref().unwrap_or("?"),
-                f.nearest_callout.as_deref().unwrap_or("-"),
-                f.dist_to_killer_m.map_or("-".into(), |m| format!("{m:.0} m")),
-                if f.context.duel_hits_dealt > 0 {
-                    plural(f.context.duel_hits_dealt, "hit")
-                } else {
-                    "no".into()
-                },
-                if f.traded_within_3s { "yes" } else { "" }
-            )
-        });
-        let mut rows = vec![vec![(Style::fg(GREY), format!("    {header}"))]];
-        rows.extend(list_rows(lines, self.death, list_h));
-        rows.push(vec![]);
-        rows.extend(detail);
-        rows.truncate(h);
-        rows
-    }
-
-    // ----------------------------------------------------------------- map
-
-    fn map(&mut self, w: usize, h: usize) -> Vec<Row> {
-        // Each cell is one pixel wide and two tall, so pixels come out square.
-        let rows_h = h.min(w.saturating_sub(LEGEND_W + 4) / 2).max(4);
-        let n = rows_h * 2;
-        if self.map_cache.as_ref().is_none_or(|(size, _)| *size != n) {
-            match self.minimap() {
-                Ok(m) => self.map_cache = Some((n, m.downsample(n, n))),
-                Err(e) => return vec![(vec![(Style::fg(GREY), format!("  No minimap: {e}"))])],
-            }
-        }
-        let px = &self.map_cache.as_ref().expect("just filled").1;
-        let opaque = |p: [u8; 4]| p[3] > 60;
-        let dim = |p: [u8; 4]| Color::Rgb {
-            r: (p[0] as f64 * 0.55) as u8,
-            g: (p[1] as f64 * 0.55) as u8,
-            b: (p[2] as f64 * 0.55) as u8,
-        };
-        let mut cells: Vec<Vec<(Style, String)>> = (0..rows_h)
-            .map(|r| {
-                (0..n)
-                    .map(|c| {
-                        let (top, bottom) = (px[2 * r * n + c], px[(2 * r + 1) * n + c]);
-                        match (opaque(top), opaque(bottom)) {
-                            (true, true) => (
-                                Style {
-                                    fg: Some(dim(top)),
-                                    bg: Some(dim(bottom)),
-                                    bold: false,
-                                },
-                                "▀".to_owned(),
-                            ),
-                            (true, false) => (Style::fg(dim(top)), "▀".to_owned()),
-                            (false, true) => (Style::fg(dim(bottom)), "▄".to_owned()),
-                            (false, false) => (Style::default(), " ".to_owned()),
-                        }
-                    })
-                    .collect()
+        self.round = self.round.min(d.rounds.len() - 1);
+        let items: Vec<Item> = d
+            .rounds
+            .iter()
+            .map(|x| {
+                let death = x.death.map(|i| &d.deaths[i]);
+                let kills = if x.kills > 0 { plural(x.kills as usize, "kill") } else { String::new() };
+                let what = match death {
+                    Some(dd) => format!(
+                        "{}{} got you at {}",
+                        if kills.is_empty() { String::new() } else { format!("{kills}, then ") },
+                        dd.killer,
+                        dd.place.as_deref().unwrap_or("?")
+                    ),
+                    None if x.kills > 0 => format!("{kills}, survived"),
+                    None => "survived".into(),
+                };
+                let tag = match death {
+                    Some(dd) if dd.fix.is_some() => format!("fix {}", dd.fix.unwrap_or(0) + 1),
+                    Some(dd) if dd.moment.is_some() => "moment".into(),
+                    _ => String::new(),
+                };
+                Item::new(format!(
+                    "{:>2}  {}{} {} {} ",
+                    x.round,
+                    pad(side_word(x.side), 8),
+                    pad(won_word(x.won), 5),
+                    pad(&x.buy, 9),
+                    pad(&what, 44)
+                ))
+                .tail(tag, YELLOW)
             })
             .collect();
-        let at = |uv: [f64; 2]| -> Option<(usize, usize)> {
-            let (c, r) = ((uv[0] * n as f64) as isize, (uv[1] * n as f64 / 2.0) as isize);
-            (c >= 0 && r >= 0 && (c as usize) < n && (r as usize) < rows_h).then_some((r as usize, c as usize))
+        let rd = &d.rounds[self.round];
+        let mut detail: Vec<Row> = vec![
+            rule_line(w),
+            vec![(
+                Style::default().bold(),
+                format!("    Round {} · {} · {}", rd.round, side_word(rd.side), won_word(rd.won)),
+            )],
+        ];
+        let buy = match rd.buy.as_str() {
+            "save" => "a save".to_owned(),
+            "pistol" => "pistols".to_owned(),
+            "eco" => "an eco".to_owned(),
+            b => format!("a {b}"),
         };
-        let mark = |cells: &mut Vec<Vec<(Style, String)>>, uv: [f64; 2], fg: Color, ch: &str| {
-            if let Some((r, c)) = at(uv) {
-                let bg = cells[r][c].0.bg.or(cells[r][c].0.fg.filter(|_| cells[r][c].1 != " "));
-                cells[r][c] = (
-                    Style {
-                        fg: Some(fg),
-                        bg,
-                        bold: true,
-                    },
-                    ch.to_owned(),
-                );
-            }
-        };
-        // Site letters for orientation.
-        if let Some(map) = self.map_info()
-            && let Some(p) = map.projection
-        {
-            for c in map.callouts.iter().filter(|c| c.region == "Site") {
-                let letter = c.super_region.chars().next().map(String::from).unwrap_or_default();
-                mark(&mut cells, p.uv(c.pos_cm[0], c.pos_cm[1]), BRIGHT, &letter);
-            }
+        let mut story = vec![format!("You were on {} with {buy}.", side_word(rd.side))];
+        if rd.kills > 0 {
+            story.push(format!("You got {}.", plural(rd.kills as usize, "kill")));
         }
-        let deaths = self.all_deaths();
-        for (i, (_, d)) in deaths.iter().enumerate() {
-            if i != self.death
-                && let Some(uv) = d.minimap_uv
-            {
-                mark(&mut cells, uv, RED, "●");
-            }
+        let death = rd.death.map(|i| &d.deaths[i]);
+        story.push(death.map_or_else(|| "You survived the round.".into(), |dd| dd.sentence()));
+        detail.extend(para(&story.join(" "), 4, w, Style::default()));
+        if let Some(fi) = death.and_then(|dd| dd.fix) {
+            detail.extend(para(&format!("Part of fix {}: {}.", fi + 1, d.fixes[fi].title), 4, w, Style::fg(YELLOW)));
         }
-        if let Some(uv) = deaths.get(self.death).and_then(|(_, d)| d.minimap_uv) {
-            mark(&mut cells, uv, YELLOW, "◆");
+        if let Some(mi) = death.and_then(|dd| dd.moment) {
+            detail.extend(para(&format!("Better: {}.", d.moments[mi].better), 4, w, Style::fg(GREEN)));
         }
+        let list_h = h.saturating_sub(detail.len() + 2).min(d.rounds.len()).max(3);
+        let mut b = vec![vec![(Style::fg(GREY), "    rnd  side    result buy       what happened".to_owned())]];
+        b.extend(list_rows(items, self.round, list_h));
+        b.push(vec![]);
+        b.extend(detail);
+        b.truncate(h);
+        b
+    }
 
-        // The legend beside the map.
+    fn map(&mut self, w: usize, h: usize) -> Vec<Row> {
+        let rows_h = map_rows_h(w, h, LEGEND_W);
+        let data = &self.data;
+        let d = &data.debrief;
+        let mut cells = match self.map_cache.cells(&data.minimap, data.map.as_ref(), rows_h) {
+            Ok(c) => c,
+            Err(e) => return vec![vec![(Style::fg(GREY), format!("  No minimap: {e}"))]],
+        };
+        for uv in &d.wins {
+            cells.mark(*uv, GREEN, "▲");
+        }
+        for (i, x) in d.deaths.iter().enumerate() {
+            if i != self.death
+                && let Some(uv) = x.uv
+            {
+                cells.mark(uv, RED, "●");
+            }
+        }
+        let sel = d.deaths.get(self.death);
+        if let Some(uv) = sel.and_then(|x| x.uv) {
+            cells.mark(uv, YELLOW, "◆");
+        }
         let mut legend: Vec<Row> = vec![
+            vec![(Style::fg(RED).bold(), "● ".into()), (Style::default(), "where you died".into())],
+            vec![(Style::fg(GREEN).bold(), "▲ ".into()), (Style::default(), "where you won a fight".into())],
+            vec![(Style::fg(YELLOW).bold(), "◆ ".into()), (Style::default(), "this death (↑↓)".into())],
+            vec![],
             vec![
-                (Style::fg(RED).bold(), "● ".into()),
-                (Style::default(), "your deaths".into()),
+                (Style::fg(GREEN).bold(), "Your spot: ".into()),
+                (Style::default(), d.best_spot.clone().unwrap_or_else(|| "none yet".into())),
             ],
             vec![
-                (Style::fg(YELLOW).bold(), "◆ ".into()),
-                (Style::default(), "selected (↑↓)".into()),
-            ],
-            vec![
-                (Style::fg(BRIGHT).bold(), "A ".into()),
-                (Style::default(), "sites".into()),
+                (Style::fg(RED).bold(), "Your trap: ".into()),
+                (
+                    Style::default(),
+                    d.worst_spot
+                        .as_ref()
+                        .map_or_else(|| "none".into(), |(s, n)| format!("{s} ({})", plural(*n, "death"))),
+                ),
             ],
             vec![],
         ];
-        let spots: Vec<String> = match &self.data {
-            Content::Match(d) => d
-                .review
-                .clusters
-                .iter()
-                .map(|c| {
-                    format!(
-                        "{} ×{}  (rounds {})",
-                        c.nearest_callout.as_deref().unwrap_or("?"),
-                        c.deaths,
-                        c.rounds
-                            .iter()
-                            .map(|r| (r + 1).to_string())
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    )
-                })
-                .collect(),
-            Content::Map(d) => d
-                .summary
-                .spots
-                .iter()
-                .map(|s| {
-                    format!(
-                        "{} ×{} in {} matches",
-                        s.callout.as_deref().unwrap_or("?"),
-                        s.deaths,
-                        s.matches
-                    )
-                })
-                .collect(),
-        };
-        if !spots.is_empty() {
-            legend.push(vec![(Style::default().bold(), "Repeated spots".into())]);
-            for spot in spots {
-                legend.push(vec![(Style::default(), spot)]);
-            }
-            legend.push(vec![]);
-        }
-        if let Some((r, d)) = deaths.get(self.death) {
+        if let Some(x) = sel {
             legend.push(vec![(
                 Style::default().bold(),
-                format!("Death {} of {}", self.death + 1, deaths.len()),
+                format!("Death {} of {} · round {}", self.death + 1, d.deaths.len(), x.round),
             )]);
-            let line = match self.data {
-                Content::Match(_) => review::death_line(d),
-                Content::Map(_) => summary::death_line(r, d),
-            };
-            for piece in wrap(&line, LEGEND_W) {
-                legend.push(vec![(Style::fg(GREY), piece)]);
+            for p in wrap(&x.sentence(), 40) {
+                legend.push(vec![(Style::fg(GREY), p)]);
             }
         }
-        let missing = deaths.iter().filter(|(_, d)| d.minimap_uv.is_none()).count();
-        if missing > 0 {
-            legend.push(vec![]);
-            legend.push(vec![(Style::fg(GREY), format!("{missing} deaths have no position"))]);
-        }
+        cells.beside(legend)
+    }
 
-        cells
-            .into_iter()
-            .enumerate()
-            .map(|(r, row)| {
-                let mut out: Row = vec![(Style::default(), "  ".into())];
-                out.extend(row);
-                out.push((Style::default(), "    ".into()));
-                if let Some(l) = legend.get(r) {
-                    out.extend(l.iter().cloned());
+    fn clips(&mut self, w: usize, h: usize) -> Vec<Row> {
+        let d = &self.data.debrief;
+        let mut b: Vec<Row> = Vec::new();
+        match &self.data.clips {
+            Clips::NotSet(folders) => {
+                b.push(heading("Where do your clips save?", None));
+                b.extend(para(
+                    "Val Review finds the clip of each death by when the clip was saved, and takes screenshots from the seconds before you died. The AI tab uses them to judge where you stood.",
+                    4,
+                    w,
+                    Style::fg(GREY),
+                ));
+                b.push(vec![]);
+                let name_w = folders.iter().map(|f| f.name.chars().count() + 2).max().unwrap_or(0).max(24);
+                for (i, f) in folders.iter().enumerate() {
+                    let on = i == self.clip_pick;
+                    b.push(vec![
+                        (
+                            if on { Style::fg(ACCENT) } else { Style::default() },
+                            format!("{}{}", if on { "  ❯ " } else { "    " }, pad(&f.name, name_w)),
+                        ),
+                        (f.about_style(), f.about.clone()),
+                    ]);
                 }
-                out
-            })
-            .collect()
-    }
-}
-
-// --------------------------------------------------------------- helpers
-
-/// `Review  Sova on Lotus · lost 12–14 · 18/21 · 148 dmg/round · 2026-10-18 00:22`
-fn match_title(d: &ReviewData) -> Row {
-    let o = &d.overview;
-    let adr = o.players.iter().find(|p| p.me).map(|p| p.adr).unwrap_or(0.0);
-    let result = if o.won > o.lost {
-        ("won", GREEN)
-    } else if o.won < o.lost {
-        ("lost", RED)
-    } else {
-        ("drew", YELLOW)
-    };
-    let played = d
-        .review
-        .context
-        .played_at
-        .as_deref()
-        .map(|t| t.get(..16).unwrap_or(t).replacen('T', " ", 1))
-        .unwrap_or_default();
-    vec![
-        (Style::fg(ACCENT).bold(), "  Review  ".into()),
-        (Style::default().bold(), format!("{} on {} ", o.agent, o.map)),
-        (Style::fg(GREY), "· ".into()),
-        (Style::fg(result.1).bold(), format!("{} {}–{}", result.0, o.won, o.lost)),
-        (
-            Style::fg(GREY),
-            format!(" · {}/{} · {adr:.0} dmg/round · {played}", o.kills, o.deaths),
-        ),
-    ]
-}
-
-/// `Summary  Lotus · 5 matches (won 3, lost 2) · Sova ×3, Fade ×2`
-fn map_title(d: &SummaryData) -> Row {
-    let s = &d.summary;
-    let n = s.matches.len();
-    let won = s.matches.iter().filter(|m| m.won > m.lost).count();
-    vec![
-        (Style::fg(ACCENT).bold(), "  Summary  ".into()),
-        (Style::default().bold(), format!("{} ", s.map)),
-        (
-            Style::fg(GREY),
-            format!(
-                "· {n} match{} (won {won}, lost {}) · {}",
-                if n == 1 { "" } else { "es" },
-                n - won,
-                s.agents
-            ),
-        ),
-    ]
-}
-
-fn title(text: &str) -> Row {
-    vec![(Style::default().bold(), format!("  {text}"))]
-}
-
-/// `lines` as a selectable list `h` rows tall, the selection kept in view.
-fn list_rows(lines: impl Iterator<Item = String>, sel: usize, h: usize) -> Vec<Row> {
-    let lines: Vec<String> = lines.collect();
-    let n = lines.len();
-    let first = sel.saturating_sub(h.saturating_sub(1)).min(n.saturating_sub(h));
-    lines
-        .into_iter()
-        .enumerate()
-        .skip(first)
-        .take(h)
-        .map(|(i, l)| {
-            if i == sel {
-                vec![(Style::fg(ACCENT), format!("  ❯ {l}"))]
-            } else {
-                vec![(Style::default(), format!("    {l}"))]
+                b.push(vec![]);
+                b.push(heading("To get a clip for every death", None));
+                for t in [
+                    "Turn on your clip app's instant replay, so it keeps the last 30 seconds.",
+                    "Press its clip key right after you die. Clips of 15 to 30 seconds work best.",
+                    "Download the match replay in VALORANT too: it tells Val Review which clip is which death.",
+                ] {
+                    b.extend(bullet("•", ACCENT, t, w));
+                }
+                self.flash_rows(&mut b);
             }
-        })
-        .collect()
-}
-
-/// A finding's evidence, wrapped, under a rule.
-fn evidence(f: &Finding, w: usize) -> Vec<Row> {
-    let mut lines: Vec<String> = f.evidence.clone();
-    if !f.rounds.is_empty() {
-        lines.push(format!(
-            "Rounds: {}",
-            f.rounds.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
-        ));
+            Clips::Set { dir, per_death, .. } => {
+                let have = per_death.iter().filter(|c| c.is_some()).count();
+                b.push(vec![
+                    (Style::default(), "  ".into()),
+                    (Style::default().bold(), format!("{have} of {} deaths have a clip", d.deaths.len())),
+                    (Style::fg(GREY), format!(" · from {}", dir.display())),
+                ]);
+                b.push(vec![]);
+                if d.deaths.is_empty() {
+                    b.push(vec![(Style::fg(GREY), "    You didn't die this match.".into())]);
+                    return b;
+                }
+                self.sel = self.sel.min(d.deaths.len() - 1);
+                let items = d
+                    .deaths
+                    .iter()
+                    .zip(per_death)
+                    .map(|(x, c)| {
+                        let what = format!("{} at {}", x.killer, x.place.as_deref().unwrap_or("?"));
+                        let it = Item::new(format!("{}{}", pad(&format!("R{}", x.round), 5), pad(&what, 26)));
+                        match c {
+                            Some(m) => it.tail(
+                                format!("✓ {}", m.path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()),
+                                GREEN,
+                            ),
+                            None => it.tail("no clip", GREY),
+                        }
+                    })
+                    .collect();
+                b.extend(list_rows(items, self.sel, h.saturating_sub(6).max(3)));
+                let x = &d.deaths[self.sel];
+                let text = match &per_death[self.sel] {
+                    Some(m) => format!(
+                        "Round {}: {} The clip was saved {:.0} seconds after this death.",
+                        x.round,
+                        x.sentence(),
+                        m.before_end_s
+                    ),
+                    None => format!(
+                        "Round {}: no clip was saved within {:.0} seconds of this death, so it's left out.",
+                        x.round,
+                        valreview_core::clips::MATCH_WINDOW_S
+                    ),
+                };
+                b.push(vec![]);
+                b.extend(para(&text, 4, w, Style::fg(GREY)));
+            }
+        }
+        b.truncate(h);
+        b
     }
-    detail_rows(&lines, w)
-}
 
-/// Detail lines under a thin rule, wrapped to the screen.
-fn detail_rows(lines: &[String], w: usize) -> Vec<Row> {
-    let text_w = w.saturating_sub(8).max(10);
-    let mut rows = vec![vec![(Style::fg(GREY), format!("    {}", "─".repeat(text_w.min(60))))]];
-    for (i, l) in lines.iter().enumerate() {
-        let style = if i == 0 {
-            Style::default().bold()
-        } else {
-            Style::default()
+    fn shots(&mut self, w: usize, h: usize) -> Vec<Row> {
+        let d = &self.data.debrief;
+        let Clips::Set {
+            shots_dir,
+            shots,
+            shot_error,
+            style,
+            ..
+        } = &self.data.clips
+        else {
+            return para(
+                "Pick your clip folder in the Clips tab first; the screenshots are taken from your clips.",
+                2,
+                w,
+                Style::fg(YELLOW),
+            );
         };
-        for piece in wrap(l, text_w) {
-            rows.push(vec![(style, format!("    {piece}"))]);
-        }
-    }
-    rows
-}
-
-fn death_detail(f: &DeathFact) -> Vec<String> {
-    let c = &f.context;
-    let mut lines = vec![review::death_line(f)];
-    lines.push(format!(
-        "{} s after the barrier{} · {} teammate{} and {} enem{} alive{}",
-        c.since_barrier_s.map_or("?".into(), |s| format!("{s:.1}")),
-        c.clock_left_s
-            .map(|s| format!(", {s:.0} s left on the clock"))
-            .unwrap_or_default(),
-        f.teammates_alive,
-        if f.teammates_alive == 1 { "" } else { "s" },
-        f.enemies_alive,
-        if f.enemies_alive == 1 { "y" } else { "ies" },
-        if c.outnumbered { " (outnumbered)" } else { "" }
-    ));
-    lines.push(format!(
-        "Holding {}{}{} · moving {}",
-        c.weapon_in_hand.as_deref().unwrap_or("?"),
-        c.magazine_ammo
-            .zip(c.magazine_size)
-            .map(|(a, s)| format!(" ({a}/{s} in the magazine)"))
-            .unwrap_or_default(),
-        c.inventory_value
-            .map(|v| format!(", {v} credits of gear"))
-            .unwrap_or_default(),
-        f.speed_m_s.map_or("?".into(), |s| format!("{s:.1} m/s"))
-    ));
-    lines.push(format!(
-        "The fight: you dealt {:.0} damage in {}, took {:.0} in {}{}{}",
-        c.duel_damage_dealt,
-        plural(c.duel_hits_dealt, "hit"),
-        c.duel_damage_taken,
-        plural(c.duel_hits_taken, "hit"),
-        match c.hit_killer_first {
-            Some(true) => " · you hit first",
-            Some(false) => " · they hit first",
-            None => "",
-        },
-        c.duel_ms
-            .map(|m| format!(" · {m} ms from first hit to death"))
-            .unwrap_or_default()
-    ));
-    let mut aim = Vec::new();
-    if let Some(a) = f.crosshair_offset_to_killer_deg {
-        aim.push(format!("crosshair {a:.0}° from the killer"));
-    }
-    if let Some(v) = c.vertical_aim_offset_deg {
-        aim.push(format!("{v:+.1}° vertically"));
-    }
-    if let Some(r) = &c.killing_blow_region {
-        aim.push(format!(
-            "killed by a {r} hit{}",
-            if c.killing_blow_wallbang { " through a wall" } else { "" }
-        ));
-    }
-    if !aim.is_empty() {
-        lines.push(capitalise(&aim.join(", ")));
-    }
-    let near = if f.nearest_teammates.is_empty() {
-        "no teammate position known".to_owned()
-    } else {
-        f.nearest_teammates
-            .iter()
-            .map(|t| format!("{} {:.0} m", t.agent, t.dist_m))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    lines.push(format!(
-        "Nearest teammates: {near}{}",
-        if f.traded_within_3s {
-            " · traded within 3 s"
+        let mut b: Vec<Row> = Vec::new();
+        if shots.is_empty() {
+            b.extend(para(
+                shot_error.as_deref().unwrap_or("None of your deaths has a clip, so there's nothing to take screenshots from."),
+                2,
+                w,
+                Style::fg(YELLOW),
+            ));
         } else {
-            " · not traded"
+            b.push(vec![
+                (Style::default(), "  ".into()),
+                (Style::fg(GREEN).bold(), "✓ ".into()),
+                (Style::default().bold(), format!("{} ready", plural(shots.len(), "screenshot"))),
+                (Style::fg(GREY), ", one for each death with a clip".into()),
+            ]);
+            b.push(vec![]);
+            let how = match style {
+                valreview_core::clips::ShotStyle::Strip => "Each screenshot puts three moments side by side: 3 seconds before you died, 1 second before, and the moment you died, so the whole fight is in one image.",
+                valreview_core::clips::ShotStyle::One => "Each screenshot is the moment you died.",
+                valreview_core::clips::ShotStyle::Three => "Each death has three screenshots: 3 seconds before you died, 1 second before, and the moment you died.",
+            };
+            b.extend(para(how, 2, w, Style::fg(GREY)));
+            b.push(vec![]);
+            b.push(vec![
+                (Style::fg(GREY), "  Saved to  ".into()),
+                (Style::default(), shots_dir.display().to_string()),
+            ]);
+            b.push(vec![]);
+            let room = h.saturating_sub(12).max(3);
+            for (round, files) in shots.iter().take(room) {
+                let x = d.deaths.iter().find(|x| x.round == *round);
+                let names = files
+                    .iter()
+                    .filter_map(|f| f.file_name().map(|n| n.to_string_lossy().into_owned()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                b.push(vec![
+                    (Style::default(), format!("    {} ", pad(&names, 10))),
+                    (
+                        Style::fg(GREY),
+                        x.map(|x| format!("{} at {}", x.killer, x.place.as_deref().unwrap_or("?"))).unwrap_or_default(),
+                    ),
+                ]);
+            }
+            if shots.len() > room {
+                b.push(vec![(Style::fg(GREY), format!("    …and {} more", shots.len() - room))]);
+            }
+            if let Some(e) = shot_error {
+                b.push(vec![]);
+                b.extend(para(e, 2, w, Style::fg(YELLOW)));
+            }
+            b.push(vec![]);
+            b.extend(para(
+                if self.data.ai_provider.is_some() {
+                    "The AI tab sends these with the match when you run the AI review."
+                } else {
+                    "Connect an AI in /settings and the AI tab can review these for you."
+                },
+                2,
+                w,
+                Style::fg(ACCENT),
+            ));
         }
-    ));
-    let mut flags = Vec::new();
-    if c.ult_ready == Some(true) {
-        flags.push("ult ready");
+        self.flash_rows(&mut b);
+        b.truncate(h);
+        b
     }
-    if c.carrying_spike {
-        flags.push("carrying the spike");
+
+    fn ai_tab(&mut self, w: usize, h: usize) -> Vec<Row> {
+        let shots = self.data.shots().len();
+        let provider = self.data.ai_provider;
+        if let Some((who, tick)) = &self.asking {
+            let mut b = vec![
+                vec![
+                    (Style::fg(RED), format!("  {} ", SPINNER[tick / 2 % SPINNER.len()])),
+                    (Style::fg(ACCENT), format!("Asking {who}…")),
+                ],
+                vec![],
+            ];
+            b.extend(para(
+                &format!(
+                    "Sent {who} this match's facts and {}. The answer is checked against the AI review format before it's saved.",
+                    plural(shots, "screenshot")
+                ),
+                4,
+                w,
+                Style::fg(GREY),
+            ));
+            return b;
+        }
+        if let Some(saved) = self.data.ai.clone() {
+            return if self.json { self.ai_json(&saved, w, h) } else { self.ai_result(&saved, w, h) };
+        }
+        let mut b = vec![heading("AI review", None)];
+        b.extend(para(
+            "An AI looks at the screenshots of your deaths alongside what Val Review already knows about the match, and judges what the replay alone can't show: where you stood, which angles could see you, and where your crosshair was before the fight.",
+            4,
+            w,
+            Style::fg(GREY),
+        ));
+        b.push(vec![]);
+        match provider {
+            None => {
+                b.extend(bullet(
+                    "•",
+                    ACCENT,
+                    "Connect Claude, ChatGPT, Gemini, or Ollama on this PC in /settings → Config → AI review.",
+                    w,
+                ));
+                b.extend(bullet(
+                    "•",
+                    ACCENT,
+                    "Claude, ChatGPT and Gemini use your own API key, and the provider bills you for each review. Ollama runs a model on this PC instead: free, and nothing leaves the computer, but it needs a good graphics card.",
+                    w,
+                ));
+                b.extend(bullet(
+                    "•",
+                    ACCENT,
+                    "Everything else in this review works without it. This tab only adds to it.",
+                    w,
+                ));
+            }
+            Some(p) => {
+                let what = if shots > 0 {
+                    format!("this match's facts and {} from the Screenshots tab", plural(shots, "screenshot"))
+                } else {
+                    "this match's facts and no screenshots (pick your clip folder in the Clips tab first)".to_owned()
+                };
+                if p.local {
+                    b.extend(field("Gives", &format!("Ollama, on this PC: {what}. Nothing leaves this computer."), w, Style::default()));
+                } else {
+                    b.extend(field("Sends", &format!("{}: {what}", p.name), w, Style::default()));
+                }
+                b.extend(field(
+                    "Answers in",
+                    &format!("the same format every time ({}), so Val Review can read it", ai::SCHEMA),
+                    w,
+                    Style::default(),
+                ));
+                b.extend(field(
+                    "Saved",
+                    "once for this match. It can't be rerun, so every match is judged the same way, once.",
+                    w,
+                    Style::default(),
+                ));
+                b.push(vec![]);
+                b.push(vec![(Style::fg(GREEN).bold(), "    Press a to run it".into())]);
+            }
+        }
+        self.flash_rows(&mut b);
+        b.truncate(h);
+        b
     }
-    if c.post_plant {
-        flags.push("after the plant");
+
+    fn ai_result(&mut self, s: &Saved, w: usize, h: usize) -> Vec<Row> {
+        let o = &s.output;
+        let saved = crate::short_when(&s.meta.saved_at);
+        let mut b: Vec<Row> = vec![vec![
+            (Style::fg(ACCENT).bold(), "  AI review".into()),
+            (Style::fg(GREY), format!(" · {} · saved {saved} · can't be rerun", s.meta.provider)),
+        ]];
+        b.extend(para(&o.summary, 4, w, Style::default()));
+        b.push(vec![]);
+        if let Some(f) = &self.flash {
+            b.push(vec![(Style::fg(YELLOW), format!("  ◆ {f}"))]);
+            b.push(vec![]);
+        }
+        b.push(vec![
+            (Style::fg(YELLOW).bold(), "  What it saw".into()),
+            (Style::fg(GREY), "  in the screenshots, most costly first".into()),
+        ]);
+        self.sel = self.sel.min(o.findings.len().saturating_sub(1));
+        b.extend(list_rows(
+            o.findings
+                .iter()
+                .map(|f| {
+                    Item::new(format!("{} ", pad(&f.title, 50)))
+                        .tail(format!("{} · {}", ai::category_label(&f.category), f.confidence), GREY)
+                })
+                .collect(),
+            self.sel,
+            o.findings.len(),
+        ));
+        if let Some(f) = o.findings.get(self.sel) {
+            b.push(vec![]);
+            b.push(rule_line(w));
+            b.push(vec![(Style::default().bold(), format!("    {}", f.title))]);
+            let rounds: Vec<String> = f.rounds.iter().map(u32::to_string).collect();
+            b.extend(field("Rounds", &format!("{} · {}", list_and(&rounds), f.screenshots.join(", ")), w, Style::default()));
+            b.extend(field("What it saw", &f.saw, w, Style::default()));
+            b.extend(field("Why it costs", &f.why, w, Style::default()));
+            b.extend(field("Try", &f.try_this, w, Style::fg(GREEN)));
+        }
+        if !o.keep.is_empty() {
+            b.push(vec![]);
+            b.push(heading("Keep doing", Some(GREEN)));
+            for k in &o.keep {
+                b.extend(bullet("+", GREEN, &format!("{}. {}", k.title, k.saw), w));
+            }
+        }
+        if !o.unclear.is_empty() {
+            b.push(vec![]);
+            b.push(heading("Couldn't tell", Some(GREY)));
+            for u in &o.unclear {
+                b.extend(bullet("?", GREY, &format!("{}: {}", u.screenshot, u.reason), w));
+            }
+        }
+        b.truncate(h);
+        b
     }
-    if f.first_death_of_round {
-        flags.push("first death of the round");
+
+    fn ai_json(&mut self, s: &Saved, w: usize, h: usize) -> Vec<Row> {
+        let mut lines = vec![heading("The format", None)];
+        lines.extend(para(
+            &format!(
+                "Every answer has to fit {}. The provider is asked for exactly this shape, and an answer that doesn't fit is rejected and asked for again.",
+                ai::SCHEMA
+            ),
+            4,
+            w,
+            Style::fg(GREY),
+        ));
+        lines.push(vec![]);
+        for (name, desc) in ai::FORMAT {
+            for (i, p) in wrap(desc, w.saturating_sub(26).max(10)).into_iter().enumerate() {
+                lines.push(vec![
+                    (Style::fg(ACCENT), format!("    {}", pad(if i == 0 { name } else { "" }, 18))),
+                    (Style::default(), p),
+                ]);
+            }
+        }
+        let cats = ai::CATEGORIES.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ");
+        for (i, p) in wrap(&cats, w.saturating_sub(26).max(10)).into_iter().enumerate() {
+            lines.push(vec![
+                (Style::fg(ACCENT), format!("    {}", pad(if i == 0 { "categories" } else { "" }, 18))),
+                (Style::default(), p),
+            ]);
+        }
+        lines.push(vec![]);
+        lines.push(heading("This match's saved answer", None));
+        lines.push(vec![]);
+        let json = serde_json::to_string_pretty(&s.output).unwrap_or_default();
+        for l in json.lines() {
+            for p in wrap(l, w.saturating_sub(10).max(10)) {
+                lines.push(vec![(Style::fg(GREY), "  │ ".into()), (Style::default(), p)]);
+            }
+        }
+        scrolled(&mut self.scroll, lines, h)
     }
-    if c.same_spot_as_own_kill {
-        flags.push("within 5 m of your earlier kill");
-    }
-    if !flags.is_empty() {
-        lines.push(capitalise(&flags.join(", ")));
-    }
-    lines
 }
 
-fn side(s: Option<Side>) -> &'static str {
+impl ClipFolder {
+    fn about_style(&self) -> Style {
+        match self.found {
+            Some(0) => Style::fg(GREY),
+            Some(_) => Style::fg(GREEN),
+            None if self.path.is_none() => Style::fg(GREY),
+            None => Style::default(),
+        }
+    }
+}
+
+/// `2 times this match. Better than before.`
+pub fn focus_result(c: &Check) -> String {
+    let Some(n) = c.this_match else {
+        return "this match couldn't tell.".into();
+    };
+    let this = match c.habit.slug {
+        "moving" => format!("{} on the move this match", habits::describe("moving", n)),
+        "crosshair" => format!("{} this match", habits::describe("crosshair", n)),
+        _ if n == 0.0 => "not once this match".to_owned(),
+        _ => format!("{} this match", plural(n as usize, "time")),
+    };
+    format!("{this}. {}", c.verdict())
+}
+
+pub fn result_style(won: usize, lost: usize) -> (&'static str, Color) {
+    match valreview_core::coach::result_word(won, lost) {
+        "won" => ("won", GREEN),
+        "lost" => ("lost", RED),
+        _ => ("drew", YELLOW),
+    }
+}
+
+fn side_word(s: Option<Side>) -> &'static str {
     match s {
-        Some(Side::Attack) => "atk",
-        Some(Side::Defense) => "def",
+        Some(Side::Attack) => "attack",
+        Some(Side::Defense) => "defense",
         None => "?",
     }
 }
 
-fn result(f: &RoundFact) -> String {
-    match f.won {
-        Some(true) => format!("W {}", f.result.as_deref().unwrap_or("")),
-        Some(false) => format!("L {}", f.result.as_deref().unwrap_or("")),
-        None => "?".into(),
-    }
-}
-
-fn plural(n: u32, word: &str) -> String {
-    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
-}
-
-fn capitalise(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        Some(f) => f.to_uppercase().chain(c).collect(),
-        None => String::new(),
+fn won_word(w: Option<bool>) -> &'static str {
+    match w {
+        Some(true) => "won",
+        Some(false) => "lost",
+        None => "?",
     }
 }

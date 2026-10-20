@@ -18,6 +18,8 @@ pub enum Kind {
     Bold,
     /// Something that worked, in green.
     Good,
+    /// Any colour, bold or not (ranks, habits, accents).
+    Paint(crossterm::style::Color, bool),
 }
 
 /// One transcript line: pieces in their own styles.
@@ -40,7 +42,7 @@ pub fn emit(kind: Kind, text: String) {
                 let _ = tx.send(vec![(kind, line.trim_end_matches('\r').to_owned())]);
             }
         }
-        None if matches!(kind, Kind::Out | Kind::Dim | Kind::Bold | Kind::Good) => println!("{text}"),
+        None if matches!(kind, Kind::Out | Kind::Dim | Kind::Bold | Kind::Good | Kind::Paint(..)) => println!("{text}"),
         None => eprintln!("{text}"),
     }
 }
@@ -54,11 +56,6 @@ pub fn row(pieces: Line) {
         }
         None => println!("{}", pieces.into_iter().map(|(_, t)| t).collect::<String>()),
     }
-}
-
-/// Output is going to the shell's transcript.
-pub fn in_shell() -> bool {
-    SINK.lock().is_ok_and(|s| s.is_some())
 }
 
 /// `println!`, or a transcript line in the shell.

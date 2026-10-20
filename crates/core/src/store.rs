@@ -451,6 +451,35 @@ impl Store {
         Ok(rows)
     }
 
+    /// Every stored match, newest first, with how it went for `subject`
+    /// (agent, score and K/D are missing when they weren't in it).
+    pub fn my_matches(&self, subject: &str) -> Result<Vec<MyMatch>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT m.match_id, m.played_at, COALESCE(m.map_name, m.map_url), p.agent, p.kills, p.deaths,
+                (SELECT COUNT(*) FROM round_facts r WHERE r.match_id = m.match_id AND r.subject = ?1
+                    AND json_extract(r.fact_json, '$.won') = 1),
+                (SELECT COUNT(*) FROM round_facts r WHERE r.match_id = m.match_id AND r.subject = ?1
+                    AND json_extract(r.fact_json, '$.won') = 0)
+             FROM matches m LEFT JOIN players p ON p.match_id = m.match_id AND p.subject = ?1
+             ORDER BY COALESCE(m.played_at, m.processed_at) DESC, m.match_id",
+        )?;
+        let rows = stmt
+            .query_map([subject], |r| {
+                Ok(MyMatch {
+                    id: r.get(0)?,
+                    played_at: r.get(1)?,
+                    map: r.get(2)?,
+                    agent: r.get(3)?,
+                    kills: r.get::<_, Option<i64>>(4)?.map(|v| v as usize),
+                    deaths: r.get::<_, Option<i64>>(5)?.map(|v| v as usize),
+                    won: r.get::<_, i64>(6)? as usize,
+                    lost: r.get::<_, i64>(7)? as usize,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     /// Players of one match: (subject, pawn, agent).
     pub fn players_of(&self, match_id: &str) -> Result<Vec<(String, u32, String)>> {
         let mut stmt = self
@@ -471,6 +500,20 @@ impl Store {
             logged: one("SELECT COUNT(*) FROM scan_log")?,
         })
     }
+}
+
+/// One match from one player's side, for lists and pickers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MyMatch {
+    pub id: String,
+    pub played_at: Option<String>,
+    /// Map name, or its path when the catalog didn't know it.
+    pub map: Option<String>,
+    pub agent: Option<String>,
+    pub kills: Option<usize>,
+    pub deaths: Option<usize>,
+    pub won: usize,
+    pub lost: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

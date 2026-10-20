@@ -14,52 +14,55 @@ const HOME: &str = "https://github.com/Deaadman/valreview";
 const GENERAL: &[(bool, &str)] = &[
     (
         false,
-        "valreview reads your own Valorant replays and writes facts about your play in a form an AI can review. Everything stays on this computer.",
+        "Val Review watches your VALORANT replays and coaches you: why you died, what to fix, and what works at your rank. Everything stays on this computer unless you turn on AI review.",
     ),
     (false, ""),
-    (true, "Automatic"),
+    (true, "After a match"),
     (
         false,
-        "  Scans your replay folder when it opens, then keeps watching it: a replay you download is processed once it finishes.",
+        "  Download the replay in the client. Val Review picks it up, checks your focus habit, and tells you how it went.",
     ),
     (
         false,
-        "  Refreshes agent, map and weapon names from valorant-api.com once a day.",
+        "  /review opens the debrief: the short version, the three fixes that cost you the most rounds, and the moments that decided rounds.",
     ),
     (
         false,
-        "  Installs new valreview releases in the background; restart to use them.",
+        "  Its Clips and Screenshots tabs match your clips (Medal, ShadowPlay, Game Bar and others) to your deaths and take a screenshot of each one.",
+    ),
+    (
+        false,
+        "  The AI tab in /review can ask an AI (Claude, ChatGPT, Gemini, or Ollama on your own PC) to look at those screenshots for you: where you stood and where your crosshair was. It's optional and saved once per match.",
     ),
     (false, ""),
-    (true, "Reviewing a match"),
+    (true, "Before you queue"),
     (
         false,
-        "  /review shows how your newest match went (or /review --match <id>): your stats against the lobby, what to work on with the rounds behind it, every round and death, and your deaths on the map.",
+        "  /plan gives you a game plan for a map: where you win, where you lose, and what to do on each side.",
     ),
     (
         false,
-        "  /summary sums up all your matches on one map (or /summary --map Pearl): what keeps repeating across them, each match, and every death on the map. Enter on a match opens its review.",
+        "  /rank says what wins games at your rank. Set your rank in /settings; replays don't include it.",
+    ),
+    (false, ""),
+    (true, "Over time"),
+    (
+        false,
+        "  /habits names the mistakes you keep making and shows which are getting better.",
     ),
     (
         false,
-        "  /export writes the same match as export.md, deaths.jsonl and rounds.jsonl to give to an AI.",
-    ),
-    (
-        false,
-        "  /trends charts your damage, K/D, headshots and more across matches, and the death spots that repeat.",
+        "  /focus picks one of them to work on. Every new match checks it first.",
     ),
     (false, ""),
     (true, "Keys"),
     (false, "  Enter            run the line, or the highlighted command"),
     (false, "  Tab, →           complete the highlighted suggestion"),
     (false, "  ↑ ↓              move in the menu; otherwise walk history"),
-    (false, "  Esc              hide the menu"),
+    (false, "  Esc              hide the menu, or close a panel"),
     (false, "  PgUp PgDn        scroll the output"),
-    (false, "  Ctrl+U  Ctrl+W   clear to the start, delete a word"),
     (false, "  Ctrl+L           clear the screen"),
     (false, "  Ctrl+C           clear the line; twice on an empty line quits"),
-    (false, ""),
-    (false, "Every command takes --help, for example /export --help."),
 ];
 
 pub enum HelpAction {

@@ -18,21 +18,23 @@ use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetBac
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
 use crossterm::{execute, queue};
 use valreview_core::Catalog;
+use valreview_core::ai;
 use valreview_core::builds::check_game_version;
 use valreview_core::config::Config;
 use valreview_core::install::{self, Layout};
 use valreview_core::paths;
 use valreview_core::store::Store;
-use valreview_core::update;
+use valreview_core::update::{self, WhatsNew};
 use valreview_core::vrfkit::Vrfkit;
 
-use crate::Cli;
+use crate::coach_views::{CoachAction, HabitsPanel, PlanData, PlanPanel, RankPanel};
 use crate::editor::{Action, CommandInfo, Context, Editor, FlagInfo, MatchInfo};
 use crate::help::{HelpAction, HelpPanel};
 use crate::out::{self, Kind};
+use crate::panel::rank_color;
 use crate::review_view::{ReviewAction, ReviewPanel};
 use crate::settings::{SettingsAction, SettingsPanel};
-use crate::trends_view::{TrendsData, TrendsPanel};
+use crate::{APP_NAME, Cli, ReviewData};
 
 const PROMPT: &str = "❯ ";
 const MENU_ROWS: usize = 8;
@@ -42,7 +44,7 @@ const TICK: Duration = Duration::from_millis(80);
 const WATCH_EVERY: Duration = Duration::from_secs(3);
 /// A catalog this many days old is refreshed in the background on launch.
 const SYNC_AFTER_DAYS: i64 = 1;
-const SPINNER: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
+pub(crate) const SPINNER: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
 
 /// Valorant red: the logo and problems.
 pub(crate) const RED: Color = Color::Rgb { r: 255, g: 70, b: 85 };
@@ -54,9 +56,6 @@ const RULE: Color = Color::Rgb { r: 110, g: 110, b: 110 };
 pub(crate) const BRIGHT: Color = Color::Rgb { r: 240, g: 240, b: 240 };
 const ECHO_BG: Color = Color::Rgb { r: 45, g: 45, b: 45 };
 
-/// The terminal tab title while the shell runs.
-const TITLE: &str = "Val Review";
-
 /// A pixel crosshair, three rows of half blocks.
 const LOGO: [&str; 3] = ["▄▀▀▀█▀▀▀▄", "█▄▄ ▀ ▄▄█", "▀▄▄▄█▄▄▄▀"];
 
@@ -64,8 +63,28 @@ const LOGO: [&str; 3] = ["▄▀▀▀█▀▀▀▄", "█▄▄ ▀ ▄▄█
 const BUILTINS: [(&str, &str); 3] = [
     ("help", "Show the commands and keys"),
     ("clear", "Clear the screen"),
-    ("exit", "Quit valreview"),
+    ("exit", "Quit Val Review"),
 ];
+
+/// What the background update check found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateNote {
+    /// Not installed: automatic updates are off, or this is a dev build.
+    Available,
+    /// Installed; it runs from the next launch.
+    Installed,
+    Failed,
+}
+
+impl UpdateNote {
+    fn text(self) -> (Color, &'static str) {
+        match self {
+            UpdateNote::Available => (YELLOW, "New version available · /update installs it"),
+            UpdateNote::Installed => (ACCENT, "New version available · restart to apply"),
+            UpdateNote::Failed => (YELLOW, "Update failed · /update tries again"),
+        }
+    }
+}
 
 pub fn run(data_dir: &Path) -> Result<()> {
     let (tx, rx) = mpsc::channel();
@@ -77,7 +96,10 @@ pub fn run(data_dir: &Path) -> Result<()> {
         let cfg = Config::load(data_dir).unwrap_or_default();
         if update::auto_disabled(cfg.auto_update).is_none() {
             let dir = data_dir.to_path_buf();
-            std::thread::spawn(move || check_for_update(&dir, &update_tx));
+            std::thread::spawn(move || check_for_update(&dir, &update_tx, true));
+        } else {
+            let dir = data_dir.to_path_buf();
+            std::thread::spawn(move || check_for_update(&dir, &update_tx, false));
         }
         // With no catalog yet, `launch` fetches one first; an old one refreshes quietly.
         let path = paths::catalog_path(data_dir);
@@ -119,7 +141,7 @@ struct Screen {
 impl Screen {
     fn on() -> io::Result<Self> {
         let old_title = console_title();
-        execute!(io::stdout(), EnterAlternateScreen, SetTitle(TITLE))?;
+        execute!(io::stdout(), EnterAlternateScreen, SetTitle(APP_NAME))?;
         let screen = Screen { old_title };
         terminal::enable_raw_mode()?;
         let _ = execute!(io::stdout(), event::EnableBracketedPaste);
@@ -158,42 +180,67 @@ enum Flow {
     Launch,
     Clear,
     Exit,
-    /// Open the review panel on this match.
-    Review(Box<crate::ReviewData>),
-    /// Open the review panel on a map's summary.
-    Summary(Box<crate::SummaryData>),
-    /// Open the trends panel.
-    Trends(Box<TrendsData>),
+    /// Open a panel.
+    Review(Box<ReviewData>),
+    Plan(Box<PlanData>),
+    Habits(Box<HabitsPanel>),
+    Rank(Box<RankPanel>),
     /// Open the settings panel.
     Settings,
+    /// The AI review finished (for the open review).
+    AiDone(Result<ai::Saved, String>),
 }
 
-/// What covers the whole screen: a review or summary, or the trends.
+/// What covers the whole screen.
 enum Panel {
     Review(ReviewPanel),
-    Trends(TrendsPanel),
+    Plan(PlanPanel),
+    Habits(Box<HabitsPanel>),
+    Rank(Box<RankPanel>),
+}
+
+/// What a panel's key asks the shell to do.
+enum PanelAction {
+    None,
+    Close,
+    Review(ReviewAction),
+    Focus(&'static str),
 }
 
 impl Panel {
-    fn key(&mut self, key: KeyEvent) -> ReviewAction {
+    fn key(&mut self, key: KeyEvent) -> PanelAction {
+        let coach = |a: CoachAction| match a {
+            CoachAction::None => PanelAction::None,
+            CoachAction::Close => PanelAction::Close,
+            CoachAction::Focus(s) => PanelAction::Focus(s),
+        };
         match self {
-            Panel::Review(p) => p.key(key),
-            Panel::Trends(p) => p.key(key),
+            Panel::Review(p) => match p.key(key) {
+                ReviewAction::None => PanelAction::None,
+                ReviewAction::Close => PanelAction::Close,
+                a => PanelAction::Review(a),
+            },
+            Panel::Plan(p) => coach(p.key(key)),
+            Panel::Habits(p) => coach(p.key(key)),
+            Panel::Rank(p) => coach(p.key(key)),
         }
     }
 
     fn rows(&mut self, w: usize, h: usize) -> Vec<Row> {
         match self {
             Panel::Review(p) => p.rows(w, h),
-            Panel::Trends(p) => p.rows(w, h),
+            Panel::Plan(p) => p.rows(w, h),
+            Panel::Habits(p) => p.rows(w, h),
+            Panel::Rank(p) => p.rows(w, h),
         }
     }
 }
 
 enum Item {
-    /// The logo, with two lines of setup beside the name.
+    /// The logo, with the rank and game version, then the replay folder, beside the name.
     Header {
-        setup: String,
+        rank: Option<String>,
+        game: String,
         folder: String,
     },
     Line(Kind, String),
@@ -221,8 +268,10 @@ struct App {
     job: Option<Job>,
     notices: Vec<(Color, String)>,
     /// What the background update check found, shown before the notices.
-    update_note: Option<(Color, String)>,
-    update_rx: Option<Receiver<(Color, String)>>,
+    update_note: Option<UpdateNote>,
+    update_rx: Option<Receiver<UpdateNote>>,
+    /// Whether a rank is set, for the input's placeholder.
+    ranked: bool,
     footer: String,
     tick: usize,
     watch: Watch,
@@ -230,10 +279,8 @@ struct App {
     help: Option<HelpPanel>,
     /// The `/settings` panel, drawn in place of the input while open.
     settings: Option<SettingsPanel>,
-    /// The `/review`, `/summary` or `/trends` panel, over the whole screen while open.
-    review: Option<Panel>,
-    /// Panels a review was opened from (a summary or the trends), reopened by Esc.
-    review_back: Vec<Panel>,
+    /// A full-screen panel while open.
+    panel: Option<Panel>,
 }
 
 /// The replay folder as of the last scan, and what has changed since.
@@ -260,6 +307,17 @@ fn is_help(line: &str) -> bool {
     line.trim().trim_start_matches('/').eq_ignore_ascii_case("help")
 }
 
+/// Runs `f` and turns its error into a transcript line.
+fn panel_or_error<T>(f: impl FnOnce() -> Result<T>, open: impl FnOnce(T) -> Flow) -> Flow {
+    match f() {
+        Ok(v) => open(v),
+        Err(e) => {
+            out::emit(Kind::Error, format!("{e:#}"));
+            Flow::Continue
+        }
+    }
+}
+
 impl App {
     fn new(data_dir: &Path, rx: Receiver<out::Line>) -> Self {
         let history_path = data_dir.join("history.txt");
@@ -278,6 +336,7 @@ impl App {
             notices: vec![],
             update_note: None,
             update_rx: None,
+            ranked: false,
             footer: String::new(),
             tick: 0,
             watch: Watch {
@@ -287,8 +346,7 @@ impl App {
             },
             help: None,
             settings: None,
-            review: None,
-            review_back: vec![],
+            panel: None,
         };
         app.clear();
         app.refresh();
@@ -297,26 +355,23 @@ impl App {
 
     /// Empty the transcript down to the header.
     fn clear(&mut self) {
-        let (setup, folder) = header_text(&self.data_dir);
-        self.transcript = vec![Item::Header { setup, folder }];
+        let (rank, game, folder) = header_text(&self.data_dir);
+        self.transcript = vec![Item::Header { rank, game, folder }];
         self.scroll = 0;
     }
 
-    /// Re-read what commands may have changed: matches, `me`, setup notices.
+    /// Re-read what commands may have changed: matches, settings, notices.
     fn refresh(&mut self) {
         self.ctx.matches = matches(&self.data_dir);
-        self.notices = notices(&self.data_dir);
-        let me = Config::load(&self.data_dir)
-            .ok()
-            .and_then(|c| c.me)
-            .map_or_else(|| "me not set".to_owned(), |m| format!("me {}", &m[..m.len().min(8)]));
+        self.notices = notices(&self.data_dir, self.update_note.is_some());
+        self.ranked = Config::load(&self.data_dir).is_ok_and(|c| c.rank.is_some());
         let n = self.ctx.matches.len();
         self.footer = format!(
-            "{me} · {n} match{} · /help for commands and keys",
+            "{n} match{} · /help for commands and keys",
             if n == 1 { "" } else { "es" }
         );
-        if let Some(Item::Header { setup, folder }) = self.transcript.first_mut() {
-            (*setup, *folder) = header_text(&self.data_dir);
+        if let Some(Item::Header { rank, game, folder }) = self.transcript.first_mut() {
+            (*rank, *game, *folder) = header_text(&self.data_dir);
         }
     }
 
@@ -334,10 +389,10 @@ impl App {
         });
     }
 
-    /// The launch scan: scan and set `me`.
+    /// The launch: what's new after an update, the scan, and the focus.
     fn start_launch(&mut self) {
         let dir = self.data_dir.clone();
-        self.start("Scanning replays", true, move || {
+        self.start("Checking for new replays", true, move || {
             launch(&dir);
             Flow::Continue
         });
@@ -358,16 +413,22 @@ impl App {
             self.watch.pending = changed;
             return;
         }
-        let n = changed.len();
         let dir = self.data_dir.clone();
-        self.start("Scanning new replays", true, move || {
-            outln!();
-            dim(&format!("{n} new replay{} downloaded", if n == 1 { "" } else { "s" }));
-            if let Err(e) = crate::scan_cmd(&dir, None, false, false, false) {
-                out::emit(Kind::Error, format!("scan failed: {e:#}"));
-            }
+        self.start("Reading the new replay", true, move || {
+            let stored = match crate::scan_cmd(&dir, None, false, false) {
+                Ok(ids) => ids,
+                Err(e) => {
+                    out::emit(Kind::Error, format!("Couldn't read the new replay: {e:#}"));
+                    vec![]
+                }
+            };
             if Config::load(&dir).is_ok_and(|c| c.me.is_none()) {
                 detect_me(&dir);
+            }
+            // The newest stored match gets the focus check.
+            let newest = crate::my_matches(&dir).into_iter().find(|m| stored.contains(&m.id));
+            if let Some(m) = newest {
+                crate::focus_check(&dir, &m.id);
             }
             Flow::Continue
         });
@@ -396,23 +457,30 @@ impl App {
             dirty |= self.drain();
             if let Some(note) = self.update_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
                 self.update_note = Some(note);
+                self.notices = notices(&self.data_dir, true);
                 dirty = true;
             }
             if self.job.as_ref().is_some_and(|j| j.handle.is_finished()) {
                 let job = self.job.take().expect("checked");
                 let flow = job.handle.join();
                 self.drain();
+                if let Some(Panel::Review(p)) = &mut self.panel {
+                    p.asking(None, 0);
+                }
                 match flow {
                     Ok(Flow::Exit) => return Ok(()),
                     Ok(Flow::Clear) => self.clear(),
                     Ok(Flow::Continue) => {}
                     Ok(Flow::Launch) => self.start_launch(),
-                    Ok(Flow::Review(data)) => self.review = Some(Panel::Review(ReviewPanel::new(*data))),
-                    Ok(Flow::Summary(data)) => self.review = Some(Panel::Review(ReviewPanel::summary(*data))),
-                    Ok(Flow::Trends(data)) => self.review = Some(Panel::Trends(TrendsPanel::new(*data))),
-                    Ok(Flow::Settings) => {
-                        let note = self.update_note.as_ref().map(|(_, t)| t.clone());
-                        self.settings = Some(SettingsPanel::new(&self.data_dir, note));
+                    Ok(Flow::Review(data)) => self.panel = Some(Panel::Review(ReviewPanel::new(*data))),
+                    Ok(Flow::Plan(data)) => self.panel = Some(Panel::Plan(PlanPanel::new(*data))),
+                    Ok(Flow::Habits(p)) => self.panel = Some(Panel::Habits(p)),
+                    Ok(Flow::Rank(p)) => self.panel = Some(Panel::Rank(p)),
+                    Ok(Flow::Settings) => self.settings = Some(SettingsPanel::new(&self.data_dir)),
+                    Ok(Flow::AiDone(result)) => {
+                        if let Some(Panel::Review(p)) = &mut self.panel {
+                            p.ai_done(result);
+                        }
                     }
                     Err(_) => self.transcript.push(Item::Line(
                         Kind::Error,
@@ -426,8 +494,13 @@ impl App {
                 self.watch.last_poll = Instant::now();
                 self.poll_replays();
             }
-            if self.job.is_some() {
+            if let Some(job) = &self.job {
                 self.tick += 1;
+                if let Some(who) = job.label.strip_prefix("Asking ")
+                    && let Some(Panel::Review(p)) = &mut self.panel
+                {
+                    p.asking(Some(who.to_owned()), self.tick);
+                }
                 dirty = true;
             }
             if dirty {
@@ -444,42 +517,78 @@ impl App {
                         return Ok(());
                     }
                 }
-                Event::Paste(s) => self.editor.insert_str(&s),
+                Event::Paste(s) => match &mut self.settings {
+                    Some(p) => p.paste(&s),
+                    None => self.editor.insert_str(&s),
+                },
                 _ => {}
             }
         }
     }
 
+    /// What a review asks for: a clip folder, or the AI review.
+    fn review_action(&mut self, a: ReviewAction) {
+        let Some(Panel::Review(p)) = &self.panel else { return };
+        if self.job.is_some() {
+            return;
+        }
+        let dir = self.data_dir.clone();
+        let id = p.match_id().to_owned();
+        match a {
+            ReviewAction::SetClips(path) => {
+                if let Ok(mut cfg) = Config::load(&dir) {
+                    cfg.clips_dir = Some(path);
+                    let _ = cfg.save(&dir);
+                }
+                self.start("Finding your clips", false, move || {
+                    panel_or_error(|| crate::load_review(&dir, Some(id)), |d| Flow::Review(Box::new(d)))
+                });
+            }
+            ReviewAction::RunAi => {
+                let data = p.data();
+                let cfg = Config::load(&dir).unwrap_or_default();
+                let Some(provider) = data.ai_provider else { return };
+                let debrief = data.debrief.clone();
+                let shots = data.shots();
+                self.start(&format!("Asking {}", provider.name), false, move || {
+                    let r = ai::run(
+                        &dir,
+                        provider,
+                        cfg.ai_key.as_deref(),
+                        cfg.ai_model.as_deref(),
+                        &debrief,
+                        &shots,
+                    );
+                    Flow::AiDone(r.map_err(|e| format!("{e:#}")))
+                });
+            }
+            _ => {}
+        }
+    }
+
     /// Handle one key. False to quit.
     fn key(&mut self, key: KeyEvent) -> bool {
-        if let Some(panel) = &mut self.review {
+        if let Some(panel) = &mut self.panel {
             match panel.key(key) {
-                ReviewAction::None => {}
-                ReviewAction::Close => self.review = self.review_back.pop(),
-                // A match from a summary or the trends: open it, and come back on Esc.
-                ReviewAction::Open(id) if self.job.is_none() => {
-                    if let Some(current) = self.review.take() {
-                        self.review_back.push(current);
+                PanelAction::None => {}
+                PanelAction::Close => self.panel = None,
+                PanelAction::Review(a) => self.review_action(a),
+                PanelAction::Focus(slug) => {
+                    if let Ok(mut cfg) = Config::load(&self.data_dir) {
+                        cfg.focus = Some(slug.to_owned());
+                        let _ = cfg.save(&self.data_dir);
                     }
-                    let dir = self.data_dir.clone();
-                    self.start("Opening the match", false, move || {
-                        match crate::load_review(&dir, Some(id), None) {
-                            Ok(data) => Flow::Review(Box::new(data)),
-                            Err(e) => {
-                                out::emit(Kind::Error, format!("error: {e:#}"));
-                                Flow::Continue
-                            }
-                        }
-                    });
                 }
-                ReviewAction::Open(_) => {}
             }
             return true;
         }
         if let Some(panel) = &mut self.settings {
             match panel.key(key) {
                 SettingsAction::None => {}
-                SettingsAction::Close => self.settings = None,
+                SettingsAction::Close => {
+                    self.settings = None;
+                    self.refresh();
+                }
                 SettingsAction::Changed => self.refresh(),
             }
             return true;
@@ -544,7 +653,7 @@ impl App {
         let (w, h) = terminal::size().map(|(w, h)| (w as usize, h as usize))?;
         let (w, h) = (w.max(20), h.max(8));
 
-        if let Some(panel) = &mut self.review {
+        if let Some(panel) = &mut self.panel {
             let rows = panel.rows(w, h);
             return self.paint(out, w, h, &rows, None);
         }
@@ -622,7 +731,7 @@ impl App {
     }
 
     /// Above the box: what is running or how far back you scrolled, and
-    /// setup notices on the right.
+    /// messages on the right, most important first, as many as fit.
     fn status_row(&self, w: usize) -> Row {
         let mut row = Row::new();
         if let Some(job) = &self.job {
@@ -633,19 +742,15 @@ impl App {
         } else if self.scroll > 0 {
             row.push((Style::fg(GREY), format!("  ↓ {} more lines · PgDn", self.scroll)));
         }
-        let mut right = Row::new();
-        for (i, (color, text)) in self.update_note.iter().chain(&self.notices).enumerate() {
-            if i > 0 {
-                right.push((Style::fg(GREY), " · ".into()));
-            }
-            right.push((Style::fg(*color), text.clone()));
-        }
-        let (lw, rw) = (row_width(&row), row_width(&right));
-        if lw + rw + 3 <= w {
-            row.push((Style::default(), " ".repeat(w - lw - rw - 2)));
-            row.extend(right);
-        }
-        row
+        let messages = self
+            .update_note
+            .map(|n| {
+                let (c, t) = n.text();
+                (c, t.to_owned())
+            })
+            .into_iter()
+            .chain(self.notices.iter().cloned());
+        status_right(row, messages, w)
     }
 
     /// The input line, scrolled sideways to keep the cursor visible, and the cursor column.
@@ -666,11 +771,7 @@ impl App {
             row.push((Style::default(), shown.clone()));
         }
         let ghost = if line.is_empty() {
-            Some(if self.ctx.matches.is_empty() {
-                "Try \"/settings\"".to_owned()
-            } else {
-                "Try \"/review\" to see how your newest match went".to_owned()
-            })
+            Some(placeholder(self.ranked).to_owned())
         } else {
             self.editor.ghost(&self.ctx)
         };
@@ -679,6 +780,38 @@ impl App {
         }
         (row, prompt_w + cursor - start)
     }
+}
+
+/// What the empty input line suggests.
+fn placeholder(ranked: bool) -> &'static str {
+    if ranked {
+        "Try /review to see what problems were found from your latest match"
+    } else {
+        "Set your rank in /settings for a more tailored experience"
+    }
+}
+
+/// `left`, then the messages that fit beside it, right-aligned.
+fn status_right(mut row: Row, messages: impl Iterator<Item = (Color, String)>, w: usize) -> Row {
+    let lw = row_width(&row);
+    let mut right = Row::new();
+    for (color, text) in messages {
+        let mut piece: Row = Vec::new();
+        if !right.is_empty() {
+            piece.push((Style::fg(GREY), " · ".into()));
+        }
+        piece.push((Style::fg(color), text));
+        if lw + row_width(&right) + row_width(&piece) + 3 > w {
+            break;
+        }
+        right.extend(piece);
+    }
+    let rw = row_width(&right);
+    if rw > 0 {
+        row.push((Style::default(), " ".repeat(w - lw - rw - 2)));
+        row.extend(right);
+    }
+    row
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -741,14 +874,20 @@ fn transcript_rows(items: &[Item], w: usize) -> Vec<Row> {
     let mut rows = Vec::new();
     for item in items {
         match item {
-            Item::Header { setup, folder } => {
+            Item::Header { rank, game, folder } => {
                 rows.push(vec![]);
                 let text: [Row; 3] = [
                     vec![
-                        (Style::default().bold(), "Val Review".into()),
-                        (Style::fg(GREY), format!(" v{}", env!("CARGO_PKG_VERSION"))),
+                        (Style::default().bold(), APP_NAME.into()),
+                        (Style::fg(GREY), format!(" v{}", crate::VERSION)),
                     ],
-                    vec![(Style::fg(GREY), setup.clone())],
+                    vec![
+                        (
+                            Style::fg(rank_color(rank.as_deref())),
+                            rank.clone().unwrap_or_else(|| "Unranked".into()),
+                        ),
+                        (Style::fg(GREY), format!(" · {game}")),
+                    ],
                     vec![(Style::fg(GREY), folder.clone())],
                 ];
                 for (logo, text) in LOGO.iter().zip(text) {
@@ -797,6 +936,8 @@ pub(crate) fn kind_style(kind: Kind) -> Style {
         Kind::Dim => Style::fg(GREY),
         Kind::Bold => Style::default().bold(),
         Kind::Good => Style::fg(crate::review_view::GREEN),
+        Kind::Paint(c, true) => Style::fg(c).bold(),
+        Kind::Paint(c, false) => Style::fg(c),
     }
 }
 
@@ -898,11 +1039,9 @@ pub(crate) fn highlight(text: &str, query: &str, words: bool, base: Style) -> Ro
     row
 }
 
-/// Beside the logo: the game build and vrfkit, then the replay folder.
-fn header_text(data_dir: &Path) -> (String, String) {
+/// Beside the logo: the rank, the VALORANT version, then the replay folder.
+fn header_text(data_dir: &Path) -> (Option<String>, String, String) {
     let cfg = Config::load(data_dir).unwrap_or_default();
-    let vrfkit = Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref())
-        .map_or_else(|_| "vrfkit not set up".to_owned(), |v| format!("vrfkit {}", v.version));
     let game = Catalog::load(&paths::catalog_path(data_dir))
         .ok()
         .and_then(|c| c.game_version)
@@ -913,28 +1052,26 @@ fn header_text(data_dir: &Path) -> (String, String) {
     let folder = cfg
         .demos_dir()
         .map_or_else(|| "no replay folder set".to_owned(), |d| d.display().to_string());
-    (format!("{game} · {vrfkit}"), folder)
+    (cfg.rank, game, folder)
 }
 
-/// Setup problems and updates, for the right of the status line.
-fn notices(data_dir: &Path) -> Vec<(Color, String)> {
+/// Setup problems for the right of the status line. A patch vrfkit can't read
+/// yet is said only while there's no update: an update brings the new reader.
+fn notices(data_dir: &Path, update: bool) -> Vec<(Color, String)> {
     let cfg = Config::load(data_dir).unwrap_or_default();
     let mut out = Vec::new();
     if Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()).is_err() {
-        out.push((RED, "vrfkit not installed · Run /update".to_owned()));
+        out.push((RED, "Replay reader not installed · /update installs it".to_owned()));
+    }
+    if !update
+        && let Ok(c) = Catalog::load(&paths::catalog_path(data_dir))
+        && let Some(v) = c.game_version.as_deref().filter(|v| check_game_version(v).is_some())
+    {
+        let patch = v.splitn(3, '.').take(2).collect::<Vec<_>>().join(".");
+        out.push((YELLOW, format!("Can't read VALORANT {patch} replays yet · waiting on an update")));
     }
     if !cfg.demos_dir().is_some_and(|d| d.is_dir()) {
         out.push((YELLOW, "No replays yet · download a match in the client".to_owned()));
-    }
-    match Catalog::load(&paths::catalog_path(data_dir)) {
-        Err(_) => out.push((YELLOW, "No catalog · Run /sync".to_owned())),
-        Ok(c) => {
-            if c.game_version.as_deref().and_then(check_game_version).is_some() {
-                out.push((YELLOW, "Game patched past what vrfkit reads · update vrfkit".to_owned()));
-            } else if let Some(days) = c.age_days(valreview_core::time::now_unix()).filter(|&d| d > 30) {
-                out.push((YELLOW, format!("Catalog {days} days old · Run /sync")));
-            }
-        }
     }
     out
 }
@@ -944,35 +1081,65 @@ fn fetch_catalog(path: &Path) -> Result<()> {
     valreview_core::catalog::fetch()?.save(path)
 }
 
-/// On launch: scan and set `me`.
+/// One "what's new" block: heading, bullets, then the release link.
+fn whats_new(title: String, notes: &[String], link: String) {
+    out::row(vec![
+        (Kind::Paint(crate::review_view::GREEN, true), "✓ ".into()),
+        (Kind::Bold, title),
+        (Kind::Dim, " · what's new".into()),
+    ]);
+    for n in notes {
+        out::row(vec![(Kind::Paint(ACCENT, false), "  • ".into()), (Kind::Out, n.clone())]);
+    }
+    out::emit(Kind::Dim, format!("  {link} for details"));
+    outln!();
+}
+
+/// On launch: what's new after an update, the scan, and the focus.
 fn launch(data_dir: &Path) {
+    if let Some(w) = WhatsNew::take(data_dir, crate::VERSION) {
+        whats_new(
+            format!("{APP_NAME} updated to {}", w.version),
+            &w.notes,
+            format!("{}/v{}", update::RELEASES, w.version),
+        );
+        if let Some(v) = &w.vrfkit {
+            whats_new(
+                format!("vrfkit updated to {}", v.tag.trim_start_matches('v')),
+                &v.notes,
+                format!("{}/{}", update::VRFKIT_RELEASES, v.tag),
+            );
+        }
+    }
     let cfg = Config::load(data_dir).unwrap_or_default();
     if let Err(e) = Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()) {
-        outln!("Not set up yet: {e:#}");
-        dim("Run /update to install it (or /init --vrfkit <path> for your own copy), then /scan.");
+        outln!("The replay reader isn't set up yet: {e:#}");
+        dim("/update installs it, then /scan reads your replays.");
         return;
     }
     match cfg.demos_dir() {
         Some(d) if d.is_dir() => {
-            if let Err(e) = crate::scan_cmd(data_dir, None, false, false, false) {
-                out::emit(Kind::Error, format!("scan failed: {e:#}"));
+            if let Err(e) = crate::scan_cmd(data_dir, None, false, false) {
+                out::emit(Kind::Error, format!("Couldn't read your replays: {e:#}"));
             }
             if cfg.me.is_none() {
                 detect_me(data_dir);
             }
+            if cfg.rank.is_some() && !crate::my_matches(data_dir).is_empty() {
+                outln!();
+                crate::focus_line(data_dir);
+                dim("  /review for your newest match · /plan before you queue");
+            }
         }
-        Some(d) => {
-            outln!("No replays yet: {} does not exist.", d.display());
-            dim("Download a match in the client's career tab, then run /scan.");
-        }
-        None => dim("No replay folder set: /init --demos-dir <folder>"),
+        _ => outln!("No replays yet. Download a match in the VALORANT client and it shows up here."),
     }
 }
 
 /// In the background on launch: install a newer release (it applies on the
-/// next launch), or only say it exists when this exe was not installed by
-/// the installer (a dev build). Offline or failing checks stay quiet.
-fn check_for_update(data_dir: &Path, tx: &Sender<(Color, String)>) {
+/// next launch), or only say it exists when automatic updates are off or this
+/// exe was not installed by the installer (a dev build). Offline or failing
+/// checks stay quiet.
+fn check_for_update(data_dir: &Path, tx: &Sender<UpdateNote>, install_it: bool) {
     let installed = Layout::new()
         .ok()
         .filter(|l| std::env::current_exe().is_ok_and(|e| l.contains(&e)));
@@ -991,25 +1158,24 @@ fn check_for_update(data_dir: &Path, tx: &Sender<(Color, String)>) {
         update::State::record(data_dir, format!("up to date ({})", crate::VERSION));
         return;
     }
-    let Some(layout) = installed else {
+    let Some(layout) = installed.filter(|_| install_it) else {
         update::State::record(data_dir, format!("{v} available"));
-        let _ = tx.send((YELLOW, format!("Update {v} available · Run /update")));
+        let _ = tx.send(UpdateNote::Available);
         return;
     };
-    let _ = tx.send((GREY, format!("Updating to {v}…")));
     match update::apply(&layout, &manifest, data_dir) {
         Ok(_) => {
             update::State::record(data_dir, format!("installed {v}"));
-            let _ = tx.send((ACCENT, format!("Updated to {v} · Restart to apply")));
+            let _ = tx.send(UpdateNote::Installed);
         }
         Err(e) => {
             update::State::record(data_dir, format!("failed: {e:#}"));
-            let _ = tx.send((YELLOW, "Update failed · Run /update".to_owned()));
+            let _ = tx.send(UpdateNote::Failed);
         }
     }
 }
 
-/// Set `me` once exactly one account is in every scanned match (2+), as `init` would.
+/// Set `me` once exactly one account is in every scanned match (2+).
 fn detect_me(data_dir: &Path) {
     let Ok(store) = Store::open(&paths::db_path(data_dir)) else {
         return;
@@ -1025,10 +1191,9 @@ fn detect_me(data_dir: &Path) {
     };
     cfg.me = Some(subjects[0].clone());
     if cfg.save(data_dir).is_ok() {
-        outln!(
-            "You are {} (the only account in all {n} matches); change it with /init --me",
-            subjects[0]
-        );
+        dim(&format!(
+            "Found your account: it's in all {n} matches. Change it in /settings if that's wrong."
+        ));
     }
 }
 
@@ -1070,32 +1235,28 @@ fn commands() -> Vec<CommandInfo> {
     out
 }
 
+/// My matches for completing `--match` and `--map`: when, where, and how it went.
 fn matches(data_dir: &Path) -> Vec<MatchInfo> {
-    let db = paths::db_path(data_dir);
-    if !db.is_file() {
-        return vec![];
-    }
-    let Ok(rows) = Store::open(&db).and_then(|s| s.matches()) else {
-        return vec![];
-    };
-    rows.into_iter()
-        .map(|(id, played, map)| {
-            let map = map.as_deref().map(short_map).unwrap_or("?").to_owned();
+    crate::my_matches(data_dir)
+        .into_iter()
+        .map(|m| {
+            let map = m.map.as_deref().map(short_map).unwrap_or("?").to_owned();
+            let when = m.played_at.as_deref().map(crate::short_when).unwrap_or_else(|| "?".into());
+            let about = match &m.agent {
+                Some(a) => {
+                    let (res, _) = crate::review_view::result_style(m.won, m.lost);
+                    format!("{a} · {res} {}–{}", m.won, m.lost)
+                }
+                None => "you aren't in this one".into(),
+            };
             MatchInfo {
-                id,
-                label: format!(
-                    "{}  {map}",
-                    played.as_deref().map(short_time).unwrap_or_else(|| "?".into())
-                ),
+                id: m.id,
+                label: format!("{when}  {map:<6}"),
+                about,
                 map,
             }
         })
         .collect()
-}
-
-/// `2026-10-19T21:04:11Z` -> `2026-10-19 21:04`.
-fn short_time(t: &str) -> String {
-    t.get(..16).unwrap_or(t).replacen('T', " ", 1)
 }
 
 /// A map name, or the last part of an uncatalogued map path:
@@ -1129,41 +1290,28 @@ fn execute_line(line: &str, data_dir: &Path) -> Flow {
         return Flow::Continue;
     };
     let dir = cli.data_dir.unwrap_or_else(|| data_dir.to_path_buf());
-    // In the shell, a review opens the panel instead of printing.
-    if let crate::Command::Summary { map, me } = command {
-        return match crate::load_summary(&dir, map, me) {
-            Ok(data) => Flow::Summary(Box::new(data)),
-            Err(e) => {
-                out::emit(Kind::Error, format!("error: {e:#}"));
-                Flow::Continue
+    // In the shell, these open a panel instead of printing.
+    match command {
+        crate::Command::Settings => Flow::Settings,
+        crate::Command::Review { match_id } => {
+            panel_or_error(|| crate::load_review(&dir, match_id), |d| Flow::Review(Box::new(d)))
+        }
+        crate::Command::Plan { map } => panel_or_error(|| crate::load_plan(&dir, map), |d| Flow::Plan(Box::new(d))),
+        crate::Command::Habits => panel_or_error(
+            || crate::load_habits(&dir),
+            |(p, focus, n)| Flow::Habits(Box::new(HabitsPanel::new(p, focus, n))),
+        ),
+        crate::Command::Rank => panel_or_error(
+            || crate::load_rank(&dir),
+            |(rank, standing, focus)| Flow::Rank(Box::new(RankPanel::new(rank, standing, focus))),
+        ),
+        command => {
+            if let Err(e) = crate::run_command(&dir, command) {
+                out::emit(Kind::Error, format!("{e:#}"));
             }
-        };
+            Flow::Continue
+        }
     }
-    if let crate::Command::Settings = command {
-        return Flow::Settings;
-    }
-    if let crate::Command::Trends { me } = command {
-        return match crate::load_trends(&dir, me) {
-            Ok(data) => Flow::Trends(Box::new(data)),
-            Err(e) => {
-                out::emit(Kind::Error, format!("error: {e:#}"));
-                Flow::Continue
-            }
-        };
-    }
-    if let crate::Command::Review { match_id, me } = command {
-        return match crate::load_review(&dir, match_id, me) {
-            Ok(data) => Flow::Review(Box::new(data)),
-            Err(e) => {
-                out::emit(Kind::Error, format!("error: {e:#}"));
-                Flow::Continue
-            }
-        };
-    }
-    if let Err(e) = crate::run_command(&dir, command) {
-        out::emit(Kind::Error, format!("error: {e:#}"));
-    }
-    Flow::Continue
 }
 
 /// Split on whitespace; double quotes group. Backslashes stay literal for Windows paths.
@@ -1221,21 +1369,17 @@ mod tests {
 
     #[test]
     fn labels() {
-        assert_eq!(short_time("2026-10-19T21:04:11Z"), "2026-10-19 21:04");
         assert_eq!(short_map("/Game/Maps/Ascent/Ascent"), "Ascent");
         assert_eq!(short_map("Lotus"), "Lotus");
+        assert_eq!(placeholder(false), "Set your rank in /settings for a more tailored experience");
     }
 
     #[test]
     fn words() {
-        assert_eq!(split_words("/export  --match ab"), ["/export", "--match", "ab"]);
+        assert_eq!(split_words("/review  --match ab"), ["/review", "--match", "ab"]);
         assert_eq!(
-            split_words(r#"/init --vrfkit "C:\Program Files\vrfkit.exe""#),
-            ["/init", "--vrfkit", r"C:\Program Files\vrfkit.exe"]
-        );
-        assert_eq!(
-            split_words(r"/scan --demos-dir C:\x"),
-            ["/scan", "--demos-dir", r"C:\x"]
+            split_words(r#"/scan --demos-dir "C:\My Demos""#),
+            ["/scan", "--demos-dir", r"C:\My Demos"]
         );
         assert!(split_words("   ").is_empty());
     }
@@ -1245,21 +1389,36 @@ mod tests {
         let cmds = commands();
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
         for n in [
-            "scan", "export", "matches", "trends", "settings", "init", "players", "help", "exit",
+            "review", "plan", "habits", "focus", "rank", "matches", "scan", "settings", "help", "exit",
         ] {
             assert!(names.contains(&n), "{n}");
         }
-        // Automatic in the shell; still typed by hand if needed.
-        for n in ["sync", "update", "install"] {
+        // Removed for the coach, or automatic in the shell.
+        for n in ["export", "summary", "trends", "init", "players", "sync", "update", "install"] {
             assert!(!names.contains(&n), "{n}");
         }
         assert!(cmds.iter().all(|c| !c.about.is_empty()));
-        let export = cmds.iter().find(|c| c.name == "export").unwrap();
-        let m = export.flags.iter().find(|f| f.long == "--match").unwrap();
-        assert!(m.value.is_some() && !m.help.is_empty());
-        let scan = cmds.iter().find(|c| c.name == "scan").unwrap();
-        assert!(scan.flags.iter().any(|f| f.long == "--keep-raw" && f.value.is_none()));
-        assert!(scan.flags.iter().all(|f| f.long != "--data-dir"));
+        let review = cmds.iter().find(|c| c.name == "review").unwrap();
+        let m = review.flags.iter().find(|f| f.long == "--match").unwrap();
+        assert_eq!(m.value.as_deref(), Some("MATCH"));
+        let matches = cmds.iter().find(|c| c.name == "matches").unwrap();
+        assert!(matches.flags.iter().any(|f| f.long == "--all" && f.value.is_none()));
+        assert!(matches.flags.iter().all(|f| f.long != "--data-dir"));
+    }
+
+    #[test]
+    fn status_bar_keeps_what_fits_most_important_first() {
+        let msgs = || {
+            vec![
+                (ACCENT, "New version available · restart to apply".to_owned()),
+                (YELLOW, "No replays yet · download a match in the client".to_owned()),
+            ]
+            .into_iter()
+        };
+        let wide = text(&status_right(Row::new(), msgs(), 140));
+        assert!(wide.contains("restart to apply") && wide.contains("No replays"));
+        let narrow = text(&status_right(Row::new(), msgs(), 60));
+        assert!(narrow.contains("restart to apply") && !narrow.contains("No replays"));
     }
 
     #[test]
@@ -1273,13 +1432,24 @@ mod tests {
         assert_eq!(rows.iter().map(text).collect::<Vec<_>>(), [" abcdefghij", " klmn"]);
         let rows = transcript_rows(
             &[Item::Header {
-                setup: "VALORANT v13.08 · vrfkit v0.3.0".into(),
+                rank: Some("Gold 2".into()),
+                game: "VALORANT v13.08".into(),
                 folder: "C:\\Demos".into(),
             }],
             80,
         );
         assert_eq!(rows.len(), 5);
         assert!(text(&rows[1]).contains("Val Review v"));
+        assert!(text(&rows[2]).contains("Gold 2 · VALORANT v13.08"));
+        let rows = transcript_rows(
+            &[Item::Header {
+                rank: None,
+                game: "VALORANT v13.08".into(),
+                folder: "C:\\Demos".into(),
+            }],
+            80,
+        );
+        assert!(text(&rows[2]).contains("Unranked · VALORANT v13.08"));
     }
 
     #[test]
@@ -1294,7 +1464,6 @@ mod tests {
                 (base, "odel".to_owned())
             ]
         );
-        // Descriptions: every word that starts with the query.
         let row = highlight("Set the model, mostly", "m", true, base);
         let marked: Vec<&str> = row
             .iter()

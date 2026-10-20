@@ -1100,12 +1100,13 @@ fn summary(won: usize, lost: usize, fixes: &[Fix], damage_rank: Option<usize>) -
     s
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+/// Made-up reviews for tests, here and in the CLI.
+#[doc(hidden)]
+pub mod sample {
     use super::*;
 
     /// A made-up review: `rounds` (won?, side) and deaths built by `death`.
-    pub(crate) fn review(rounds: &[(bool, Side)], deaths: Vec<DeathFact>) -> MatchReview {
+    pub fn review(rounds: &[(bool, Side)], deaths: Vec<DeathFact>) -> MatchReview {
         let mut r: MatchReview = serde_json::from_value(serde_json::json!({
             "schema_version": 1, "subject": "me", "pawn": 1, "agent": "Sova", "agent_id": null,
             "abilities": {"X": "Hunter's Fury"},
@@ -1142,7 +1143,7 @@ pub(crate) mod tests {
         r
     }
 
-    pub(crate) fn death(round: u32, place: &str) -> DeathFact {
+    pub fn death(round: u32, place: &str) -> DeathFact {
         serde_json::from_value(serde_json::json!({
             "schema_version": 3, "match_id": "m1", "round": round, "time_ms": 1000 * round,
             "since_round_start_s": 50.0, "victim_pawn": 1, "killer_pawn": 7, "killer_agent": "Reyna",
@@ -1161,6 +1162,13 @@ pub(crate) mod tests {
         }))
         .expect("a valid death")
     }
+
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sample::{death, review};
+    use super::*;
 
     #[test]
     fn entries_and_isolated_deaths_become_fixes_ranked_by_rounds_lost() {

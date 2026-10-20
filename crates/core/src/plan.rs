@@ -386,7 +386,7 @@ pub fn tips(map: &str) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coach::tests::{death, review};
+    use crate::coach::sample::{death, review};
 
     #[test]
     fn sites_and_spots() {

@@ -24,8 +24,10 @@ pub struct FlagInfo {
 #[derive(Debug, Clone)]
 pub struct MatchInfo {
     pub id: String,
-    /// `2026-10-19 21:04  Ascent`.
+    /// `Mon 19 Oct 21:04  Ascent`.
     pub label: String,
+    /// `Sova · won 13–8`.
+    pub about: String,
     /// `Ascent`, for completing `--map`.
     pub map: String,
 }
@@ -98,12 +100,14 @@ pub fn suggest(before: &str, ctx: &Context) -> Suggestions {
         } else if flag.long == "--map" {
             items = map_items(ctx, &word, "");
         }
+    } else if cmd.name == "focus" && tokens.len() == 1 && !word.starts_with('-') {
+        items = habit_items(&word);
     } else if word.is_empty() || word.starts_with('-') {
         // A bare command offers what it is about, then its flags.
         if word.is_empty() && tokens.len() == 1 {
             match cmd.name.as_str() {
-                "export" | "review" => items = match_items(ctx, "", "--match "),
-                "summary" => items = map_items(ctx, "", "--map "),
+                "review" => items = match_items(ctx, "", "--match "),
+                "plan" => items = map_items(ctx, "", "--map "),
                 _ => {}
             }
         }
@@ -150,14 +154,28 @@ fn map_items(ctx: &Context, prefix: &str, value_prefix: &str) -> Vec<Suggestion>
         .collect()
 }
 
+/// Matches by when, where and how they went; the id is only what gets typed.
 fn match_items(ctx: &Context, prefix: &str, value_prefix: &str) -> Vec<Suggestion> {
     ctx.matches
         .iter()
         .filter(|m| m.id.starts_with(prefix))
         .map(|m| Suggestion {
-            value: format!("{value_prefix}{}", m.id),
-            label: m.id.chars().take(8).collect(),
-            description: m.label.clone(),
+            value: format!("{value_prefix}{}", m.id.chars().take(8).collect::<String>()),
+            label: m.label.clone(),
+            description: m.about.clone(),
+        })
+        .collect()
+}
+
+fn habit_items(prefix: &str) -> Vec<Suggestion> {
+    let p = prefix.to_lowercase();
+    valreview_core::habits::HABITS
+        .iter()
+        .filter(|h| h.slug.starts_with(&p))
+        .map(|h| Suggestion {
+            value: h.slug.into(),
+            label: h.slug.into(),
+            description: h.name.into(),
         })
         .collect()
 }
@@ -406,7 +424,7 @@ mod tests {
             commands: vec![
                 cmd("scan", vec![flag("--keep-raw", None), flag("--retry-failed", None)]),
                 cmd(
-                    "export",
+                    "review",
                     vec![
                         flag("--match", Some("ID")),
                         flag("--me", Some("ME")),
@@ -420,16 +438,19 @@ mod tests {
                 MatchInfo {
                     id: "aaaa1111-0000".into(),
                     label: "2026-10-19  Ascent".into(),
+                    about: "Sova · won 13–8".into(),
                     map: "Ascent".into(),
                 },
                 MatchInfo {
                     id: "bbbb2222-0000".into(),
                     label: "2026-10-18  Lotus".into(),
+                    about: String::new(),
                     map: "Lotus".into(),
                 },
                 MatchInfo {
                     id: "cccc3333-0000".into(),
                     label: "2026-10-17  Lotus".into(),
+                    about: String::new(),
                     map: "Lotus".into(),
                 },
             ],
@@ -469,45 +490,44 @@ mod tests {
     #[test]
     fn arguments() {
         let c = ctx();
-        // A bare `/export ` offers the stored matches, then the flags.
-        let s = suggest("/export ", &c);
+        // A bare `/review ` offers the stored matches, then the flags.
+        let s = suggest("/review ", &c);
         assert!(!s.command_word);
         assert_eq!(
             values(&s),
             [
-                "--match aaaa1111-0000",
-                "--match bbbb2222-0000",
-                "--match cccc3333-0000",
+                "--match aaaa1111",
+                "--match bbbb2222",
+                "--match cccc3333",
                 "--match",
                 "--me",
                 "--out"
             ]
         );
-        assert_eq!(s.items[0].label, "aaaa1111");
-        // `/review` offers matches the same way; `/summary` offers maps, most played first.
+        assert_eq!(s.items[0].label, "2026-10-19  Ascent");
+        assert_eq!(s.items[0].description, "Sova · won 13–8");
+        // `/plan` offers maps, most played first.
         let mut c = c;
-        for (name, flag) in [("review", "--match"), ("summary", "--map")] {
-            c.commands.push(CommandInfo {
-                name: name.into(),
-                about: String::new(),
-                flags: vec![FlagInfo {
-                    long: flag.into(),
-                    help: String::new(),
-                    value: Some("X".into()),
-                }],
-            });
-        }
-        assert_eq!(values(&suggest("/review ", &c))[0], "--match aaaa1111-0000");
-        let maps = suggest("/summary ", &c);
+        c.commands.push(CommandInfo {
+            name: "plan".into(),
+            about: String::new(),
+            flags: vec![FlagInfo {
+                long: "--map".into(),
+                help: String::new(),
+                value: Some("X".into()),
+            }],
+        });
+        assert_eq!(values(&suggest("/review ", &c))[0], "--match aaaa1111");
+        let maps = suggest("/plan ", &c);
         assert_eq!(values(&maps)[..2], ["--map Lotus", "--map Ascent"]);
         assert_eq!(maps.items[0].description, "2 matches");
-        assert_eq!(values(&suggest("/summary --map lo", &c)), ["Lotus"]);
-        assert_eq!(values(&suggest("/export --match b", &c)), ["bbbb2222-0000"]);
-        assert_eq!(values(&suggest("/export --m", &c)), ["--match", "--me"]);
+        assert_eq!(values(&suggest("/plan --map lo", &c)), ["Lotus"]);
+        assert_eq!(values(&suggest("/review --match b", &c)), ["bbbb2222"]);
+        assert_eq!(values(&suggest("/review --m", &c)), ["--match", "--me"]);
         // Used flags drop out; values of other flags get nothing.
         assert_eq!(values(&suggest("/scan --keep-raw ", &c)), ["--retry-failed"]);
         assert!(suggest("/trends --last ", &c).items.is_empty());
-        assert!(suggest("/export --out C:/x", &c).items.is_empty());
+        assert!(suggest("/review --out C:/x", &c).items.is_empty());
         assert!(suggest("/nope ", &c).items.is_empty());
     }
 
@@ -531,20 +551,20 @@ mod tests {
             ed.handle(key(KeyCode::Enter), &c),
             Action::Submit("/trends --last 10".into())
         );
-        typed(&mut ed, &c, "/export ");
-        assert_eq!(ed.handle(key(KeyCode::Enter), &c), Action::Submit("/export".into()));
+        typed(&mut ed, &c, "/review ");
+        assert_eq!(ed.handle(key(KeyCode::Enter), &c), Action::Submit("/review".into()));
     }
 
     #[test]
     fn tab_completes() {
         let c = ctx();
         let mut ed = Editor::new(vec![]);
-        typed(&mut ed, &c, "/exp");
+        typed(&mut ed, &c, "/rev");
         ed.handle(key(KeyCode::Tab), &c);
-        assert_eq!(ed.line(), "/export ");
+        assert_eq!(ed.line(), "/review ");
         ed.handle(key(KeyCode::Down), &c);
         ed.handle(key(KeyCode::Tab), &c);
-        assert_eq!(ed.line(), "/export --match bbbb2222-0000 ");
+        assert_eq!(ed.line(), "/review --match bbbb2222 ");
         // Right arrow at the end takes the grey hint.
         let mut ed = Editor::new(vec![]);
         typed(&mut ed, &c, "/tre");

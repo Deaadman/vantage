@@ -281,7 +281,7 @@ pub fn spark(values: &[f64]) -> String {
 mod tests {
     use super::*;
     use crate::analysis::Side;
-    use crate::coach::tests::{death, review};
+    use crate::coach::sample::{death, review};
 
     fn with_alone(n: usize) -> MatchReview {
         let deaths = (0..n as u32)
