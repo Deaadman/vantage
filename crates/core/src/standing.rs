@@ -32,7 +32,10 @@ fn per_round(r: &MatchReview, n: usize) -> Option<f64> {
 
 const MEASURES: [Measure; 5] = [
     Measure {
-        value: |r| per_round(r, 0).map(|_| r.round_facts.iter().map(|f| f.damage_dealt).sum::<f64>() / r.round_facts.len() as f64),
+        value: |r| {
+            per_round(r, 0)
+                .map(|_| r.round_facts.iter().map(|f| f.damage_dealt).sum::<f64>() / r.round_facts.len() as f64)
+        },
         better: "You do more damage than most players in your games.",
         behind: "You do less damage than most players in your games.",
     },

@@ -1068,7 +1068,10 @@ fn notices(data_dir: &Path, update: bool) -> Vec<(Color, String)> {
         && let Some(v) = c.game_version.as_deref().filter(|v| check_game_version(v).is_some())
     {
         let patch = v.splitn(3, '.').take(2).collect::<Vec<_>>().join(".");
-        out.push((YELLOW, format!("Can't read VALORANT {patch} replays yet · waiting on an update")));
+        out.push((
+            YELLOW,
+            format!("Can't read VALORANT {patch} replays yet · waiting on an update"),
+        ));
     }
     if !cfg.demos_dir().is_some_and(|d| d.is_dir()) {
         out.push((YELLOW, "No replays yet · download a match in the client".to_owned()));
@@ -1089,7 +1092,10 @@ fn whats_new(title: String, notes: &[String], link: String) {
         (Kind::Dim, " · what's new".into()),
     ]);
     for n in notes {
-        out::row(vec![(Kind::Paint(ACCENT, false), "  • ".into()), (Kind::Out, n.clone())]);
+        out::row(vec![
+            (Kind::Paint(ACCENT, false), "  • ".into()),
+            (Kind::Out, n.clone()),
+        ]);
     }
     out::emit(Kind::Dim, format!("  {link} for details"));
     outln!();
@@ -1241,7 +1247,11 @@ fn matches(data_dir: &Path) -> Vec<MatchInfo> {
         .into_iter()
         .map(|m| {
             let map = m.map.as_deref().map(short_map).unwrap_or("?").to_owned();
-            let when = m.played_at.as_deref().map(crate::short_when).unwrap_or_else(|| "?".into());
+            let when = m
+                .played_at
+                .as_deref()
+                .map(crate::short_when)
+                .unwrap_or_else(|| "?".into());
             let about = match &m.agent {
                 Some(a) => {
                     let (res, _) = crate::review_view::result_style(m.won, m.lost);
@@ -1371,7 +1381,10 @@ mod tests {
     fn labels() {
         assert_eq!(short_map("/Game/Maps/Ascent/Ascent"), "Ascent");
         assert_eq!(short_map("Lotus"), "Lotus");
-        assert_eq!(placeholder(false), "Set your rank in /settings for a more tailored experience");
+        assert_eq!(
+            placeholder(false),
+            "Set your rank in /settings for a more tailored experience"
+        );
     }
 
     #[test]
@@ -1394,7 +1407,9 @@ mod tests {
             assert!(names.contains(&n), "{n}");
         }
         // Removed for the coach, or automatic in the shell.
-        for n in ["export", "summary", "trends", "init", "players", "sync", "update", "install"] {
+        for n in [
+            "export", "summary", "trends", "init", "players", "sync", "update", "install",
+        ] {
             assert!(!names.contains(&n), "{n}");
         }
         assert!(cmds.iter().all(|c| !c.about.is_empty()));

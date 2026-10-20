@@ -297,7 +297,14 @@ pub fn validate(text: &str, shots: &[Shot]) -> Result<Output> {
 }
 
 /// Asks `provider`, checks the answer (asking once more if it doesn't fit), and saves it.
-pub fn run(data_dir: &Path, provider: &Provider, key: Option<&str>, model: Option<&str>, d: &Debrief, shots: &[Shot]) -> Result<Saved> {
+pub fn run(
+    data_dir: &Path,
+    provider: &Provider,
+    key: Option<&str>,
+    model: Option<&str>,
+    d: &Debrief,
+    shots: &[Shot],
+) -> Result<Saved> {
     let path = saved_path(data_dir, &d.match_id);
     if path.is_file() {
         bail!("This match already has an AI review. It's saved and can't be rerun.");
@@ -309,7 +316,11 @@ pub fn run(data_dir: &Path, provider: &Provider, key: Option<&str>, model: Optio
     let model = model.filter(|m| !m.trim().is_empty()).unwrap_or(provider.model);
     let images: Vec<String> = shots
         .iter()
-        .map(|s| std::fs::read(&s.path).map(|b| base64(&b)).with_context(|| format!("reading {}", s.path.display())))
+        .map(|s| {
+            std::fs::read(&s.path)
+                .map(|b| base64(&b))
+                .with_context(|| format!("reading {}", s.path.display()))
+        })
         .collect::<Result<_>>()?;
     let text = prompt(d, shots);
     let mut answer = ask(provider, key, model, &text, &images)?;
@@ -337,7 +348,8 @@ pub fn run(data_dir: &Path, provider: &Provider, key: Option<&str>, model: Optio
         },
     };
     std::fs::create_dir_all(path.parent().expect("has a parent"))?;
-    std::fs::write(&path, serde_json::to_string_pretty(&saved)?).with_context(|| format!("writing {}", path.display()))?;
+    std::fs::write(&path, serde_json::to_string_pretty(&saved)?)
+        .with_context(|| format!("writing {}", path.display()))?;
     Ok(saved)
 }
 
@@ -473,10 +485,15 @@ fn base64(bytes: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for c in bytes.chunks(3) {
-        let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
+        let n =
+            (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
         out.push(T[(n >> 18) as usize & 63] as char);
         out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if c.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
         out.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
     }
     out

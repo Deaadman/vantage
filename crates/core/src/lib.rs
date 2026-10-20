@@ -39,6 +39,6 @@ pub mod vrfkit;
 pub mod vrfkit_export;
 
 pub use catalog::Catalog;
-pub use vrfkit_export::Export;
-pub use game::Game;
 pub use export::MatchReview;
+pub use game::Game;
+pub use vrfkit_export::Export;

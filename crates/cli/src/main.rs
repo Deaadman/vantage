@@ -4,11 +4,11 @@ mod coach_views;
 mod editor;
 mod help;
 mod panel;
+#[cfg(test)]
+mod render_tests;
 mod review_view;
 mod settings;
 mod shell;
-#[cfg(test)]
-mod render_tests;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -250,7 +250,14 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
             (Kind::Warn, "  ! ".into()),
             (
                 Kind::Out,
-                format!("{} couldn't be read", if failed == 1 { "1 replay".into() } else { format!("{failed} replays") }),
+                format!(
+                    "{} couldn't be read",
+                    if failed == 1 {
+                        "1 replay".into()
+                    } else {
+                        format!("{failed} replays")
+                    }
+                ),
             ),
             (Kind::Dim, " · usually a download that was cut short".into()),
         ]);
@@ -258,7 +265,10 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
     if unsupported > 0 {
         out::row(vec![
             (Kind::Warn, "  ! ".into()),
-            (Kind::Out, format!("{unsupported} from a VALORANT version Val Review can't read yet")),
+            (
+                Kind::Out,
+                format!("{unsupported} from a VALORANT version Val Review can't read yet"),
+            ),
             (Kind::Dim, " · read after the next update".into()),
         ]);
     }
@@ -281,7 +291,11 @@ fn find_match(store: &Store, prefix: Option<&str>) -> Result<String> {
             .map(|m| m.0)
             .context("No matches yet. Download a replay in the VALORANT client and it shows up here.");
     };
-    let ids: Vec<String> = all.into_iter().map(|m| m.0).filter(|id| id.starts_with(prefix)).collect();
+    let ids: Vec<String> = all
+        .into_iter()
+        .map(|m| m.0)
+        .filter(|id| id.starts_with(prefix))
+        .collect();
     match ids.as_slice() {
         [one] => Ok(one.clone()),
         [] => anyhow::bail!("no match starts with \"{prefix}\". /matches lists them."),
@@ -300,9 +314,17 @@ fn lobby_of(store: &Store, match_id: &str) -> Result<Vec<MatchReview>> {
     Ok(lobby)
 }
 
-fn map_and_minimap(data_dir: &Path, r: &MatchReview) -> (Option<catalog::MapInfo>, std::result::Result<Minimap, String>) {
+fn map_and_minimap(
+    data_dir: &Path,
+    r: &MatchReview,
+) -> (Option<catalog::MapInfo>, std::result::Result<Minimap, String>) {
     let catalog = load_catalog(data_dir);
-    let map = r.context.map_url.as_deref().and_then(|u| catalog.map_by_url(u)).cloned();
+    let map = r
+        .context
+        .map_url
+        .as_deref()
+        .and_then(|u| catalog.map_by_url(u))
+        .cloned();
     let minimap = match &map {
         Some(m) => Minimap::load(data_dir, m).map_err(|e| format!("{e:#}")),
         None => Err("Val Review doesn't know this map yet".into()),
@@ -389,7 +411,10 @@ impl ReviewData {
                 .iter()
                 .flat_map(|(_, files)| files)
                 .map(|p| ai::Shot {
-                    name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                    name: p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
                     path: p.clone(),
                 })
                 .collect(),
@@ -411,7 +436,10 @@ pub(crate) fn load_review(data_dir: &Path, match_id: Option<String>) -> Result<R
     let lobby = lobby_of(&store, &id)?;
     let debrief = coach::debrief(&review, &lobby);
     let mine = store.reviews_of(&me)?;
-    let upto = mine.iter().position(|r| r.context.match_id == id).map_or(mine.len(), |i| i + 1);
+    let upto = mine
+        .iter()
+        .position(|r| r.context.match_id == id)
+        .map_or(mine.len(), |i| i + 1);
     let focus = habits::check(habits::focus(cfg.focus.as_deref()), &mine[..upto]);
     let (map, minimap) = map_and_minimap(data_dir, &review);
     let clips = match &cfg.clips_dir {
@@ -446,7 +474,9 @@ fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
         d.played_at.as_deref().and_then(|t| t.get(..10)).unwrap_or("undated"),
         d.map
     );
-    let shots_dir = clips::shots_root().unwrap_or_else(|| dir.join("valreview")).join(folder);
+    let shots_dir = clips::shots_root()
+        .unwrap_or_else(|| dir.join("valreview"))
+        .join(folder);
     let mut shots = Vec::new();
     let mut shot_error = None;
     if per_death.iter().any(Option::is_some) {
@@ -499,7 +529,12 @@ pub(crate) fn load_plan(data_dir: &Path, map: Option<String>) -> Result<coach_vi
                 .chain(mine.iter().map(name).collect::<Vec<_>>().iter())
                 .find(|k| k.to_lowercase() == want)
                 .cloned()
-                .with_context(|| format!("Val Review doesn't know a map called {m}. Try one of: {}.", known.join(", ")))?
+                .with_context(|| {
+                    format!(
+                        "Val Review doesn't know a map called {m}. Try one of: {}.",
+                        known.join(", ")
+                    )
+                })?
         }
         None => {
             let mut counts: Vec<(String, usize)> = Vec::new();
@@ -537,7 +572,11 @@ pub(crate) fn load_plan(data_dir: &Path, map: Option<String>) -> Result<coach_vi
 
 fn catalog_maps(data_dir: &Path) -> Vec<String> {
     let (cat, _) = Catalog::load_or_builtin(&paths::catalog_path(data_dir));
-    cat.maps.iter().filter(|m| !m.callouts.is_empty()).map(|m| m.name.clone()).collect()
+    cat.maps
+        .iter()
+        .filter(|m| !m.callouts.is_empty())
+        .map(|m| m.name.clone())
+        .collect()
 }
 
 /// Every habit over my recent matches, my focus, and how many matches.
@@ -548,7 +587,11 @@ pub(crate) fn load_habits(data_dir: &Path) -> Result<(Vec<habits::Progress>, &'s
     if mine.is_empty() {
         anyhow::bail!("No matches yet. Download a replay in the VALORANT client and it shows up here.");
     }
-    Ok((habits::progress(&mine), habits::focus(cfg.focus.as_deref()).slug, mine.len()))
+    Ok((
+        habits::progress(&mine),
+        habits::focus(cfg.focus.as_deref()).slug,
+        mine.len(),
+    ))
 }
 
 /// My rank, how I compare with my lobbies, and my focus's name.
@@ -591,7 +634,8 @@ fn focus_cmd(data_dir: &Path, habit: Option<String>) -> Result<()> {
         out::emit(Kind::Dim, format!("  To switch, type /focus and pick a habit: {slugs}"));
         return Ok(());
     };
-    let h = habits::habit(&want).with_context(|| format!("There's no habit called \"{want}\". Pick one of: {slugs}."))?;
+    let h =
+        habits::habit(&want).with_context(|| format!("There's no habit called \"{want}\". Pick one of: {slugs}."))?;
     cfg.focus = Some(h.slug.to_owned());
     cfg.save(data_dir)?;
     out::row(vec![
@@ -641,7 +685,10 @@ pub(crate) fn focus_check(data_dir: &Path, match_id: &str) {
         (Kind::Bold, format!("{} on {}", b.agent, b.map)),
         (Kind::Dim, " · ".into()),
         (Kind::Paint(color, true), format!("{res} {}–{}", b.won, b.lost)),
-        (Kind::Dim, format!(" · {}, {}", plural(b.kills, "kill"), plural(b.deaths_n, "death"))),
+        (
+            Kind::Dim,
+            format!(" · {}, {}", plural(b.kills, "kill"), plural(b.deaths_n, "death")),
+        ),
     ]);
     if let Some(c) = &d.focus {
         outln!();
@@ -663,20 +710,32 @@ pub(crate) fn focus_check(data_dir: &Path, match_id: &str) {
             ]);
         }
         if let Some(f) = b.fixes.iter().find(|f| f.habit == Some(c.habit.slug)) {
-            out::row(vec![(Kind::Dim, format!("  {:<14}", "Try")), (Kind::Out, f.try_short.clone())]);
+            out::row(vec![
+                (Kind::Dim, format!("  {:<14}", "Try")),
+                (Kind::Out, f.try_short.clone()),
+            ]);
         }
     }
     if !b.fixes.is_empty() || !b.keep.is_empty() {
         outln!();
         out::row(vec![(Kind::Bold, "Also this match".into())]);
         if let Some(f) = b.fixes.first() {
-            out::row(vec![(Kind::Paint(shell::YELLOW, true), "  ! ".into()), (Kind::Out, f.title.clone())]);
+            out::row(vec![
+                (Kind::Paint(shell::YELLOW, true), "  ! ".into()),
+                (Kind::Out, f.title.clone()),
+            ]);
         }
         if let Some(k) = b.keep.first() {
-            out::row(vec![(Kind::Paint(review_view::GREEN, true), "  + ".into()), (Kind::Out, k.clone())]);
+            out::row(vec![
+                (Kind::Paint(review_view::GREEN, true), "  + ".into()),
+                (Kind::Out, k.clone()),
+            ]);
         }
     }
-    out::emit(Kind::Dim, "  /review for the full debrief, your clips and the AI review".into());
+    out::emit(
+        Kind::Dim,
+        "  /review for the full debrief, your clips and the AI review".into(),
+    );
 }
 
 const WEEKDAYS: [&str; 7] = [
@@ -758,7 +817,11 @@ fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
         outln!("No matches yet. Download one in the client and it shows up here.");
         return Ok(());
     }
-    let shown = if all { matches.len() } else { matches.len().min(MATCHES_SHOWN) };
+    let shown = if all {
+        matches.len()
+    } else {
+        matches.len().min(MATCHES_SHOWN)
+    };
     let today = valreview_core::time::now_unix().div_euclid(86_400);
     let mut day: Option<String> = None;
     for m in &matches[..shown] {
@@ -804,7 +867,16 @@ fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
 /// `valreview review` outside the shell: the Debrief as text.
 fn print_review(d: &ReviewData) {
     let b = &d.debrief;
-    outln!("{} on {} · {} {}–{} · {}/{}", b.agent, b.map, b.result(), b.won, b.lost, b.kills, b.deaths_n);
+    outln!(
+        "{} on {} · {} {}–{} · {}/{}",
+        b.agent,
+        b.map,
+        b.result(),
+        b.won,
+        b.lost,
+        b.kills,
+        b.deaths_n
+    );
     outln!();
     outln!("{}", b.summary);
     outln!();
@@ -883,7 +955,9 @@ fn update_cmd(data_dir: &Path) -> Result<()> {
             ]);
             out::emit(
                 Kind::Dim,
-                format!("  Restart {APP_NAME} to use it: /exit, then run valreview again. What's new shows when it opens."),
+                format!(
+                    "  Restart {APP_NAME} to use it: /exit, then run valreview again. What's new shows when it opens."
+                ),
             );
             Ok(())
         }

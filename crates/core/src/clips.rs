@@ -70,10 +70,7 @@ pub struct Clip {
 /// that isn't only VALORANT's (Game Bar, the whole Videos folder), a clip
 /// counts when "valorant" is in its name or its folder's.
 pub fn find(dir: &Path) -> Vec<Clip> {
-    let only_valorant = dir
-        .to_string_lossy()
-        .to_lowercase()
-        .contains("valorant");
+    let only_valorant = dir.to_string_lossy().to_lowercase().contains("valorant");
     let mut out = Vec::new();
     walk(dir, 0, only_valorant, &mut out);
     out.sort_by(|a, b| a.saved_unix.total_cmp(&b.saved_unix));
@@ -86,7 +83,10 @@ fn walk(dir: &Path, depth: usize, only_valorant: bool, out: &mut Vec<Clip>) {
         let path = e.path();
         if path.is_dir() {
             if depth < 3 {
-                let v = only_valorant || path.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().contains("valorant"));
+                let v = only_valorant
+                    || path
+                        .file_name()
+                        .is_some_and(|n| n.to_string_lossy().to_lowercase().contains("valorant"));
                 walk(&path, depth + 1, v, out);
             }
             continue;
@@ -257,7 +257,16 @@ pub fn screenshot(ffmpeg: &Path, clip: &Matched, round: u32, style: ShotStyle, d
         ShotStyle::Three => {
             for (m, p) in MOMENTS_S.iter().zip(&paths) {
                 let mut one = Command::new(ffmpeg);
-                one.args(["-hide_banner", "-loglevel", "error", "-y", "-sseof", &from_end(*m), "-i", &input]);
+                one.args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-sseof",
+                    &from_end(*m),
+                    "-i",
+                    &input,
+                ]);
                 one.args(["-frames:v", "1", "-q:v", "3"]).arg(p);
                 run(&mut one)?;
             }

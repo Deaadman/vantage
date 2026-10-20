@@ -13,14 +13,23 @@ use valreview_core::coach::{list_and, plural};
 use valreview_core::habits::{self, Check};
 
 use crate::panel::{
-    Item, MapCache, bullet, field, frame, heading, is_close, list_rows, map_rows_h, pad, para, rule_line,
-    scrolled, step, step_of, steps, tab_key,
+    Item, MapCache, bullet, field, frame, heading, is_close, list_rows, map_rows_h, pad, para, rule_line, scrolled,
+    step, step_of, steps, tab_key,
 };
 use crate::shell::{ACCENT, GREY, RED, Row, SPINNER, Style, YELLOW, wrap};
 use crate::{ClipFolder, Clips, ReviewData};
 
 pub const GREEN: Color = Color::Rgb { r: 120, g: 200, b: 120 };
-const TABS: [&str; 8] = ["Debrief", "Fixes", "Moments", "Rounds", "Map", "Clips", "Screenshots", "AI"];
+const TABS: [&str; 8] = [
+    "Debrief",
+    "Fixes",
+    "Moments",
+    "Rounds",
+    "Map",
+    "Clips",
+    "Screenshots",
+    "AI",
+];
 const T_CLIPS: usize = 5;
 const T_SHOTS: usize = 6;
 const T_AI: usize = 7;
@@ -225,7 +234,10 @@ impl ReviewPanel {
                     " · {}, {}{}",
                     plural(d.kills, "kill"),
                     plural(d.deaths_n, "death"),
-                    d.played_at.as_deref().map(|t| format!(" · {}", crate::short_when(t))).unwrap_or_default()
+                    d.played_at
+                        .as_deref()
+                        .map(|t| format!(" · {}", crate::short_when(t)))
+                        .unwrap_or_default()
                 ),
             ),
         ]
@@ -284,7 +296,12 @@ impl ReviewPanel {
         let top: Vec<_> = d.fixes.iter().take(3).collect();
         if top.is_empty() {
             b.push(heading("Nothing to fix first", Some(GREEN)));
-            b.extend(para("No mistake repeated enough in this match to call it a pattern.", 4, w, Style::fg(GREY)));
+            b.extend(para(
+                "No mistake repeated enough in this match to call it a pattern.",
+                4,
+                w,
+                Style::fg(GREY),
+            ));
         } else {
             b.push(vec![
                 (Style::fg(YELLOW).bold(), "  Fix first".into()),
@@ -306,7 +323,10 @@ impl ReviewPanel {
             b.extend(para(&f.short, 4, w, Style::default()));
             for (i, p) in wrap(&f.try_short, w.saturating_sub(12).max(10)).into_iter().enumerate() {
                 b.push(vec![
-                    (Style::fg(GREEN).bold(), if i == 0 { "    Try  ".into() } else { "         ".into() }),
+                    (
+                        Style::fg(GREEN).bold(),
+                        if i == 0 { "    Try  ".into() } else { "         ".into() },
+                    ),
                     (Style::default(), p),
                 ]);
             }
@@ -336,7 +356,12 @@ impl ReviewPanel {
     fn fixes(&mut self, w: usize, h: usize) -> Vec<Row> {
         let d = &self.data.debrief;
         if d.fixes.is_empty() {
-            return para("Nothing repeated enough in this match to make a fix of it. See the Moments tab for single rounds.", 2, w, Style::fg(GREY));
+            return para(
+                "Nothing repeated enough in this match to make a fix of it. See the Moments tab for single rounds.",
+                2,
+                w,
+                Style::fg(GREY),
+            );
         }
         self.sel = self.sel.min(d.fixes.len() - 1);
         let mut b = list_rows(
@@ -370,7 +395,12 @@ impl ReviewPanel {
             vec![],
         ];
         if d.moments.is_empty() {
-            b.extend(para("None of your deaths in lost rounds fits a pattern worth calling out.", 4, w, Style::fg(GREY)));
+            b.extend(para(
+                "None of your deaths in lost rounds fits a pattern worth calling out.",
+                4,
+                w,
+                Style::fg(GREY),
+            ));
             return b;
         }
         self.sel = self.sel.min(d.moments.len() - 1);
@@ -378,8 +408,12 @@ impl ReviewPanel {
             d.moments
                 .iter()
                 .map(|m| {
-                    Item::new(format!("{}{} ", pad(&format!("R{}", m.round), 5), pad(&m.situation, 38)))
-                        .tail(format!("→ {}", m.better), GREY)
+                    Item::new(format!(
+                        "{}{} ",
+                        pad(&format!("R{}", m.round), 5),
+                        pad(&m.situation, 38)
+                    ))
+                    .tail(format!("→ {}", m.better), GREY)
                 })
                 .collect(),
             self.sel,
@@ -388,7 +422,10 @@ impl ReviewPanel {
         let m = &d.moments[self.sel];
         b.push(vec![]);
         b.push(rule_line(w));
-        b.push(vec![(Style::default().bold(), format!("    Round {}: {}", m.round, m.situation))]);
+        b.push(vec![(
+            Style::default().bold(),
+            format!("    Round {}: {}", m.round, m.situation),
+        )]);
         b.extend(para(&m.text, 4, w, Style::default()));
         b.truncate(h);
         b
@@ -397,7 +434,10 @@ impl ReviewPanel {
     fn rounds(&mut self, w: usize, h: usize) -> Vec<Row> {
         let d = &self.data.debrief;
         if d.rounds.is_empty() {
-            return vec![vec![(Style::fg(GREY), "  No rounds were stored for this match.".into())]];
+            return vec![vec![(
+                Style::fg(GREY),
+                "  No rounds were stored for this match.".into(),
+            )]];
         }
         self.round = self.round.min(d.rounds.len() - 1);
         let items: Vec<Item> = d
@@ -405,11 +445,19 @@ impl ReviewPanel {
             .iter()
             .map(|x| {
                 let death = x.death.map(|i| &d.deaths[i]);
-                let kills = if x.kills > 0 { plural(x.kills as usize, "kill") } else { String::new() };
+                let kills = if x.kills > 0 {
+                    plural(x.kills as usize, "kill")
+                } else {
+                    String::new()
+                };
                 let what = match death {
                     Some(dd) => format!(
                         "{}{} got you at {}",
-                        if kills.is_empty() { String::new() } else { format!("{kills}, then ") },
+                        if kills.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{kills}, then ")
+                        },
                         dd.killer,
                         dd.place.as_deref().unwrap_or("?")
                     ),
@@ -454,13 +502,26 @@ impl ReviewPanel {
         story.push(death.map_or_else(|| "You survived the round.".into(), |dd| dd.sentence()));
         detail.extend(para(&story.join(" "), 4, w, Style::default()));
         if let Some(fi) = death.and_then(|dd| dd.fix) {
-            detail.extend(para(&format!("Part of fix {}: {}.", fi + 1, d.fixes[fi].title), 4, w, Style::fg(YELLOW)));
+            detail.extend(para(
+                &format!("Part of fix {}: {}.", fi + 1, d.fixes[fi].title),
+                4,
+                w,
+                Style::fg(YELLOW),
+            ));
         }
         if let Some(mi) = death.and_then(|dd| dd.moment) {
-            detail.extend(para(&format!("Better: {}.", d.moments[mi].better), 4, w, Style::fg(GREEN)));
+            detail.extend(para(
+                &format!("Better: {}.", d.moments[mi].better),
+                4,
+                w,
+                Style::fg(GREEN),
+            ));
         }
         let list_h = h.saturating_sub(detail.len() + 2).min(d.rounds.len()).max(3);
-        let mut b = vec![vec![(Style::fg(GREY), "    rnd  side    result buy       what happened".to_owned())]];
+        let mut b = vec![vec![(
+            Style::fg(GREY),
+            "    rnd  side    result buy       what happened".to_owned(),
+        )]];
         b.extend(list_rows(items, self.round, list_h));
         b.push(vec![]);
         b.extend(detail);
@@ -491,13 +552,25 @@ impl ReviewPanel {
             cells.mark(uv, YELLOW, "◆");
         }
         let mut legend: Vec<Row> = vec![
-            vec![(Style::fg(RED).bold(), "● ".into()), (Style::default(), "where you died".into())],
-            vec![(Style::fg(GREEN).bold(), "▲ ".into()), (Style::default(), "where you won a fight".into())],
-            vec![(Style::fg(YELLOW).bold(), "◆ ".into()), (Style::default(), "this death (↑↓)".into())],
+            vec![
+                (Style::fg(RED).bold(), "● ".into()),
+                (Style::default(), "where you died".into()),
+            ],
+            vec![
+                (Style::fg(GREEN).bold(), "▲ ".into()),
+                (Style::default(), "where you won a fight".into()),
+            ],
+            vec![
+                (Style::fg(YELLOW).bold(), "◆ ".into()),
+                (Style::default(), "this death (↑↓)".into()),
+            ],
             vec![],
             vec![
                 (Style::fg(GREEN).bold(), "Your spot: ".into()),
-                (Style::default(), d.best_spot.clone().unwrap_or_else(|| "none yet".into())),
+                (
+                    Style::default(),
+                    d.best_spot.clone().unwrap_or_else(|| "none yet".into()),
+                ),
             ],
             vec![
                 (Style::fg(RED).bold(), "Your trap: ".into()),
@@ -535,7 +608,12 @@ impl ReviewPanel {
                     Style::fg(GREY),
                 ));
                 b.push(vec![]);
-                let name_w = folders.iter().map(|f| f.name.chars().count() + 2).max().unwrap_or(0).max(24);
+                let name_w = folders
+                    .iter()
+                    .map(|f| f.name.chars().count() + 2)
+                    .max()
+                    .unwrap_or(0)
+                    .max(24);
                 for (i, f) in folders.iter().enumerate() {
                     let on = i == self.clip_pick;
                     b.push(vec![
@@ -561,7 +639,10 @@ impl ReviewPanel {
                 let have = per_death.iter().filter(|c| c.is_some()).count();
                 b.push(vec![
                     (Style::default(), "  ".into()),
-                    (Style::default().bold(), format!("{have} of {} deaths have a clip", d.deaths.len())),
+                    (
+                        Style::default().bold(),
+                        format!("{have} of {} deaths have a clip", d.deaths.len()),
+                    ),
                     (Style::fg(GREY), format!(" · from {}", dir.display())),
                 ]);
                 b.push(vec![]);
@@ -579,7 +660,13 @@ impl ReviewPanel {
                         let it = Item::new(format!("{}{}", pad(&format!("R{}", x.round), 5), pad(&what, 26)));
                         match c {
                             Some(m) => it.tail(
-                                format!("✓ {}", m.path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()),
+                                format!(
+                                    "✓ {}",
+                                    m.path
+                                        .file_name()
+                                        .map(|f| f.to_string_lossy().into_owned())
+                                        .unwrap_or_default()
+                                ),
                                 GREEN,
                             ),
                             None => it.tail("no clip", GREY),
@@ -629,7 +716,9 @@ impl ReviewPanel {
         let mut b: Vec<Row> = Vec::new();
         if shots.is_empty() {
             b.extend(para(
-                shot_error.as_deref().unwrap_or("None of your deaths has a clip, so there's nothing to take screenshots from."),
+                shot_error
+                    .as_deref()
+                    .unwrap_or("None of your deaths has a clip, so there's nothing to take screenshots from."),
                 2,
                 w,
                 Style::fg(YELLOW),
@@ -638,14 +727,21 @@ impl ReviewPanel {
             b.push(vec![
                 (Style::default(), "  ".into()),
                 (Style::fg(GREEN).bold(), "✓ ".into()),
-                (Style::default().bold(), format!("{} ready", plural(shots.len(), "screenshot"))),
+                (
+                    Style::default().bold(),
+                    format!("{} ready", plural(shots.len(), "screenshot")),
+                ),
                 (Style::fg(GREY), ", one for each death with a clip".into()),
             ]);
             b.push(vec![]);
             let how = match style {
-                valreview_core::clips::ShotStyle::Strip => "Each screenshot puts three moments side by side: 3 seconds before you died, 1 second before, and the moment you died, so the whole fight is in one image.",
+                valreview_core::clips::ShotStyle::Strip => {
+                    "Each screenshot puts three moments side by side: 3 seconds before you died, 1 second before, and the moment you died, so the whole fight is in one image."
+                }
                 valreview_core::clips::ShotStyle::One => "Each screenshot is the moment you died.",
-                valreview_core::clips::ShotStyle::Three => "Each death has three screenshots: 3 seconds before you died, 1 second before, and the moment you died.",
+                valreview_core::clips::ShotStyle::Three => {
+                    "Each death has three screenshots: 3 seconds before you died, 1 second before, and the moment you died."
+                }
             };
             b.extend(para(how, 2, w, Style::fg(GREY)));
             b.push(vec![]);
@@ -666,7 +762,8 @@ impl ReviewPanel {
                     (Style::default(), format!("    {} ", pad(&names, 10))),
                     (
                         Style::fg(GREY),
-                        x.map(|x| format!("{} at {}", x.killer, x.place.as_deref().unwrap_or("?"))).unwrap_or_default(),
+                        x.map(|x| format!("{} at {}", x.killer, x.place.as_deref().unwrap_or("?")))
+                            .unwrap_or_default(),
                     ),
                 ]);
             }
@@ -717,7 +814,11 @@ impl ReviewPanel {
             return b;
         }
         if let Some(saved) = self.data.ai.clone() {
-            return if self.json { self.ai_json(&saved, w, h) } else { self.ai_result(&saved, w, h) };
+            return if self.json {
+                self.ai_json(&saved, w, h)
+            } else {
+                self.ai_result(&saved, w, h)
+            };
         }
         let mut b = vec![heading("AI review", None)];
         b.extend(para(
@@ -750,12 +851,20 @@ impl ReviewPanel {
             }
             Some(p) => {
                 let what = if shots > 0 {
-                    format!("this match's facts and {} from the Screenshots tab", plural(shots, "screenshot"))
+                    format!(
+                        "this match's facts and {} from the Screenshots tab",
+                        plural(shots, "screenshot")
+                    )
                 } else {
                     "this match's facts and no screenshots (pick your clip folder in the Clips tab first)".to_owned()
                 };
                 if p.local {
-                    b.extend(field("Gives", &format!("Ollama, on this PC: {what}. Nothing leaves this computer."), w, Style::default()));
+                    b.extend(field(
+                        "Gives",
+                        &format!("Ollama, on this PC: {what}. Nothing leaves this computer."),
+                        w,
+                        Style::default(),
+                    ));
                 } else {
                     b.extend(field("Sends", &format!("{}: {what}", p.name), w, Style::default()));
                 }
@@ -785,7 +894,10 @@ impl ReviewPanel {
         let saved = crate::short_when(&s.meta.saved_at);
         let mut b: Vec<Row> = vec![vec![
             (Style::fg(ACCENT).bold(), "  AI review".into()),
-            (Style::fg(GREY), format!(" · {} · saved {saved} · can't be rerun", s.meta.provider)),
+            (
+                Style::fg(GREY),
+                format!(" · {} · saved {saved} · can't be rerun", s.meta.provider),
+            ),
         ]];
         b.extend(para(&o.summary, 4, w, Style::default()));
         b.push(vec![]);
@@ -814,7 +926,12 @@ impl ReviewPanel {
             b.push(rule_line(w));
             b.push(vec![(Style::default().bold(), format!("    {}", f.title))]);
             let rounds: Vec<String> = f.rounds.iter().map(u32::to_string).collect();
-            b.extend(field("Rounds", &format!("{} · {}", list_and(&rounds), f.screenshots.join(", ")), w, Style::default()));
+            b.extend(field(
+                "Rounds",
+                &format!("{} · {}", list_and(&rounds), f.screenshots.join(", ")),
+                w,
+                Style::default(),
+            ));
             b.extend(field("What it saw", &f.saw, w, Style::default()));
             b.extend(field("Why it costs", &f.why, w, Style::default()));
             b.extend(field("Try", &f.try_this, w, Style::fg(GREEN)));
@@ -852,7 +969,10 @@ impl ReviewPanel {
         for (name, desc) in ai::FORMAT {
             for (i, p) in wrap(desc, w.saturating_sub(26).max(10)).into_iter().enumerate() {
                 lines.push(vec![
-                    (Style::fg(ACCENT), format!("    {}", pad(if i == 0 { name } else { "" }, 18))),
+                    (
+                        Style::fg(ACCENT),
+                        format!("    {}", pad(if i == 0 { name } else { "" }, 18)),
+                    ),
                     (Style::default(), p),
                 ]);
             }
@@ -860,7 +980,10 @@ impl ReviewPanel {
         let cats = ai::CATEGORIES.iter().map(|(k, _)| *k).collect::<Vec<_>>().join(", ");
         for (i, p) in wrap(&cats, w.saturating_sub(26).max(10)).into_iter().enumerate() {
             lines.push(vec![
-                (Style::fg(ACCENT), format!("    {}", pad(if i == 0 { "categories" } else { "" }, 18))),
+                (
+                    Style::fg(ACCENT),
+                    format!("    {}", pad(if i == 0 { "categories" } else { "" }, 18)),
+                ),
                 (Style::default(), p),
             ]);
         }

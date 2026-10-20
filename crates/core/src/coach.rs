@@ -163,7 +163,12 @@ pub fn result_word(won: usize, lost: usize) -> &'static str {
 }
 
 pub fn map_name(r: &MatchReview) -> String {
-    r.map_name().trim_matches('`').rsplit('/').next().unwrap_or("?").to_owned()
+    r.map_name()
+        .trim_matches('`')
+        .rsplit('/')
+        .next()
+        .unwrap_or("?")
+        .to_owned()
 }
 
 // ------------------------------------------------------------ what counts
@@ -523,16 +528,15 @@ fn find_fixes(r: &MatchReview) -> Vec<Found> {
         let ix = indexes(r, |x| x.killer_agent == agent);
         let ds = pick(&ix);
         let (rounds, lost) = rounds_of(r, &ds);
-        let range = crate::review::median(ds.iter().filter_map(|x| x.dist_to_killer_m).collect())
-            .map_or("", |m| {
-                if m < 10.0 {
-                    "up close"
-                } else if m < 25.0 {
-                    "at mid range"
-                } else {
-                    "from long range"
-                }
-            });
+        let range = crate::review::median(ds.iter().filter_map(|x| x.dist_to_killer_m).collect()).map_or("", |m| {
+            if m < 10.0 {
+                "up close"
+            } else if m < 25.0 {
+                "at mid range"
+            } else {
+                "from long range"
+            }
+        });
         let place = most_common(ds.iter().filter_map(|x| x.nearest_callout.clone()))
             .filter(|(_, n)| *n >= 2)
             .map(|(s, _)| format!(" around {s}"))
@@ -706,9 +710,15 @@ fn find_fixes(r: &MatchReview) -> Vec<Found> {
                 title: format!("Dying with {ult} ready"),
                 cost: format!("lost {lost} of {}", rounds.len()),
                 phrase: format!("dying with {ult} ready"),
-                short: format!("{} times you died with {ult} ready and unused.", capitalise(&words(ix.len()))),
+                short: format!(
+                    "{} times you died with {ult} ready and unused.",
+                    capitalise(&words(ix.len()))
+                ),
                 try_short: format!("When {ult} is ready, plan where you'll use it at the start of the round."),
-                happened: format!("Rounds {}. You had {ult} ready and died without using it.", rounds_list(&rounds)),
+                happened: format!(
+                    "Rounds {}. You had {ult} ready and died without using it.",
+                    rounds_list(&rounds)
+                ),
                 why: "An unused ult is a whole round's worth of help thrown away.".into(),
                 tries: vec![
                     format!("Decide where {ult} goes before the round starts."),
@@ -819,7 +829,10 @@ fn find_moments(r: &MatchReview, fixes: &[Found]) -> Vec<(Moment, usize)> {
         let gun = c.weapon_in_hand.clone().unwrap_or_else(|| "rifle".into());
         let killer = &d.killer_agent;
         let m = if is_lost_round_fight(d) {
-            let secs = c.clock_left_s.map(|s| format!(", {s:.0} seconds left")).unwrap_or_default();
+            let secs = c
+                .clock_left_s
+                .map(|s| format!(", {s:.0} seconds left"))
+                .unwrap_or_default();
             Some(Moment {
                 round: f.round + 1,
                 situation: format!("1 against {}{secs}, no plant", d.enemies_alive),
@@ -921,9 +934,15 @@ fn keep_doing(r: &MatchReview, lobby: &[MatchReview]) -> Vec<String> {
             it.iter().filter(|f| f.won == Some(false)).count(),
         )
     };
-    let (w, l) = wl(rf.iter().filter(|f| f.side == Some(Side::Attack) && f.planted).collect());
+    let (w, l) = wl(rf
+        .iter()
+        .filter(|f| f.side == Some(Side::Attack) && f.planted)
+        .collect());
     if w + l >= 3 && w > l {
-        out.push((0.6, format!("You won {w} of the {} rounds where you planted the spike.", w + l)));
+        out.push((
+            0.6,
+            format!("You won {w} of the {} rounds where you planted the spike.", w + l),
+        ));
     }
     let (w, l) = wl(rf
         .iter()
@@ -954,7 +973,11 @@ fn keep_doing(r: &MatchReview, lobby: &[MatchReview]) -> Vec<String> {
     if let Some((spot, n)) = most_common(r.duels.iter().filter(|x| x.won).filter_map(|x| x.callout.clone()))
         && n >= 3
     {
-        let lost = r.duels.iter().filter(|x| !x.won && x.callout.as_deref() == Some(&spot)).count();
+        let lost = r
+            .duels
+            .iter()
+            .filter(|x| !x.won && x.callout.as_deref() == Some(&spot))
+            .count();
         if n > lost {
             out.push((0.7, format!("You won {n} fights at {spot}. That spot works for you.")));
         }
@@ -964,7 +987,10 @@ fn keep_doing(r: &MatchReview, lobby: &[MatchReview]) -> Vec<String> {
         let (won, _) = wl(rf.iter().filter(|f| f.first_kill).collect());
         out.push((
             0.6,
-            format!("You opened {} rounds with the first kill, and your team won {won} of them.", words(first_kills)),
+            format!(
+                "You opened {} rounds with the first kill, and your team won {won} of them.",
+                words(first_kills)
+            ),
         ));
     }
     if let Some(rank) = damage_rank(r, lobby)
@@ -988,7 +1014,8 @@ pub fn damage_rank(r: &MatchReview, lobby: &[MatchReview]) -> Option<usize> {
     if lobby.len() < 6 {
         return None;
     }
-    let adr = |x: &MatchReview| x.round_facts.iter().map(|f| f.damage_dealt).sum::<f64>() / x.round_facts.len().max(1) as f64;
+    let adr =
+        |x: &MatchReview| x.round_facts.iter().map(|f| f.damage_dealt).sum::<f64>() / x.round_facts.len().max(1) as f64;
     let mine = adr(r);
     Some(lobby.iter().filter(|x| x.subject != r.subject && adr(x) > mine).count() + 1)
 }
@@ -1044,7 +1071,8 @@ pub fn debrief(r: &MatchReview, lobby: &[MatchReview]) -> Debrief {
         .collect();
     let fixes: Vec<Fix> = found.into_iter().map(|f| f.fix).collect();
     let keep = keep_doing(r, lobby);
-    let worst_spot = most_common(r.death_facts.iter().filter_map(|d| d.nearest_callout.clone())).filter(|(_, n)| *n >= 2);
+    let worst_spot =
+        most_common(r.death_facts.iter().filter_map(|d| d.nearest_callout.clone())).filter(|(_, n)| *n >= 2);
     let best_spot = most_common(r.duels.iter().filter(|x| x.won).filter_map(|x| x.callout.clone()))
         .filter(|(_, n)| *n >= 2)
         .map(|(s, _)| s);
@@ -1162,7 +1190,6 @@ pub mod sample {
         }))
         .expect("a valid death")
     }
-
 }
 
 #[cfg(test)]

@@ -15,10 +15,10 @@ use crate::catalog::Catalog;
 use crate::clusters::{self, DeathCluster, cluster_deaths};
 use crate::context::MatchContext;
 use crate::deaths::{self, DeathFact, MAX_SAMPLE_AGE_MS, death_facts, is_traded};
-use crate::vrfkit_export::Player;
 use crate::facts::{RoundFact, range_band, round_facts};
 use crate::game::Game;
 use crate::items::ItemKind;
+use crate::vrfkit_export::Player;
 
 pub const EXPORT_SCHEMA_VERSION: u32 = 2;
 /// Version of the stored [`MatchReview`] JSON.

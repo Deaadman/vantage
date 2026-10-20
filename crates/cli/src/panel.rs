@@ -25,7 +25,11 @@ pub fn pad(text: &str, n: usize) -> String {
 
 /// The panel: a rule, the title, the tabs, the body sized to fit, and a hint.
 pub fn frame(w: usize, h: usize, title: Row, tabs: Option<(&[&str], usize)>, body: Vec<Row>, hint: &str) -> Vec<Row> {
-    let mut rows: Vec<Row> = vec![vec![(Style::fg(ACCENT), "─".repeat(w.saturating_sub(1)))], title, vec![]];
+    let mut rows: Vec<Row> = vec![
+        vec![(Style::fg(ACCENT), "─".repeat(w.saturating_sub(1)))],
+        title,
+        vec![],
+    ];
     if let Some((names, tab)) = tabs {
         rows.push(tabs_row(names, tab));
         rows.push(vec![]);
@@ -80,7 +84,10 @@ pub fn para(text: &str, ind: usize, w: usize, style: Style) -> Vec<Row> {
 
 /// A thin rule under a list, before the selected item's detail.
 pub fn rule_line(w: usize) -> Row {
-    vec![(Style::fg(GREY), format!("    {}", "─".repeat(w.saturating_sub(8).clamp(10, 60))))]
+    vec![(
+        Style::fg(GREY),
+        format!("    {}", "─".repeat(w.saturating_sub(8).clamp(10, 60))),
+    )]
 }
 
 /// `label` in grey, then `text` wrapped beside it.
@@ -90,7 +97,10 @@ pub fn field(label: &str, text: &str, w: usize, style: Style) -> Vec<Row> {
         .enumerate()
         .map(|(i, p)| {
             vec![
-                (Style::fg(GREY), format!("    {}", pad(if i == 0 { label } else { "" }, LABEL_W))),
+                (
+                    Style::fg(GREY),
+                    format!("    {}", pad(if i == 0 { label } else { "" }, LABEL_W)),
+                ),
                 (style, p),
             ]
         })
@@ -101,13 +111,19 @@ pub fn field(label: &str, text: &str, w: usize, style: Style) -> Vec<Row> {
 pub fn steps(label: &str, items: &[String], w: usize) -> Vec<Row> {
     let mut out = Vec::new();
     for (n, t) in items.iter().enumerate() {
-        for (i, p) in wrap(t, w.saturating_sub(4 + LABEL_W + 6).max(10)).into_iter().enumerate() {
+        for (i, p) in wrap(t, w.saturating_sub(4 + LABEL_W + 6).max(10))
+            .into_iter()
+            .enumerate()
+        {
             out.push(vec![
                 (
                     Style::fg(GREY),
                     format!("    {}", pad(if n == 0 && i == 0 { label } else { "" }, LABEL_W)),
                 ),
-                (Style::fg(GREEN), if i == 0 { format!("{}. ", n + 1) } else { "   ".into() }),
+                (
+                    Style::fg(GREEN),
+                    if i == 0 { format!("{}. ", n + 1) } else { "   ".into() },
+                ),
                 (Style::default(), p),
             ]);
         }
@@ -124,7 +140,11 @@ pub fn bullet(mark: &str, color: Color, text: &str, w: usize) -> Vec<Row> {
             vec![
                 (
                     Style::fg(color).bold(),
-                    if i == 0 { format!("    {mark} ") } else { "      ".into() },
+                    if i == 0 {
+                        format!("    {mark} ")
+                    } else {
+                        "      ".into()
+                    },
                 ),
                 (Style::default(), p),
             ]
@@ -190,7 +210,9 @@ pub fn scrolled(scroll: &mut usize, lines: Vec<Row>, h: usize) -> Vec<Row> {
 
 pub fn is_close(key: &KeyEvent) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    matches!(key.code, KeyCode::Esc) || (key.code == KeyCode::Char('q') && !ctrl) || (ctrl && key.code == KeyCode::Char('c'))
+    matches!(key.code, KeyCode::Esc)
+        || (key.code == KeyCode::Char('q') && !ctrl)
+        || (ctrl && key.code == KeyCode::Char('c'))
 }
 
 /// ←→, Tab and the number keys move between `n` tabs; true when they did.
@@ -328,7 +350,12 @@ pub struct MapCache(Option<(usize, Vec<[u8; 4]>)>);
 
 impl MapCache {
     /// Map cells `rows_h` tall, or why there's no map.
-    pub fn cells(&mut self, minimap: &Result<Minimap, String>, map: Option<&MapInfo>, rows_h: usize) -> Result<MapCells, String> {
+    pub fn cells(
+        &mut self,
+        minimap: &Result<Minimap, String>,
+        map: Option<&MapInfo>,
+        rows_h: usize,
+    ) -> Result<MapCells, String> {
         let n = rows_h * 2;
         if self.0.as_ref().is_none_or(|(size, _)| *size != n) {
             let m = minimap.as_ref().map_err(Clone::clone)?;

@@ -72,7 +72,10 @@ pub fn status_groups(data_dir: &Path) -> StatusGroups {
         vec![
             ("Version", vec![piece(Kind::Out, crate::VERSION)]),
             ("Rank", rank),
-            ("Focus", vec![piece(Kind::Out, habits::focus(cfg.focus.as_deref()).name)]),
+            (
+                "Focus",
+                vec![piece(Kind::Out, habits::focus(cfg.focus.as_deref()).name)],
+            ),
             ("Account", account),
             ("AI review", ai),
         ],
@@ -275,7 +278,10 @@ impl SettingsPanel {
                 })
                 .collect(),
             Setting::Focus => habits::HABITS.iter().map(|h| o(h.slug, h.name, "")).collect(),
-            Setting::Rank => ranks::all().into_iter().map(|r| (r.clone(), r, String::new())).collect(),
+            Setting::Rank => ranks::all()
+                .into_iter()
+                .map(|r| (r.clone(), r, String::new()))
+                .collect(),
             Setting::Shots => ShotStyle::ALL.iter().map(|s| o(s.key(), s.name(), s.about())).collect(),
             Setting::Account => self
                 .accounts
@@ -538,7 +544,11 @@ impl SettingsPanel {
             ];
             match (&self.field, setting.switch(&cfg)) {
                 (Some(f), _) if on && f.setting == setting => {
-                    let shown: Vec<char> = if f.provider.is_some() { vec!['•'; f.buf.len()] } else { f.buf.clone() };
+                    let shown: Vec<char> = if f.provider.is_some() {
+                        vec!['•'; f.buf.len()]
+                    } else {
+                        f.buf.clone()
+                    };
                     row.extend(field(&shown, f.cur, Style::default()));
                     if let Some(p) = f.provider.filter(|_| f.buf.is_empty()) {
                         row.push((Style::fg(GREY), format!("paste your {}", p.key.unwrap_or("key"))));
@@ -546,7 +556,10 @@ impl SettingsPanel {
                 }
                 (_, Some(v)) => {
                     let style = Style::fg(if v { GREEN } else { RED });
-                    row.push((if on { style.bold() } else { style }, if v { "On" } else { "Off" }.into()));
+                    row.push((
+                        if on { style.bold() } else { style },
+                        if v { "On" } else { "Off" }.into(),
+                    ));
                 }
                 _ => {
                     let (style, value) = value(setting, &cfg);
@@ -558,9 +571,18 @@ impl SettingsPanel {
             if let Some(p) = self.picker.as_ref().filter(|p| p.setting == setting) {
                 let indent = " ".repeat(LABEL_W + 4);
                 if p.options.is_empty() {
-                    rows.push(vec![(Style::fg(GREY), format!("{indent}No account is in 2 or more matches yet"))]);
+                    rows.push(vec![(
+                        Style::fg(GREY),
+                        format!("{indent}No account is in 2 or more matches yet"),
+                    )]);
                 }
-                let name_w = p.options.iter().map(|o| o.1.chars().count() + 2).max().unwrap_or(0).max(LABEL_W);
+                let name_w = p
+                    .options
+                    .iter()
+                    .map(|o| o.1.chars().count() + 2)
+                    .max()
+                    .unwrap_or(0)
+                    .max(LABEL_W);
                 let first = p.sel.saturating_sub(4).min(p.options.len().saturating_sub(PICK_ROWS));
                 if first > 0 {
                     rows.push(vec![(Style::fg(GREY), format!("{indent}↑ {first} more"))]);
@@ -577,7 +599,10 @@ impl SettingsPanel {
                     };
                     rows.push(vec![
                         (Style::default(), indent.clone()),
-                        (if pon { Style::fg(ACCENT) } else { Style::default() }, if pon { "❯ " } else { "  " }.into()),
+                        (
+                            if pon { Style::fg(ACCENT) } else { Style::default() },
+                            if pon { "❯ " } else { "  " }.into(),
+                        ),
                         (name_style, pad(name, name_w)),
                         (Style::fg(GREY), about.clone()),
                     ]);
@@ -605,7 +630,14 @@ fn value(setting: Setting, cfg: &Config) -> (Style, String) {
             Some(p) if p.local => (Style::default(), format!("{} · on this PC", p.name)),
             Some(p) => {
                 let key = cfg.ai_key.as_deref().unwrap_or("");
-                let tail: String = key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+                let tail: String = key
+                    .chars()
+                    .rev()
+                    .take(4)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
                 (Style::default(), format!("{} · key ••••{tail}", p.name))
             }
         },
@@ -657,7 +689,10 @@ mod tests {
 
     #[test]
     fn settings_are_in_alphabetical_order_with_your_account_last() {
-        let labels: Vec<String> = SETTINGS[..SETTINGS.len() - 1].iter().map(|s| s.label().to_lowercase()).collect();
+        let labels: Vec<String> = SETTINGS[..SETTINGS.len() - 1]
+            .iter()
+            .map(|s| s.label().to_lowercase())
+            .collect();
         let mut sorted = labels.clone();
         sorted.sort();
         assert_eq!(labels, sorted);

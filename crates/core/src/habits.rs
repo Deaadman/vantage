@@ -86,7 +86,9 @@ pub fn habit(slug: &str) -> Option<&'static Habit> {
 
 /// The configured focus, or the default.
 pub fn focus(config_focus: Option<&str>) -> &'static Habit {
-    config_focus.and_then(habit).unwrap_or_else(|| habit(DEFAULT_FOCUS).expect("a known habit"))
+    config_focus
+        .and_then(habit)
+        .unwrap_or_else(|| habit(DEFAULT_FOCUS).expect("a known habit"))
 }
 
 /// How often the habit showed in one match; lower is better. `None` when the

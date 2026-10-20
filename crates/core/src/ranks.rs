@@ -50,8 +50,14 @@ pub fn colour(rank: &str) -> Option<(u8, u8, u8)> {
 
 /// A rank written any way (`gold 2`, `GOLD2`) as the game writes it, if it is one.
 pub fn parse(s: &str) -> Option<String> {
-    let squashed: String = s.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
-    all().into_iter().find(|r| r.replace(' ', "").to_lowercase() == squashed)
+    let squashed: String = s
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_lowercase();
+    all()
+        .into_iter()
+        .find(|r| r.replace(' ', "").to_lowercase() == squashed)
 }
 
 /// The rank above, or the same rank at the top.

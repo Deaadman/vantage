@@ -9,8 +9,8 @@ use crate::analysis::Analysis;
 use crate::catalog::Catalog;
 use crate::context::MatchContext;
 use crate::deaths::is_traded;
-use crate::game::Game;
 use crate::export::MatchReview;
+use crate::game::Game;
 use crate::time::now_rfc3339;
 
 pub const STORE_SCHEMA_VERSION: i64 = 3;

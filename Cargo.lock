@@ -1569,6 +1569,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossterm",
+ "serde_json",
  "valreview-core",
  "windows-sys 0.61.2",
 ]

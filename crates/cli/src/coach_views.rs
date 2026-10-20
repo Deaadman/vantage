@@ -77,7 +77,11 @@ impl PlanPanel {
 
     fn title(&self) -> Row {
         let p = &self.d.plan;
-        let agents = if p.agents.is_empty() { String::new() } else { format!(" as {}", p.agents.join(", ")) };
+        let agents = if p.agents.is_empty() {
+            String::new()
+        } else {
+            format!(" as {}", p.agents.join(", "))
+        };
         let mut row: Row = vec![
             (Style::fg(ACCENT).bold(), "  Plan  ".into()),
             (Style::default().bold(), format!("{} ", p.map)),
@@ -96,7 +100,14 @@ impl PlanPanel {
             let body_h = body_height(h, false);
             let lines = self.not_enough(w);
             let body = scrolled(&mut self.scroll, lines, body_h);
-            return frame(w, h, title, None, body, "↑↓ scroll · Esc closes · /plan --map picks another map");
+            return frame(
+                w,
+                h,
+                title,
+                None,
+                body,
+                "↑↓ scroll · Esc closes · /plan --map picks another map",
+            );
         }
         let body_h = body_height(h, true);
         let body = match self.tab {
@@ -128,8 +139,14 @@ impl PlanPanel {
             cells.mark(*uv, GREEN, "▲");
         }
         let mut legend: Vec<Row> = vec![
-            vec![(Style::fg(RED).bold(), "● ".into()), (Style::default(), "where you died".into())],
-            vec![(Style::fg(GREEN).bold(), "▲ ".into()), (Style::default(), "where you won fights".into())],
+            vec![
+                (Style::fg(RED).bold(), "● ".into()),
+                (Style::default(), "where you died".into()),
+            ],
+            vec![
+                (Style::fg(GREEN).bold(), "▲ ".into()),
+                (Style::default(), "where you won fights".into()),
+            ],
             vec![],
         ];
         if !p.go_here.is_empty() {
@@ -211,12 +228,20 @@ fn side(p: &SidePlan, attack: bool, w: usize) -> Vec<Row> {
         None,
     )];
     if p.sites.is_empty() {
-        b.extend(para("Not enough rounds on this side yet to tell one site from another.", 4, w, Style::fg(GREY)));
+        b.extend(para(
+            "Not enough rounds on this side yet to tell one site from another.",
+            4,
+            w,
+            Style::fg(GREY),
+        ));
     }
     for s in &p.sites {
         let mut row: Row = vec![(Style::default().bold(), format!("    {}", pad(&s.site, 4)))];
         row.extend(site_bar(s.won, s.of));
-        row.push((Style::fg(GREY), format!("  won {:>2} of {} ", s.won, pad(&s.of.to_string(), 3))));
+        row.push((
+            Style::fg(GREY),
+            format!("  won {:>2} of {} ", s.won, pad(&s.of.to_string(), 3)),
+        ));
         let c = match s.tone {
             Tone::Good => GREEN,
             Tone::Bad => YELLOW,
@@ -240,7 +265,10 @@ fn side(p: &SidePlan, attack: bool, w: usize) -> Vec<Row> {
         }
     }
     b.push(vec![]);
-    b.push(heading(if attack { "After the plant" } else { "Copy this round" }, None));
+    b.push(heading(
+        if attack { "After the plant" } else { "Copy this round" },
+        None,
+    ));
     b.extend(para(&p.after, 4, w, Style::default()));
     b
 }
@@ -291,7 +319,10 @@ impl HabitsPanel {
             KeyCode::Enter => {
                 if let Some(p) = self.progress.get(self.sel) {
                     self.focus = p.habit.slug;
-                    self.flash = Some(format!("{} is now your focus. Every new match checks it first.", p.habit.name));
+                    self.flash = Some(format!(
+                        "{} is now your focus. Every new match checks it first.",
+                        p.habit.name
+                    ));
                     return CoachAction::Focus(p.habit.slug);
                 }
             }
@@ -310,14 +341,22 @@ impl HabitsPanel {
         ];
         let mut b: Vec<Row> = vec![vec![(
             Style::fg(GREY),
-            format!("    {}{}{}lately", pad("habit", 32), pad(&format!("last {n}"), 10), pad("now", 20)),
+            format!(
+                "    {}{}{}lately",
+                pad("habit", 32),
+                pad(&format!("last {n}"), 10),
+                pad("now", 20)
+            ),
         )]];
         for (i, p) in self.progress.iter().enumerate() {
             let on = i == self.sel;
             let c = trend_color(p.trend);
             let base = if on { Style::fg(ACCENT) } else { Style::default() };
             let mut row: Row = vec![
-                (base, format!("{}{}", if on { "  ❯ " } else { "    " }, pad(p.habit.name, 32))),
+                (
+                    base,
+                    format!("{}{}", if on { "  ❯ " } else { "    " }, pad(p.habit.name, 32)),
+                ),
                 (Style::fg(c), pad(&spark(&p.values), 10)),
                 (base, pad(&p.now, 20)),
                 (Style::fg(c).bold(), pad(p.trend.word(), 8)),
@@ -403,7 +442,12 @@ impl RankPanel {
         ];
         let mut b: Vec<Row> = Vec::new();
         if self.tab == 0 {
-            b.extend(para(&format!("What decides games at {}, most important first.", adv.label), 2, w, Style::fg(GREY)));
+            b.extend(para(
+                &format!("What decides games at {}, most important first.", adv.label),
+                2,
+                w,
+                Style::fg(GREY),
+            ));
             b.push(vec![]);
             for (i, (t, why)) in adv.wins.iter().enumerate() {
                 b.push(vec![

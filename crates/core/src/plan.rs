@@ -99,13 +99,18 @@ fn side_plan(reviews: &[MatchReview], side: Side) -> SidePlan {
             }
         }
         for d in &r.death_facts {
-            let Some(f) = r.round_facts.iter().find(|f| Some(f.round) == d.round) else { continue };
+            let Some(f) = r.round_facts.iter().find(|f| Some(f.round) == d.round) else {
+                continue;
+            };
             if f.side != Some(side) {
                 continue;
             }
             if let Some(c) = &d.nearest_callout {
                 *death_spots.entry(c.clone()).or_default() += 1;
-                death_matches.entry(c.clone()).or_default().insert(r.context.match_id.clone());
+                death_matches
+                    .entry(c.clone())
+                    .or_default()
+                    .insert(r.context.match_id.clone());
                 if coach::is_alone(d) {
                     *alone_spots.entry(c.clone()).or_default() += 1;
                 }
@@ -115,7 +120,9 @@ fn side_plan(reviews: &[MatchReview], side: Side) -> SidePlan {
             }
         }
         for duel in &r.duels {
-            let Some(f) = r.round_facts.iter().find(|f| Some(f.round) == duel.round) else { continue };
+            let Some(f) = r.round_facts.iter().find(|f| Some(f.round) == duel.round) else {
+                continue;
+            };
             if f.side != Some(side) {
                 continue;
             }
@@ -266,7 +273,10 @@ pub fn plan(map: &str, reviews: &[MatchReview]) -> Plan {
     let attack = side_plan(reviews, Side::Attack);
     let defense = side_plan(reviews, Side::Defense);
     let side_of = |r: &MatchReview, round: Option<u32>| {
-        r.round_facts.iter().find(|f| Some(f.round) == round).and_then(|f| f.side)
+        r.round_facts
+            .iter()
+            .find(|f| Some(f.round) == round)
+            .and_then(|f| f.side)
     };
     let mut wins: BTreeMap<(String, &'static str), usize> = BTreeMap::new();
     let mut deaths: BTreeMap<(String, &'static str), usize> = BTreeMap::new();
@@ -285,7 +295,10 @@ pub fn plan(map: &str, reviews: &[MatchReview]) -> Plan {
     let ranked = |m: BTreeMap<(String, &'static str), usize>, n: usize| {
         let mut v: Vec<_> = m.into_iter().filter(|(_, k)| *k >= 2).collect();
         v.sort_by_key(|x| std::cmp::Reverse(x.1));
-        v.into_iter().take(n).map(|((c, s), _)| format!("{c}, {s}")).collect::<Vec<_>>()
+        v.into_iter()
+            .take(n)
+            .map(|((c, s), _)| format!("{c}, {s}"))
+            .collect::<Vec<_>>()
     };
     let best = |p: &SidePlan| {
         p.sites
@@ -308,7 +321,10 @@ pub fn plan(map: &str, reviews: &[MatchReview]) -> Plan {
         stay_out: ranked(deaths, 2),
         attack,
         defense,
-        deaths: reviews.iter().flat_map(|r| r.death_facts.iter().filter_map(|d| d.minimap_uv)).collect(),
+        deaths: reviews
+            .iter()
+            .flat_map(|r| r.death_facts.iter().filter_map(|d| d.minimap_uv))
+            .collect(),
         wins: reviews
             .iter()
             .flat_map(|r| r.duels.iter().filter(|d| d.won).filter_map(|d| d.uv))
