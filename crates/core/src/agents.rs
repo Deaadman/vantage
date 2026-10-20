@@ -1,8 +1,7 @@
-//! Agent names. A built-in table (checked against valorant-api.com
-//! `/v1/agents` on 2026-10-20) keeps the CLI usable offline; the Phase 2
-//! catalog will take precedence over it.
+//! Built-in agent table (uuid, name, role), checked against valorant-api.com
+//! `/v1/agents` on 2026-10-20. Used only when there is no synced catalog.
 
-const BUILTIN: &[(&str, &str, &str)] = &[
+pub(crate) const BUILTIN_AGENTS: &[(&str, &str, &str)] = &[
     ("41fb69c1-4189-7b37-f117-bcaf1e96f1bf", "Astra", "Controller"),
     ("5f8d3a7f-467b-97f3-062c-13acf203c006", "Breach", "Initiator"),
     ("9f0d8ba9-4140-b941-57d3-a7ad57c6b417", "Brimstone", "Controller"),
@@ -33,36 +32,3 @@ const BUILTIN: &[(&str, &str, &str)] = &[
     ("df1cb487-4902-002e-5c17-d28e83e78588", "Waylay", "Duelist"),
     ("7f94d92c-4234-0a36-9646-3a87eb8b5c89", "Yoru", "Duelist"),
 ];
-
-/// Display name for an agent UUID, or `agent_<first 8 hex>` when unknown.
-pub fn agent_name(agent_id: Option<&str>) -> String {
-    let Some(id) = agent_id else {
-        return "unknown".into();
-    };
-    let id = id.to_ascii_lowercase();
-    BUILTIN
-        .iter()
-        .find(|(uuid, _, _)| *uuid == id)
-        .map(|(_, name, _)| (*name).to_owned())
-        .unwrap_or_else(|| {
-            format!(
-                "agent_{}",
-                id.chars().filter(|c| c.is_ascii_hexdigit()).take(8).collect::<String>()
-            )
-        })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn known_and_unknown() {
-        assert_eq!(agent_name(Some("320B2A48-4d9b-a075-30f1-1f93a9b638fa")), "Sova");
-        assert_eq!(
-            agent_name(Some("deadbeef-0000-0000-0000-000000000000")),
-            "agent_deadbeef"
-        );
-        assert_eq!(agent_name(None), "unknown");
-    }
-}

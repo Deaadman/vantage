@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 
-use crate::agents::agent_name;
 use crate::builds::{BuildSupport, check_build};
+use crate::catalog::{Catalog, MapInfo};
 use crate::clusters::{self, DeathCluster, cluster_deaths};
 use crate::deaths::{self, DeathFact, death_facts, is_traded};
 use crate::export::Player;
@@ -96,6 +96,9 @@ impl DeathSummary {
 /// Everything the packet shows, computed once.
 pub struct Review<'a> {
     pub game: &'a Game,
+    pub catalog: &'a Catalog,
+    /// The match's map in the catalog, if synced and known.
+    pub map: Option<&'a MapInfo>,
     pub me: &'a Player,
     pub facts: Vec<DeathFact>,
     pub clusters: Vec<DeathCluster>,
@@ -106,13 +109,21 @@ pub struct Review<'a> {
 }
 
 impl<'a> Review<'a> {
-    pub fn new(game: &'a Game, me: &'a Player) -> Self {
-        let mut facts = death_facts(game, me.pawn);
-        let clusters = cluster_deaths(&mut facts);
+    pub fn new(game: &'a Game, catalog: &'a Catalog, me: &'a Player) -> Self {
+        let map = game
+            .export
+            .manifest
+            .map_path
+            .as_deref()
+            .and_then(|p| catalog.map_by_url(p));
+        let mut facts = death_facts(game, catalog, me.pawn);
+        let clusters = cluster_deaths(&mut facts, map);
         let summary = DeathSummary::from_facts(&facts);
         let cross: Vec<_> = game.kills.iter().filter(|k| !k.is_self_kill()).collect();
         Review {
             game,
+            catalog,
+            map,
             me,
             match_kills_traded: cross.iter().filter(|k| is_traded(game, k)).count(),
             match_kills: cross.len(),
@@ -134,16 +145,12 @@ impl<'a> Review<'a> {
     pub fn packet_md(&self) -> String {
         let g = self.game;
         let m = &g.export.manifest;
-        let me_agent = agent_name(self.me.agent_id.as_deref());
+        let me_agent = self.catalog.agent_name(self.me.agent_id.as_deref());
+        let map_name = self.map_name();
         let s = &self.summary;
         let mut o = String::new();
 
-        let _ = writeln!(
-            o,
-            "# Death review: {me_agent} (pawn {}) on {}",
-            self.me.pawn,
-            map_label(m.map_path.as_deref())
-        );
+        let _ = writeln!(o, "# Death review: {me_agent} (pawn {}) on {map_name}", self.me.pawn);
         let _ = writeln!(o);
         let _ = writeln!(
             o,
@@ -165,6 +172,24 @@ impl<'a> Review<'a> {
         for c in CAVEATS {
             let _ = writeln!(o, "- {c}");
         }
+        match self.map {
+            Some(map) if !map.callouts.is_empty() => {
+                let _ = writeln!(o, "- {CALLOUT_CAVEAT}");
+            }
+            Some(_) => {}
+            None => {
+                let _ = writeln!(
+                    o,
+                    "- Map `{}` is not in the valorant-api.com catalog{}; no minimap positions or callouts.",
+                    m.map_path.as_deref().unwrap_or("?"),
+                    if self.catalog.is_builtin() {
+                        " (no catalog synced: run `valreview sync`)"
+                    } else {
+                        ""
+                    }
+                );
+            }
+        }
         for w in &g.warnings {
             let _ = writeln!(o, "- Data warning: {w}");
         }
@@ -175,8 +200,7 @@ impl<'a> Review<'a> {
         let (k, d) = g.kd(self.me.pawn);
         let _ = writeln!(
             o,
-            "- Map: {} · build `{}` · {} rounds · {:.0} min",
-            map_label(m.map_path.as_deref()),
+            "- Map: {map_name} · build `{}` · {} rounds · {:.0} min",
             m.replay_build,
             g.rounds.len(),
             m.duration_ms as f64 / 60_000.0
@@ -268,9 +292,18 @@ impl<'a> Review<'a> {
             let _ = writeln!(o);
             for c in &self.clusters {
                 let [x, y, z] = c.centroid_cm;
+                let near = c
+                    .nearest_callout
+                    .as_deref()
+                    .map(|n| format!("near {n}, "))
+                    .unwrap_or_default();
+                let uv = c
+                    .minimap_uv
+                    .map(|[u, v]| format!(", minimap uv ({u}, {v})"))
+                    .unwrap_or_default();
                 let _ = writeln!(
                     o,
-                    "- Spot {}: {} deaths around ({x}, {y}, z {z}) cm, rounds {}",
+                    "- Spot {}: {} deaths {near}around ({x}, {y}, z {z}) cm{uv}, rounds {}",
                     c.id,
                     c.deaths,
                     list(&c.rounds)
@@ -283,9 +316,9 @@ impl<'a> Review<'a> {
         let _ = writeln!(o);
         let _ = writeln!(
             o,
-            "| rnd | t s | killer | 1st | tm/en alive | nearest teammates m | killer m | xhair ° | speed m/s | traded | spot | pos cm |"
+            "| rnd | t s | killer | 1st | tm/en alive | nearest teammates m | killer m | xhair ° | speed m/s | traded | spot | callout | pos cm |"
         );
-        let _ = writeln!(o, "|---|---|---|---|---|---|---|---|---|---|---|---|");
+        let _ = writeln!(o, "|---|---|---|---|---|---|---|---|---|---|---|---|---|");
         for f in &self.facts {
             let near = if f.nearest_teammates.is_empty() {
                 "-".to_owned()
@@ -303,7 +336,7 @@ impl<'a> Review<'a> {
             };
             let _ = writeln!(
                 o,
-                "| {} | {} | {} | {} | {}/{} | {} | {} | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} |",
                 opt(f.round),
                 opt(f.since_round_start_s),
                 killer,
@@ -316,12 +349,21 @@ impl<'a> Review<'a> {
                 opt(f.speed_m_s),
                 yes(f.traded_within_3s),
                 opt(f.cluster_id),
+                f.nearest_callout.as_deref().unwrap_or("-"),
                 f.pos_cm
                     .map(|[x, y, z]| format!("{x}, {y}, {z}"))
                     .unwrap_or_else(|| "-".into()),
             );
         }
         o
+    }
+
+    fn map_name(&self) -> String {
+        match (self.map, self.game.export.manifest.map_path.as_deref()) {
+            (Some(map), _) => map.name.clone(),
+            (None, Some(path)) => format!("`{path}`"),
+            (None, None) => "unknown map".into(),
+        }
     }
 
     fn roster(&self, mine: bool) -> String {
@@ -332,7 +374,11 @@ impl<'a> Review<'a> {
             .filter(|p| g.teams.same_team(p.pawn, self.me.pawn) == mine)
             .map(|p| {
                 let (k, d) = g.kd(p.pawn);
-                format!("{} ({}, {k}/{d})", agent_name(p.agent_id.as_deref()), p.pawn)
+                format!(
+                    "{} ({}, {k}/{d})",
+                    self.catalog.agent_name(p.agent_id.as_deref()),
+                    p.pawn
+                )
             })
             .collect::<Vec<_>>()
             .join(", ")
@@ -357,23 +403,18 @@ replay. There is no video and no judgement here; interpret the numbers.
   off to the side or behind.
 - `traded`: a teammate killed the killer within 3 s in the same round.
 - `spot`: the repeated-death-spot id from the list above.
+- `callout`: the nearest named map location (valorant-api.com), e.g. `A Site`.
 - Pawn ids identify players; the replay has no display names.
 
 ";
+
+const CALLOUT_CAVEAT: &str = "Callout is derived: the nearest valorant-api.com callout point on the plane, not a region outline, and it ignores floors.";
 
 const CAVEATS: &[&str] = &[
     "Alive counts come from kill events only; Sage and Clove revives are not modelled.",
     "Crosshair offset is derived: it assumes yaw is 0-360° measured like atan2(dy, dx). A check against velocity heading looked right but is not proven, and it ignores pitch.",
     "Teams are inferred from the kill graph (each kill joins opposite teams); `self` kills are excluded.",
-    "Map name is the replay's level path until the valorant-api.com catalog is added.",
 ];
-
-fn map_label(path: Option<&str>) -> String {
-    match path {
-        Some(p) => format!("`{p}`"),
-        None => "unknown map".into(),
-    }
-}
 
 fn pct(n: usize, d: usize) -> String {
     if d == 0 {

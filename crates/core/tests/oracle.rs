@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use valreview_core::deaths::is_traded;
 use valreview_core::select::select_player;
-use valreview_core::{Export, Game, Review};
+use valreview_core::{Catalog, Export, Game, Review};
 
 fn oracle_dir() -> Option<PathBuf> {
     let candidates = [
@@ -30,6 +30,8 @@ fn lotus_oracle() {
         return;
     };
     let game = Game::new(Export::load(&dir).unwrap());
+    // Built-in table only: the oracle must not depend on network or cache.
+    let catalog = Catalog::builtin();
     let m = &game.export.manifest;
     assert_eq!(m.map_path.as_deref(), Some("/Game/Maps/Jam/Jam"));
     assert_eq!(m.replay_build, "++Ares-Core+release-13.08");
@@ -76,11 +78,11 @@ fn lotus_oracle() {
 
     // Sova, pawn 1276, selected three ways.
     for sel in ["1276", "43082880", "sova"] {
-        assert_eq!(select_player(game.players(), sel).unwrap().pawn, 1276);
+        assert_eq!(select_player(game.players(), &catalog, sel).unwrap().pawn, 1276);
     }
-    let me = select_player(game.players(), "sova").unwrap();
+    let me = select_player(game.players(), &catalog, "sova").unwrap();
     assert_eq!(me.agent_id.as_deref(), Some("320b2a48-4d9b-a075-30f1-1f93a9b638fa"));
-    let r = Review::new(&game, me);
+    let r = Review::new(&game, &catalog, me);
     let s = &r.summary;
     assert_eq!(s.deaths, 21);
     assert_eq!((s.first_deaths, s.first_death_rounds.as_slice()), (1, &[13][..]));
@@ -116,6 +118,6 @@ fn lotus_oracle() {
     // Every jsonl line parses and carries the schema version.
     for line in r.deaths_jsonl().lines() {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_eq!(v["schema_version"], 1);
+        assert_eq!(v["schema_version"], 2);
     }
 }

@@ -8,7 +8,8 @@
 
 use serde::Serialize;
 
-use crate::deaths::{DeathFact, round_to};
+use crate::catalog::MapInfo;
+use crate::deaths::{DeathFact, place, round_to};
 
 pub const RADIUS_CM: f64 = 2000.0;
 pub const FLOOR_TOLERANCE_CM: f64 = 150.0;
@@ -19,11 +20,13 @@ pub struct DeathCluster {
     pub id: usize,
     pub deaths: usize,
     pub centroid_cm: [f64; 3],
+    pub minimap_uv: Option<[f64; 2]>,
+    pub nearest_callout: Option<String>,
     pub rounds: Vec<u32>,
 }
 
 /// Finds repeated death spots and writes `cluster_id` into the facts.
-pub fn cluster_deaths(facts: &mut [DeathFact]) -> Vec<DeathCluster> {
+pub fn cluster_deaths(facts: &mut [DeathFact], map: Option<&MapInfo>) -> Vec<DeathCluster> {
     let mut seeds: Vec<([f64; 3], Vec<usize>)> = Vec::new();
     for (i, f) in facts.iter().enumerate() {
         let Some(p) = f.pos_cm else { continue };
@@ -57,10 +60,14 @@ pub fn cluster_deaths(facts: &mut [DeathFact]) -> Vec<DeathCluster> {
                 }
                 facts[i].cluster_id = Some(id);
             }
+            let centroid_cm = c.map(|v| round_to(v / n, 0));
+            let (minimap_uv, nearest_callout) = place(map, centroid_cm);
             DeathCluster {
                 id,
                 deaths: members.len(),
-                centroid_cm: c.map(|v| round_to(v / n, 0)),
+                centroid_cm,
+                minimap_uv,
+                nearest_callout,
                 rounds: members.iter().filter_map(|&i| facts[i].round).collect(),
             }
         })

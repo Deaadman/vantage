@@ -6,8 +6,12 @@ Local and personal use only: it never touches the game or the Riot client.
 
 ## Status
 
-Phase 1: loader, team inference, per-death facts, `packet.md` and `deaths.jsonl`
-from one vrfkit export. No network, no database yet.
+- Phase 1: loader, team inference, per-death facts, `packet.md` and `deaths.jsonl`
+  from one vrfkit export.
+- Phase 2: `valreview sync` caches agents, maps (minimap projection, callouts),
+  weapons and seasons from valorant-api.com. Deaths get `minimap_uv` and
+  `nearest_callout`. Everything works offline; without a cache, agent names come
+  from a built-in table and map facts are left out.
 
 ## Build
 
@@ -24,12 +28,17 @@ Export a replay with vrfkit v0.3.0, then:
 
 ```
 vrfkit export <file.vrf> --out <export_dir>
+valreview sync
 valreview players <export_dir>
 valreview packet <export_dir> --me <selector> [--out <dir>]
 ```
 
 `--me` takes an account-UUID prefix (4+ characters), a pawn id, or an agent
 name. It errors if the selector matches more than one player.
+
+Files live in `%LOCALAPPDATA%alreview\data` (override with `--data-dir` or
+`VALREVIEW_DATA_DIR`). `catalog.json` is the valorant-api.com cache; a failed
+sync leaves the old cache in place.
 
 ## Layout
 

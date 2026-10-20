@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::agents::agent_name;
+use crate::catalog::{Catalog, MapInfo};
 use crate::game::{Game, Kill};
 
 /// Positions are sampled this long before the death event.
@@ -12,7 +12,7 @@ pub const MAX_SAMPLE_AGE_MS: u32 = 1500;
 /// A teammate kills the killer within this window, in the same round.
 pub const TRADE_WINDOW_MS: u32 = 3000;
 
-pub const DEATHS_SCHEMA_VERSION: u32 = 1;
+pub const DEATHS_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NearTeammate {
@@ -46,6 +46,10 @@ pub struct DeathFact {
     pub speed_m_s: Option<f64>,
     pub traded_within_3s: bool,
     pub pos_cm: Option<[f64; 3]>,
+    /// Minimap position in [0, 1]² (valorant-api.com projection); needs a synced catalog.
+    pub minimap_uv: Option<[f64; 2]>,
+    /// Nearest valorant-api.com callout point on the plane, e.g. `A Site`.
+    pub nearest_callout: Option<String>,
     /// Index into the packet's repeated-death-spot list, if this death is in one.
     pub cluster_id: Option<usize>,
 }
@@ -71,15 +75,28 @@ pub fn is_traded(game: &Game, kill: &Kill) -> bool {
     })
 }
 
-pub fn death_facts(game: &Game, pawn: u32) -> Vec<DeathFact> {
+pub fn death_facts(game: &Game, catalog: &Catalog, pawn: u32) -> Vec<DeathFact> {
+    let map = game
+        .export
+        .manifest
+        .map_path
+        .as_deref()
+        .and_then(|p| catalog.map_by_url(p));
     game.kills
         .iter()
         .filter(|k| k.victim == pawn)
-        .map(|k| death_fact(game, k))
+        .map(|k| death_fact(game, catalog, map, k))
         .collect()
 }
 
-fn death_fact(game: &Game, kill: &Kill) -> DeathFact {
+/// Minimap uv and nearest callout label for a world position.
+pub fn place(map: Option<&MapInfo>, pos_cm: [f64; 3]) -> (Option<[f64; 2]>, Option<String>) {
+    let Some(map) = map else { return (None, None) };
+    let uv = map.uv(pos_cm).map(|uv| uv.map(|v| round_to(v, 4)));
+    (uv, map.nearest_callout(pos_cm).map(|(c, _)| c.label()))
+}
+
+fn death_fact(game: &Game, catalog: &Catalog, map: Option<&MapInfo>, kill: &Kill) -> DeathFact {
     let victim = kill.victim;
     let round = game.round(kill);
     let dead_before: Vec<u32> = game
@@ -117,7 +134,7 @@ fn death_fact(game: &Game, kill: &Kill) -> DeathFact {
                 let s = sample(p)?;
                 Some(NearTeammate {
                     pawn: p,
-                    agent: agent_name(game.player(p).and_then(|pl| pl.agent_id.as_deref())),
+                    agent: catalog.agent_name(game.agent_id(p)),
                     dist_m: planar_cm(me.pos, s.pos) / 100.0,
                 })
             })
@@ -144,6 +161,9 @@ fn death_fact(game: &Game, kill: &Kill) -> DeathFact {
         _ => (None, None),
     };
 
+    let pos_cm = me.map(|s| s.pos.map(|v| round_to(v as f64, 0)));
+    let (minimap_uv, nearest_callout) = pos_cm.map(|p| place(map, p)).unwrap_or_default();
+
     DeathFact {
         schema_version: DEATHS_SCHEMA_VERSION,
         match_id: game.export.manifest.match_id.clone(),
@@ -152,7 +172,7 @@ fn death_fact(game: &Game, kill: &Kill) -> DeathFact {
         since_round_start_s: round.map(|r| round_to((kill.time_ms - r.start_ms) as f64 / 1000.0, 3)),
         victim_pawn: victim,
         killer_pawn: kill.killer,
-        killer_agent: agent_name(game.player(kill.killer).and_then(|p| p.agent_id.as_deref())),
+        killer_agent: catalog.agent_name(game.agent_id(kill.killer)),
         self_kill: kill.is_self_kill(),
         first_death_of_round,
         teammates_alive: teammates.len() as u32,
@@ -162,7 +182,9 @@ fn death_fact(game: &Game, kill: &Kill) -> DeathFact {
         crosshair_offset_to_killer_deg: crosshair,
         speed_m_s: me.map(|s| round_to((s.vel[0] as f64).hypot(s.vel[1] as f64) / 100.0, 2)),
         traded_within_3s: is_traded(game, kill),
-        pos_cm: me.map(|s| s.pos.map(|v| round_to(v as f64, 0))),
+        pos_cm,
+        minimap_uv,
+        nearest_callout,
         cluster_id: None,
     }
 }

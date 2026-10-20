@@ -125,6 +125,10 @@ impl Game {
         self.export.player_by_pawn(pawn)
     }
 
+    pub fn agent_id(&self, pawn: u32) -> Option<&str> {
+        self.player(pawn).and_then(|p| p.agent_id.as_deref())
+    }
+
     pub fn team_of(&self, pawn: u32) -> Vec<u32> {
         let Some(side) = self.teams.side(pawn) else {
             return Vec::new();
