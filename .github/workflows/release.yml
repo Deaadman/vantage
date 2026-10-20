@@ -1,0 +1,54 @@
+# Publishes the release install.ps1 downloads: push a tag like v0.1.0 that
+# matches the version in crates/cli/Cargo.toml.
+#
+# Disabled while valreview is in development: nothing runs on push. To turn it
+# on, replace the `on:` block with the commented one below.
+
+name: Release
+
+on:
+  workflow_dispatch:
+# on:
+#   push:
+#     tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      ASSET: valreview-windows-x64.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the crate version
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'valreview' | Select-Object -ExpandProperty version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "tag $env:GITHUB_REF_NAME does not match crates/cli version $version"
+          }
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Build
+        run: cargo build --release --locked -p valreview
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/release/valreview.exe -DestinationPath $env:ASSET
+          $hash = (Get-FileHash -Algorithm SHA256 $env:ASSET).Hash.ToLowerInvariant()
+          Set-Content -NoNewline -Encoding ascii -Path "$env:ASSET.sha256" -Value "$hash  $env:ASSET`n"
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME $env:ASSET "$env:ASSET.sha256" --title $env:GITHUB_REF_NAME --generate-notes --verify-tag

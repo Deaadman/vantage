@@ -4,5 +4,5 @@ members = ["crates/core", "crates/cli"]
 
 [workspace.package]
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-only"
 publish = false
