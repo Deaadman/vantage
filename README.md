@@ -36,7 +36,7 @@ valreview packet <export_dir> --me <selector> [--out <dir>]
 `--me` takes an account-UUID prefix (4+ characters), a pawn id, or an agent
 name. It errors if the selector matches more than one player.
 
-Files live in `%LOCALAPPDATA%alreview\data` (override with `--data-dir` or
+Files live in `%LOCALAPPDATA%\valreview\data` (override with `--data-dir` or
 `VALREVIEW_DATA_DIR`). `catalog.json` is the valorant-api.com cache; a failed
 sync leaves the old cache in place.
 
