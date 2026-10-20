@@ -1,23 +1,30 @@
-//! `packet.md` (for an AI reviewer) and `deaths.jsonl` (stable schema).
+//! `packet.md` (for an AI reviewer), `deaths.jsonl` and `rounds.jsonl`.
+//!
+//! Everything a packet shows is collected into a [`MatchReview`], which is
+//! serialisable: `scan` stores one per player, so `packet --match` and
+//! `trends` work after the raw export is deleted.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::analysis::Analysis;
+use crate::analysis::{Analysis, slot_key, slot_name};
 use crate::builds::{BuildSupport, check_build};
-use crate::catalog::{Catalog, MapInfo};
+use crate::catalog::Catalog;
 use crate::clusters::{self, DeathCluster, cluster_deaths};
 use crate::context::MatchContext;
-use crate::deaths::{self, DeathFact, death_facts, is_traded};
+use crate::deaths::{self, DeathFact, MAX_SAMPLE_AGE_MS, death_facts, is_traded};
 use crate::export::Player;
-use crate::facts::{RoundFact, round_facts};
+use crate::facts::{RoundFact, range_band, round_facts};
 use crate::game::Game;
+use crate::items::ItemKind;
 
-pub const PACKET_SCHEMA_VERSION: u32 = 1;
+pub const PACKET_SCHEMA_VERSION: u32 = 2;
+/// Version of the stored [`MatchReview`] JSON.
+pub const REVIEW_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeathSummary {
     pub deaths: usize,
     pub first_deaths: usize,
@@ -96,137 +103,206 @@ impl DeathSummary {
     }
 }
 
-/// Everything the packet shows, computed once.
-pub struct Review<'a> {
-    pub game: &'a Game,
-    pub catalog: &'a Catalog,
-    /// The match's map in the catalog, if synced and known.
-    pub map: Option<&'a MapInfo>,
-    pub me: &'a Player,
-    pub context: MatchContext,
-    pub analysis: Analysis<'a>,
-    pub round_facts: Vec<RoundFact>,
-    pub facts: Vec<DeathFact>,
-    pub clusters: Vec<DeathCluster>,
-    pub summary: DeathSummary,
-    /// Cross-team kills in the match, and how many were traded.
-    pub match_kills: usize,
-    pub match_kills_traded: usize,
+/// A kill between the reviewed player and an enemy, from the player's side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Duel {
+    pub round: Option<u32>,
+    pub won: bool,
+    /// What the reviewed player had in hand.
+    pub weapon: String,
+    pub range: Option<String>,
+    pub enemy_agent: String,
 }
 
-impl<'a> Review<'a> {
-    pub fn new(game: &'a Game, catalog: &'a Catalog, me: &'a Player) -> Self {
-        let map = game
-            .export
-            .manifest
-            .map_path
-            .as_deref()
-            .and_then(|p| catalog.map_by_url(p));
-        let analysis = Analysis::new(game, catalog);
-        let mut facts = death_facts(&analysis, me.pawn);
-        let round_facts = round_facts(&analysis, me.pawn);
-        let clusters = cluster_deaths(&mut facts, map);
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RosterEntry {
+    pub agent: String,
+    pub pawn: u32,
+    pub kills: usize,
+    pub deaths: usize,
+}
+
+/// Everything one player's packet shows for one match.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MatchReview {
+    pub schema_version: u32,
+    pub subject: String,
+    pub pawn: u32,
+    pub agent: String,
+    pub agent_id: Option<String>,
+    /// Ability names by key (C, Q, E, X) for this agent, when the catalog knows them.
+    pub abilities: BTreeMap<String, String>,
+    pub context: MatchContext,
+    /// Map path from the replay, for when the catalog does not know the map.
+    pub map_path: Option<String>,
+    pub map_has_callouts: bool,
+    pub catalog_synced: bool,
+    pub warnings: Vec<String>,
+    pub kills: usize,
+    pub deaths: usize,
+    pub teammates: Vec<RosterEntry>,
+    pub enemies: Vec<RosterEntry>,
+    /// Cross-team kills in the match (both teams), and how many were traded.
+    pub match_kills: usize,
+    pub match_kills_traded: usize,
+    /// (traded, deaths with a teammate alive) for me and for my teammates.
+    pub my_trades: (usize, usize),
+    pub team_trades: (usize, usize),
+    pub death_facts: Vec<DeathFact>,
+    pub round_facts: Vec<RoundFact>,
+    pub duels: Vec<Duel>,
+    pub clusters: Vec<DeathCluster>,
+    pub summary: DeathSummary,
+}
+
+impl MatchReview {
+    /// Builds a review from a loaded export.
+    pub fn new(a: &Analysis, context: &MatchContext, me: &Player) -> Self {
+        let g = a.game;
+        let catalog = a.catalog;
+        let mut facts = death_facts(a, me.pawn);
+        let clusters = cluster_deaths(&mut facts, a.map);
         let summary = DeathSummary::from_facts(&facts);
-        let cross: Vec<_> = game.kills.iter().filter(|k| !k.is_self_kill()).collect();
-        Review {
-            game,
-            catalog,
-            map,
-            me,
-            context: MatchContext::new(game, catalog),
-            analysis,
-            round_facts,
-            match_kills_traded: cross.iter().filter(|k| is_traded(game, k)).count(),
+        let cross: Vec<_> = g.kills.iter().filter(|k| !k.is_self_kill()).collect();
+        let roster = |mine: bool| {
+            g.players()
+                .iter()
+                .filter(|p| p.pawn != me.pawn && g.teams.same_team(p.pawn, me.pawn) == mine)
+                .map(|p| {
+                    let (kills, deaths) = g.kd(p.pawn);
+                    RosterEntry {
+                        agent: catalog.agent_name(p.agent_id.as_deref()),
+                        pawn: p.pawn,
+                        kills,
+                        deaths,
+                    }
+                })
+                .collect()
+        };
+        let abilities = [3, 4, 5, 9]
+            .iter()
+            .filter_map(|&s| {
+                let slot = slot_name(s)?;
+                let name = catalog.ability_name(me.agent_id.as_deref()?, slot)?;
+                Some((slot_key(slot).to_owned(), name.to_owned()))
+            })
+            .collect();
+        let (kills, deaths) = g.kd(me.pawn);
+        MatchReview {
+            schema_version: REVIEW_SCHEMA_VERSION,
+            subject: me.subject.clone(),
+            pawn: me.pawn,
+            agent: catalog.agent_name(me.agent_id.as_deref()),
+            agent_id: me.agent_id.clone(),
+            abilities,
+            context: context.clone(),
+            map_path: g.export.manifest.map_path.clone(),
+            map_has_callouts: a.map.is_some_and(|m| !m.callouts.is_empty()),
+            catalog_synced: !catalog.is_builtin(),
+            warnings: g.warnings.clone(),
+            kills,
+            deaths,
+            teammates: roster(true),
+            enemies: roster(false),
+            match_kills_traded: cross.iter().filter(|k| is_traded(g, k)).count(),
             match_kills: cross.len(),
-            facts,
+            my_trades: trades_with_teammate_alive(g, me.pawn),
+            team_trades: g
+                .team_of(me.pawn)
+                .into_iter()
+                .filter(|&p| p != me.pawn)
+                .map(|p| trades_with_teammate_alive(g, p))
+                .fold((0, 0), |x, y| (x.0 + y.0, x.1 + y.1)),
+            round_facts: round_facts(a, me.pawn),
+            duels: duels(a, me.pawn),
+            death_facts: facts,
             clusters,
             summary,
         }
     }
 
+    /// Convenience for a single export: analyse and review one player.
+    pub fn from_game(game: &Game, catalog: &Catalog, me: &Player) -> Self {
+        let a = Analysis::new(game, catalog);
+        let ctx = MatchContext::new(game, catalog);
+        Self::new(&a, &ctx, me)
+    }
+
     pub fn deaths_jsonl(&self) -> String {
-        let mut out = String::new();
-        for f in &self.facts {
-            out.push_str(&serde_json::to_string(f).expect("death facts serialise"));
-            out.push('\n');
-        }
-        out
+        jsonl(&self.death_facts)
     }
 
     pub fn rounds_jsonl(&self) -> String {
-        let mut out = String::new();
-        for f in &self.round_facts {
-            out.push_str(&serde_json::to_string(f).expect("round facts serialise"));
-            out.push('\n');
+        jsonl(&self.round_facts)
+    }
+
+    pub fn map_name(&self) -> String {
+        match (&self.context.map_name, &self.map_path) {
+            (Some(name), _) => name.clone(),
+            (None, Some(path)) => format!("`{path}`"),
+            (None, None) => "unknown map".into(),
         }
-        out
     }
 
     pub fn packet_md(&self) -> String {
-        let g = self.game;
-        let m = &g.export.manifest;
-        let me_agent = self.catalog.agent_name(self.me.agent_id.as_deref());
+        let c = &self.context;
         let map_name = self.map_name();
         let s = &self.summary;
         let mut o = String::new();
 
-        let _ = writeln!(o, "# Death review: {me_agent} (pawn {}) on {map_name}", self.me.pawn);
+        let _ = writeln!(o, "# Death review: {} (pawn {}) on {map_name}", self.agent, self.pawn);
         let _ = writeln!(o);
         let _ = writeln!(
             o,
-            "packet_schema: {PACKET_SCHEMA_VERSION} · deaths_schema: {} · match: `{}`",
+            "packet_schema: {PACKET_SCHEMA_VERSION} · deaths_schema: {} · rounds_schema: {} · match: `{}`",
             deaths::DEATHS_SCHEMA_VERSION,
-            m.match_id
+            crate::facts::ROUNDS_SCHEMA_VERSION,
+            c.match_id
         );
         let _ = writeln!(o);
 
         o.push_str(HOW_TO_READ);
         let _ = writeln!(o, "## Caveats");
         let _ = writeln!(o);
-        match check_build(&m.replay_build) {
+        match check_build(&c.replay_build) {
             BuildSupport::Supported => {}
-            BuildSupport::Caveat(c) | BuildSupport::Unsupported(c) => {
-                let _ = writeln!(o, "- Replay build: {c}.");
+            BuildSupport::Caveat(m) | BuildSupport::Unsupported(m) => {
+                let _ = writeln!(o, "- Replay build: {m}.");
             }
         }
-        for c in CAVEATS.iter().chain(crate::sections::PHASE4_CAVEATS) {
-            let _ = writeln!(o, "- {c}");
+        for cv in CAVEATS.iter().chain(crate::sections::PHASE4_CAVEATS) {
+            let _ = writeln!(o, "- {cv}");
         }
-        match self.map {
-            Some(map) if !map.callouts.is_empty() => {
-                let _ = writeln!(o, "- {CALLOUT_CAVEAT}");
-            }
-            Some(_) => {}
-            None => {
-                let _ = writeln!(
-                    o,
-                    "- Map `{}` is not in the valorant-api.com catalog{}; no minimap positions or callouts.",
-                    m.map_path.as_deref().unwrap_or("?"),
-                    if self.catalog.is_builtin() {
-                        " (no catalog synced: run `valreview sync`)"
-                    } else {
-                        ""
-                    }
-                );
-            }
+        if self.map_has_callouts {
+            let _ = writeln!(o, "- {CALLOUT_CAVEAT}");
+        } else if c.map_name.is_none() {
+            let _ = writeln!(
+                o,
+                "- Map `{}` is not in the valorant-api.com catalog{}; no minimap positions or callouts.",
+                self.map_path.as_deref().unwrap_or("?"),
+                if self.catalog_synced {
+                    ""
+                } else {
+                    " (no catalog synced: run `valreview sync`)"
+                }
+            );
         }
-        for w in &g.warnings {
+        for w in &self.warnings {
             let _ = writeln!(o, "- Data warning: {w}");
         }
         let _ = writeln!(o);
 
         let _ = writeln!(o, "## Match");
         let _ = writeln!(o);
-        let (k, d) = g.kd(self.me.pawn);
         let _ = writeln!(
             o,
             "- Map: {map_name} · build `{}` · {} rounds · {:.0} min · played {}",
-            m.replay_build,
-            g.rounds.len(),
-            m.duration_ms as f64 / 60_000.0,
-            self.context.played_at.as_deref().unwrap_or("unknown")
+            c.replay_build,
+            c.rounds,
+            c.duration_ms as f64 / 60_000.0,
+            c.played_at.as_deref().unwrap_or("unknown")
         );
-        let me_ctx = self.context.player(&self.me.subject);
+        let me_ctx = c.player(&self.subject);
         let role = me_ctx
             .and_then(|p| p.role.as_deref())
             .map(|r| format!(" ({r})"))
@@ -241,19 +317,29 @@ impl<'a> Review<'a> {
         };
         let _ = writeln!(
             o,
-            "- Reviewed player: {me_agent}{role}, pawn {}, kills/deaths {k}/{d}{ping}{reconnects}",
-            self.me.pawn
+            "- Reviewed player: {}{role}, pawn {}, kills/deaths {}/{}{ping}{reconnects}",
+            self.agent, self.pawn, self.kills, self.deaths
         );
-        let _ = writeln!(o, "- Teammates: {}", self.roster(true));
-        let _ = writeln!(o, "- Enemies: {}", self.roster(false));
-        let my_side = g.teams.side(self.me.pawn);
-        for team in &self.context.teams {
-            let label = if team.side == my_side {
+        let roster = |v: &[RosterEntry]| {
+            v.iter()
+                .map(|p| format!("{} ({}, {}/{})", p.agent, p.pawn, p.kills, p.deaths))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let _ = writeln!(o, "- Teammates: {}", roster(&self.teammates));
+        let _ = writeln!(o, "- Enemies: {}", roster(&self.enemies));
+        let my_side = c
+            .teams
+            .iter()
+            .find(|t| t.players.iter().any(|p| p.subject == self.subject))
+            .map(|t| t.side);
+        for team in &c.teams {
+            let label = if Some(team.side) == my_side {
                 "Your composition"
             } else {
                 "Enemy composition"
             };
-            let _ = writeln!(o, "- {label}: {}", self.context.composition_line(team));
+            let _ = writeln!(o, "- {label}: {}", c.composition_line(team));
         }
         let _ = writeln!(
             o,
@@ -333,23 +419,23 @@ impl<'a> Review<'a> {
                 clusters::FLOOR_TOLERANCE_CM / 100.0
             );
             let _ = writeln!(o);
-            for c in &self.clusters {
-                let [x, y, z] = c.centroid_cm;
-                let near = c
+            for cl in &self.clusters {
+                let [x, y, z] = cl.centroid_cm;
+                let near = cl
                     .nearest_callout
                     .as_deref()
                     .map(|n| format!("near {n}, "))
                     .unwrap_or_default();
-                let uv = c
+                let uv = cl
                     .minimap_uv
                     .map(|[u, v]| format!(", minimap uv ({u}, {v})"))
                     .unwrap_or_default();
                 let _ = writeln!(
                     o,
                     "- Spot {}: {} deaths {near}around ({x}, {y}, z {z}) cm{uv}, rounds {}",
-                    c.id,
-                    c.deaths,
-                    list(&c.rounds)
+                    cl.id,
+                    cl.deaths,
+                    list(&cl.rounds)
                 );
             }
         }
@@ -364,7 +450,7 @@ impl<'a> Review<'a> {
             "| rnd | t s | killer | killed with | in hand | 1st | tm/en alive | nearest teammates m | killer m | xhair ° | speed m/s | traded | spot | callout | pos cm |"
         );
         let _ = writeln!(o, "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
-        for f in &self.facts {
+        for f in &self.death_facts {
             let near = if f.nearest_teammates.is_empty() {
                 "-".to_owned()
             } else {
@@ -406,32 +492,73 @@ impl<'a> Review<'a> {
         crate::sections::rounds_table(self, &mut o);
         o
     }
+}
 
-    fn map_name(&self) -> String {
-        match (self.map, self.game.export.manifest.map_path.as_deref()) {
-            (Some(map), _) => map.name.clone(),
-            (None, Some(path)) => format!("`{path}`"),
-            (None, None) => "unknown map".into(),
+fn jsonl<T: Serialize>(rows: &[T]) -> String {
+    let mut out = String::new();
+    for r in rows {
+        out.push_str(&serde_json::to_string(r).expect("facts serialise"));
+        out.push('\n');
+    }
+    out
+}
+
+/// (traded, deaths with a teammate alive) for one player.
+fn trades_with_teammate_alive(g: &Game, pawn: u32) -> (usize, usize) {
+    let mut n = 0;
+    let mut t = 0;
+    for k in g.kills.iter().filter(|k| k.victim == pawn && !k.is_self_kill()) {
+        let dead_before: Vec<u32> = g
+            .kills_in_round(k.round_idx)
+            .filter(|x| x.index < k.index)
+            .map(|x| x.victim)
+            .collect();
+        if g.team_of(pawn).iter().any(|p| *p != pawn && !dead_before.contains(p)) {
+            n += 1;
+            t += usize::from(is_traded(g, k));
         }
     }
+    (t, n)
+}
 
-    fn roster(&self, mine: bool) -> String {
-        let g = self.game;
-        g.players()
-            .iter()
-            .filter(|p| p.pawn != self.me.pawn)
-            .filter(|p| g.teams.same_team(p.pawn, self.me.pawn) == mine)
-            .map(|p| {
-                let (k, d) = g.kd(p.pawn);
-                format!(
-                    "{} ({}, {k}/{d})",
-                    self.catalog.agent_name(p.agent_id.as_deref()),
-                    p.pawn
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
+fn duels(a: &Analysis, me: u32) -> Vec<Duel> {
+    let g = a.game;
+    g.kills
+        .iter()
+        .filter(|k| !k.is_self_kill() && (k.killer == me || k.victim == me))
+        .map(|k| {
+            let enemy = if k.killer == me { k.victim } else { k.killer };
+            let start = k.round_idx.map(|i| a.rounds[i].start_ms).unwrap_or(0);
+            let weapon = a
+                .in_hand_before(me, k.time_ms + u32::from(k.killer == me), start)
+                .and_then(|w| a.item(w))
+                .map(|i| {
+                    if i.kind == ItemKind::Ability {
+                        "ability".to_owned()
+                    } else {
+                        i.name.clone()
+                    }
+                })
+                .unwrap_or_else(|| "?".into());
+            let pos = |p: u32| {
+                g.export
+                    .tracks
+                    .get(&p)
+                    .and_then(|tr| tr.at(k.time_ms.saturating_sub(50), MAX_SAMPLE_AGE_MS))
+            };
+            let range = pos(me).zip(pos(enemy)).map(|(x, y)| {
+                range_band((x.pos[0] as f64 - y.pos[0] as f64).hypot(x.pos[1] as f64 - y.pos[1] as f64) / 100.0)
+                    .to_owned()
+            });
+            Duel {
+                round: g.round(k).map(|r| r.number),
+                won: k.killer == me,
+                weapon,
+                range,
+                enemy_agent: a.catalog.agent_name(g.agent_id(enemy)),
+            }
+        })
+        .collect()
 }
 
 const HOW_TO_READ: &str = "\
@@ -471,7 +598,7 @@ const CAVEATS: &[&str] = &[
     "Teams are inferred from the kill graph (each kill joins opposite teams); `self` kills are excluded.",
 ];
 
-fn pct(n: usize, d: usize) -> String {
+pub(crate) fn pct(n: usize, d: usize) -> String {
     if d == 0 {
         "n/a".into()
     } else {

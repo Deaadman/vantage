@@ -1,6 +1,6 @@
 //! Group A: per-death facts for one player (groups B to F add `facts::DeathContext`).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::analysis::Analysis;
 use crate::catalog::{Catalog, MapInfo};
@@ -16,14 +16,14 @@ pub const TRADE_WINDOW_MS: u32 = 3000;
 
 pub const DEATHS_SCHEMA_VERSION: u32 = 3;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NearTeammate {
     pub pawn: u32,
     pub agent: String,
     pub dist_m: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeathFact {
     pub schema_version: u32,
     pub match_id: String,

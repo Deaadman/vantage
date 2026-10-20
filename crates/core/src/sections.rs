@@ -5,10 +5,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::analysis::{Side, slot_key, slot_name};
-use crate::deaths::MAX_SAMPLE_AGE_MS;
-use crate::facts::{RoundFact, range_band};
-use crate::items::ItemKind;
-use crate::packet::Review;
+use crate::facts::RoundFact;
+use crate::packet::{Duel, MatchReview};
 
 /// Caveats for the derived (D) facts in these sections, stated once in the packet.
 pub const PHASE4_CAVEATS: &[&str] = &[
@@ -26,7 +24,7 @@ pub const PHASE4_CAVEATS: &[&str] = &[
     "Abilities left unused at death are not reported: charge state is not decoded for 13.08.",
 ];
 
-pub fn render(r: &Review, o: &mut String) {
+pub fn render(r: &MatchReview, o: &mut String) {
     gunfights(r, o);
     positioning(r, o);
     utility(r, o);
@@ -77,56 +75,8 @@ fn median(mut v: Vec<f64>) -> Option<f64> {
     })
 }
 
-/// A duel: a kill between me and an enemy, from my side.
-struct Duel {
-    won: bool,
-    weapon: String,
-    range: Option<&'static str>,
-    enemy: String,
-}
-
-fn duels(r: &Review) -> Vec<Duel> {
-    let a = &r.analysis;
-    let g = r.game;
-    let me = r.me.pawn;
-    g.kills
-        .iter()
-        .filter(|k| !k.is_self_kill() && (k.killer == me || k.victim == me))
-        .map(|k| {
-            let enemy = if k.killer == me { k.victim } else { k.killer };
-            let start = k.round_idx.map(|i| a.rounds[i].start_ms).unwrap_or(0);
-            let weapon = a
-                .in_hand_before(me, k.time_ms + u32::from(k.killer == me), start)
-                .and_then(|w| a.item(w))
-                .map(|i| {
-                    if i.kind == ItemKind::Ability {
-                        "ability".to_owned()
-                    } else {
-                        i.name.clone()
-                    }
-                })
-                .unwrap_or_else(|| "?".into());
-            let pos = |p: u32| {
-                g.export
-                    .tracks
-                    .get(&p)
-                    .and_then(|tr| tr.at(k.time_ms.saturating_sub(50), MAX_SAMPLE_AGE_MS))
-            };
-            let range = pos(me).zip(pos(enemy)).map(|(x, y)| {
-                range_band((x.pos[0] as f64 - y.pos[0] as f64).hypot(x.pos[1] as f64 - y.pos[1] as f64) / 100.0)
-            });
-            Duel {
-                won: k.killer == me,
-                weapon,
-                range,
-                enemy: r.catalog.agent_name(g.agent_id(enemy)),
-            }
-        })
-        .collect()
-}
-
-fn record<K: Ord + Clone>(duels: &[Duel], key: impl Fn(&Duel) -> Option<K>, label: impl Fn(&K) -> String) -> String {
-    let mut m: BTreeMap<K, (usize, usize)> = BTreeMap::new();
+fn record(duels: &[Duel], key: impl Fn(&Duel) -> Option<String>) -> String {
+    let mut m: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for d in duels {
         if let Some(k) = key(d) {
             let e = m.entry(k).or_insert((0, 0));
@@ -136,14 +86,14 @@ fn record<K: Ord + Clone>(duels: &[Duel], key: impl Fn(&Duel) -> Option<K>, labe
     let mut v: Vec<_> = m.into_iter().collect();
     v.sort_by_key(|(_, (w, l))| std::cmp::Reverse(w + l));
     v.iter()
-        .map(|(k, (w, l))| format!("{} {w}-{l}", label(k)))
+        .map(|(k, (w, l))| format!("{k} {w}-{l}"))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-fn gunfights(r: &Review, o: &mut String) {
+fn gunfights(r: &MatchReview, o: &mut String) {
     let rf = &r.round_facts;
-    let d = &r.facts;
+    let d = &r.death_facts;
     let head: u32 = rf.iter().map(|f| f.hits_head).sum();
     let body: u32 = rf.iter().map(|f| f.hits_body).sum();
     let legs: u32 = rf.iter().map(|f| f.hits_legs).sum();
@@ -224,10 +174,7 @@ fn gunfights(r: &Review, o: &mut String) {
         o,
         "- Killed with: {}. Killing blow region: {}",
         counts(d.iter().filter_map(|f| f.context.killer_weapon.clone())),
-        counts(
-            d.iter()
-                .filter_map(|f| f.context.killing_blow_region.map(str::to_owned))
-        )
+        counts(d.iter().filter_map(|f| f.context.killing_blow_region.clone()))
     );
     let v: Vec<f64> = d.iter().filter_map(|f| f.context.vertical_aim_offset_deg).collect();
     let off = v.iter().filter(|x| x.abs() > 2.0).count();
@@ -237,52 +184,24 @@ fn gunfights(r: &Review, o: &mut String) {
         median(v.clone()).map(|m| format!("{m:+.1}")).unwrap_or("n/a".into()),
         v.len()
     );
-    let ds = duels(r);
+    let ds = &r.duels;
     let _ = writeln!(
         o,
         "- Duel record (kills-deaths) by my weapon: {}",
-        record(&ds, |d| Some(d.weapon.clone()), String::clone)
+        record(ds, |d| Some(d.weapon.clone()))
     );
-    let _ = writeln!(o, "- By range: {}", record(&ds, |d| d.range, |s| (*s).to_owned()));
-    let _ = writeln!(
-        o,
-        "- By enemy agent: {}",
-        record(&ds, |d| Some(d.enemy.clone()), String::clone)
-    );
+    let _ = writeln!(o, "- By range: {}", record(ds, |d| d.range.clone()));
+    let _ = writeln!(o, "- By enemy agent: {}", record(ds, |d| Some(d.enemy_agent.clone())));
     let _ = writeln!(o);
 }
 
-fn positioning(r: &Review, o: &mut String) {
-    let g = r.game;
-    let me = r.me.pawn;
+fn positioning(r: &MatchReview, o: &mut String) {
     let rf = &r.round_facts;
     let _ = writeln!(o, "## Positioning");
     let _ = writeln!(o);
 
     // Trade rates: my deaths vs my teammates' deaths, both with a teammate alive.
-    let traded_with_alive = |pawn: u32| {
-        let mut n = 0;
-        let mut t = 0;
-        for k in g.kills.iter().filter(|k| k.victim == pawn && !k.is_self_kill()) {
-            let dead_before: Vec<u32> = g
-                .kills_in_round(k.round_idx)
-                .filter(|x| x.index < k.index)
-                .map(|x| x.victim)
-                .collect();
-            if g.team_of(pawn).iter().any(|p| *p != pawn && !dead_before.contains(p)) {
-                n += 1;
-                t += usize::from(crate::deaths::is_traded(g, k));
-            }
-        }
-        (t, n)
-    };
-    let (mt, mn) = traded_with_alive(me);
-    let (tt, tn) = g
-        .team_of(me)
-        .into_iter()
-        .filter(|&p| p != me)
-        .map(traded_with_alive)
-        .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+    let ((mt, mn), (tt, tn)) = (r.my_trades, r.team_trades);
     let _ = writeln!(
         o,
         "- Traded within 3 s when a teammate was alive: me {mt}/{mn} ({}), my teammates {tt}/{tn} ({})",
@@ -300,7 +219,7 @@ fn positioning(r: &Review, o: &mut String) {
             .unwrap_or("n/a".into())
     );
     let same = r
-        .facts
+        .death_facts
         .iter()
         .filter(|f| f.context.same_spot_as_own_kill)
         .map(|f| f.round.unwrap_or(0))
@@ -346,25 +265,26 @@ fn positioning(r: &Review, o: &mut String) {
     let _ = writeln!(o);
 }
 
-fn utility(r: &Review, o: &mut String) {
+fn utility(r: &MatchReview, o: &mut String) {
     let rf = &r.round_facts;
-    let agent_id = r.me.agent_id.as_deref();
     let _ = writeln!(o, "## Utility");
     let _ = writeln!(o);
     let mut parts = Vec::new();
     for slot in [3, 4, 5, 9] {
         let key = slot_key(slot_name(slot).unwrap_or(""));
         let n: u32 = rf.iter().filter_map(|f| f.casts.get(key)).sum();
-        let name = agent_id
-            .and_then(|id| r.catalog.ability_name(id, slot_name(slot).unwrap_or("")))
-            .unwrap_or("?");
+        let name = r.abilities.get(key).map(String::as_str).unwrap_or("?");
         parts.push(format!(
             "{key} {name} {n} ({:.2}/round)",
             f64::from(n) / rf.len().max(1) as f64
         ));
     }
     let _ = writeln!(o, "- Casts: {}", parts.join(", "));
-    let ult_ready_deaths = r.facts.iter().filter(|f| f.context.ult_ready == Some(true)).count();
+    let ult_ready_deaths = r
+        .death_facts
+        .iter()
+        .filter(|f| f.context.ult_ready == Some(true))
+        .count();
     let _ = writeln!(
         o,
         "- Ultimates used: {} (rounds {}); died holding a ready ult: {ult_ready_deaths}",
@@ -377,16 +297,16 @@ fn utility(r: &Review, o: &mut String) {
         .map(|f| f.casts.iter().filter(|(k, _)| **k != "X").map(|(_, v)| v).sum::<u32>())
         .sum();
     let _ = writeln!(o, "- Non-ult casts before the round's first hit: {before} of {all}");
-    let wasted = r.facts.iter().filter(|f| f.context.utility_unused_value).count();
+    let wasted = r.death_facts.iter().filter(|f| f.context.utility_unused_value).count();
     let _ = writeln!(
         o,
         "- Deaths with a cast in the 5 s before: {}; of those with no damage dealt after the cast: {wasted}",
-        r.facts.iter().filter(|f| f.context.casts_last_5s > 0).count()
+        r.death_facts.iter().filter(|f| f.context.casts_last_5s > 0).count()
     );
     let _ = writeln!(o);
 }
 
-fn economy(r: &Review, o: &mut String) {
+fn economy(r: &MatchReview, o: &mut String) {
     let rf = &r.round_facts;
     let _ = writeln!(o, "## Economy");
     let _ = writeln!(o);
@@ -398,7 +318,9 @@ fn economy(r: &Review, o: &mut String) {
         })
         .collect();
     let _ = writeln!(o, "- My buys (rounds, won-lost): {}", by_type.join(", "));
-    let majority = |m: &BTreeMap<&'static str, u32>| m.iter().max_by_key(|(_, n)| **n).map(|(k, _)| *k);
+    fn majority(m: &BTreeMap<String, u32>) -> Option<&str> {
+        m.iter().max_by_key(|(_, n)| **n).map(|(k, _)| k.as_str())
+    }
     let class = |t: &str| match t {
         "full" | "half" => "buy",
         "force" => "force",
@@ -407,7 +329,7 @@ fn economy(r: &Review, o: &mut String) {
     let misaligned: Vec<u32> = rf
         .iter()
         .filter(|f| !f.pistol)
-        .filter(|f| majority(&f.team_buys).is_some_and(|m| class(m) != class(f.economy.buy_type)))
+        .filter(|f| majority(&f.team_buys).is_some_and(|m| class(m) != class(&f.economy.buy_type)))
         .map(|f| f.round)
         .collect();
     let _ = writeln!(
@@ -458,7 +380,7 @@ fn economy(r: &Review, o: &mut String) {
         join(&rifle_no_heavy)
     );
     let save_worthy: Vec<u32> = r
-        .facts
+        .death_facts
         .iter()
         // Down two or more: enemies alive >= my team alive (me included) + 2.
         .filter(|f| f.context.inventory_value.is_some_and(|v| v >= 2900) && f.enemies_alive >= f.teammates_alive + 3)
@@ -473,7 +395,7 @@ fn economy(r: &Review, o: &mut String) {
     let _ = writeln!(o);
 }
 
-fn rounds(r: &Review, o: &mut String) {
+fn rounds(r: &MatchReview, o: &mut String) {
     let rf = &r.round_facts;
     let all: Vec<&RoundFact> = rf.iter().collect();
     let side = |s: Side| rf.iter().filter(|f| f.side == Some(s)).collect::<Vec<_>>();
@@ -559,7 +481,7 @@ fn rounds(r: &Review, o: &mut String) {
             clutches.join(", ")
         }
     );
-    let d = &r.facts;
+    let d = &r.death_facts;
     let late = d
         .iter()
         .filter(|f| f.context.clock_left_s.is_some_and(|s| s <= 15.0))
@@ -575,7 +497,7 @@ fn rounds(r: &Review, o: &mut String) {
 }
 
 /// One row per round, for the reviewed player.
-pub fn rounds_table(r: &Review, o: &mut String) {
+pub fn rounds_table(r: &MatchReview, o: &mut String) {
     let _ = writeln!(o, "## Rounds table");
     let _ = writeln!(o);
     let _ = writeln!(

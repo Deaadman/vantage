@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::analysis::{Analysis, Side, slot_key, slot_name};
 use crate::deaths::{MAX_SAMPLE_AGE_MS, round_to};
@@ -47,7 +47,7 @@ pub fn range_band(m: f64) -> &'static str {
 }
 
 /// Group B to F context of one death.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeathContext {
     /// R. Attack or defense this round (side from who carried the spike).
     pub side: Option<Side>,
@@ -66,7 +66,7 @@ pub struct DeathContext {
     /// R. Weapon or ability that dealt the killing blow.
     pub killer_weapon: Option<String>,
     /// R. head, body, legs or other.
-    pub killing_blow_region: Option<&'static str>,
+    pub killing_blow_region: Option<String>,
     pub killing_blow_wallbang: bool,
     /// R. What the victim had in hand.
     pub weapon_in_hand: Option<String>,
@@ -113,8 +113,11 @@ pub fn death_context(a: &Analysis, kill: &Kill) -> DeathContext {
         before_round_end_s: round.filter(|r| r.end_ms >= t).map(|r| secs(r.end_ms - t)),
         post_plant: round.and_then(|r| r.plant.as_ref()).is_some_and(|p| p.time_ms < t),
         clock_left_s: round.and_then(|r| match r.plant.as_ref().filter(|p| p.time_ms < t) {
-            Some(p) => Some(SPIKE_TIMER_S - secs(t - p.time_ms)),
-            None => r.buy_end_ms.filter(|&b| t >= b).map(|b| ROUND_TIMER_S - secs(t - b)),
+            Some(p) => Some(round_to(SPIKE_TIMER_S - secs(t - p.time_ms), 1)),
+            None => r
+                .buy_end_ms
+                .filter(|&b| t >= b)
+                .map(|b| round_to(ROUND_TIMER_S - secs(t - b), 1)),
         }),
         carrying_spike: round.is_some_and(|r| {
             a.items
@@ -148,7 +151,7 @@ pub fn death_context(a: &Analysis, kill: &Kill) -> DeathContext {
         .rfind(|h| h.killed && h.victim == Some(v) && h.time_ms.abs_diff(t) <= 150)
     {
         c.killer_weapon = a.item_label(h.item, kill.killer);
-        c.killing_blow_region = Some(region_name(h.region));
+        c.killing_blow_region = Some(region_name(h.region).to_owned());
         c.killing_blow_wallbang = h.wallbang;
     }
 
@@ -263,7 +266,7 @@ pub fn death_context(a: &Analysis, kill: &Kill) -> DeathContext {
 
 // ---------------------------------------------------------------- rounds
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RoundEconomy {
     /// R. Credits at the start of the buy phase.
     pub credits_start: Option<i64>,
@@ -276,10 +279,10 @@ pub struct RoundEconomy {
     pub primary: Option<String>,
     pub armor: Option<String>,
     /// D. pistol, full, half, force, save or eco; see `buy_type`.
-    pub buy_type: &'static str,
+    pub buy_type: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RoundFact {
     pub schema_version: u32,
     pub match_id: String,
@@ -292,8 +295,8 @@ pub struct RoundFact {
     pub overtime: bool,
     pub economy: RoundEconomy,
     /// D. My team's and the enemy's buy types this round.
-    pub team_buys: BTreeMap<&'static str, u32>,
-    pub enemy_buys: BTreeMap<&'static str, u32>,
+    pub team_buys: BTreeMap<String, u32>,
+    pub enemy_buys: BTreeMap<String, u32>,
     pub kills: u32,
     pub died: bool,
     pub damage_dealt: f64,
@@ -327,7 +330,7 @@ pub struct RoundFact {
     pub defused: bool,
     pub plant_site: Option<String>,
     /// R. Ability casts by key (C, Q, E, X).
-    pub casts: BTreeMap<&'static str, u32>,
+    pub casts: BTreeMap<String, u32>,
     /// R. Casts before the round's first hit.
     pub casts_before_contact: u32,
     pub ult_used: bool,
@@ -535,7 +538,7 @@ pub fn round_facts(a: &Analysis, pawn: u32) -> Vec<RoundFact> {
 
             for c in a.casts.iter().filter(|c| c.pawn == pawn && c.round_idx == Some(i)) {
                 if let Some(name) = slot_name(c.slot) {
-                    *f.casts.entry(slot_key(name)).or_insert(0) += 1;
+                    *f.casts.entry(slot_key(name).to_owned()).or_insert(0) += 1;
                 }
                 if c.slot == 9 {
                     f.ult_used = true;
@@ -606,7 +609,7 @@ fn economy(a: &Analysis, i: usize, pawn: u32, pistol: bool) -> RoundEconomy {
         loadout_value,
         primary,
         armor,
-        buy_type: buy_type(loadout_value, spent, credits_after_buy, pistol),
+        buy_type: buy_type(loadout_value, spent, credits_after_buy, pistol).to_owned(),
     }
 }
 

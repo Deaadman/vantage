@@ -10,7 +10,7 @@ use valreview_core::scan::{Outcome, ScanOptions, scan};
 use valreview_core::select::select_player;
 use valreview_core::store::Store;
 use valreview_core::vrfkit::Vrfkit;
-use valreview_core::{Catalog, Export, Game, Review};
+use valreview_core::{Catalog, Export, Game, MatchReview};
 
 #[derive(Parser)]
 #[command(
@@ -34,14 +34,32 @@ enum Command {
         /// Directory written by `vrfkit export`.
         export_dir: PathBuf,
     },
-    /// Write packet.md and deaths.jsonl for one player.
+    /// Write packet.md, deaths.jsonl and rounds.jsonl for one player of one match.
     Packet {
-        /// Directory written by `vrfkit export`.
-        export_dir: PathBuf,
-        /// Account-UUID prefix, pawn id, or agent name.
+        /// Directory written by `vrfkit export` (or use --match for a scanned match).
+        #[arg(required_unless_present = "match_id", conflicts_with = "match_id")]
+        export_dir: Option<PathBuf>,
+        /// A scanned match id (a unique prefix is enough); see `valreview matches`.
+        #[arg(long = "match")]
+        match_id: Option<String>,
+        /// Account-UUID prefix, pawn id, or agent name (default: `me` from config).
         #[arg(long)]
-        me: String,
+        me: Option<String>,
         /// Output directory (default: current directory).
+        #[arg(long, default_value = ".")]
+        out: PathBuf,
+    },
+    /// List scanned matches, newest first.
+    Matches,
+    /// Aggregate your facts across scanned matches and compare the last N with the N before.
+    Trends {
+        /// Window size: compare the last N matches with the N before them.
+        #[arg(long, default_value_t = 20)]
+        last: usize,
+        /// Account UUID or prefix (default: `me` from config).
+        #[arg(long)]
+        me: Option<String>,
+        /// Output directory for trends.md (default: current directory).
         #[arg(long, default_value = ".")]
         out: PathBuf,
     },
@@ -105,17 +123,31 @@ fn run(cli: Cli) -> Result<()> {
                 );
             }
         }
-        Command::Packet { export_dir, me, out } => {
-            let game = load(&export_dir)?;
-            let catalog = load_catalog(&data_dir);
-            let me = select_player(game.players(), &catalog, &me)?;
-            let review = Review::new(&game, &catalog, me);
-            if review.map.is_none() && !catalog.is_builtin() {
-                eprintln!(
-                    "warning: map {} is not in the catalog; try `valreview sync`",
-                    game.export.manifest.map_path.as_deref().unwrap_or("?")
-                );
-            }
+        Command::Packet {
+            export_dir,
+            match_id,
+            me,
+            out,
+        } => {
+            let cfg = Config::load(&data_dir)?;
+            let review = match (export_dir, match_id) {
+                (Some(dir), _) => {
+                    let game = load(&dir)?;
+                    let catalog = load_catalog(&data_dir);
+                    let sel = me.or(cfg.me).context("pass --me (or set it with `valreview init`)")?;
+                    let me = select_player(game.players(), &catalog, &sel)?;
+                    let review = MatchReview::from_game(&game, &catalog, me);
+                    if review.context.map_name.is_none() && !catalog.is_builtin() {
+                        eprintln!(
+                            "warning: map {} is not in the catalog; try `valreview sync`",
+                            review.map_name()
+                        );
+                    }
+                    review
+                }
+                (None, Some(id)) => stored_review(&data_dir, &id, me.or(cfg.me).as_deref())?,
+                (None, None) => unreachable!("clap requires one"),
+            };
             std::fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
             let md = out.join("packet.md");
             let jsonl = out.join("deaths.jsonl");
@@ -128,8 +160,43 @@ fn run(cli: Cli) -> Result<()> {
                 md.display(),
                 jsonl.display(),
                 rounds.display(),
-                review.facts.len(),
+                review.death_facts.len(),
                 review.round_facts.len()
+            );
+        }
+        Command::Matches => {
+            let store = Store::open(&paths::db_path(&data_dir))?;
+            let matches = store.matches()?;
+            if matches.is_empty() {
+                println!("no scanned matches; run `valreview scan`");
+            }
+            for (id, played, map) in matches {
+                println!(
+                    "{id}  {}  {}",
+                    played.as_deref().unwrap_or("?"),
+                    map.as_deref().unwrap_or("?")
+                );
+            }
+        }
+        Command::Trends { last, me, out } => {
+            let cfg = Config::load(&data_dir)?;
+            let store = Store::open(&paths::db_path(&data_dir))?;
+            let sel = me.or(cfg.me).context("pass --me or set it with `valreview init`")?;
+            let subject = resolve_subject(&store, &sel)?;
+            let reviews = store.reviews_of(&subject)?;
+            if reviews.is_empty() {
+                anyhow::bail!("no stored matches for {subject}; run `valreview scan`");
+            }
+            let report = valreview_core::trends::trends(&subject, &reviews, last);
+            std::fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
+            let path = out.join("trends.md");
+            std::fs::write(&path, report.markdown()).with_context(|| format!("writing {}", path.display()))?;
+            let compared = report.findings.iter().filter(|f| f.comparable).count();
+            println!(
+                "wrote {} ({} matches; {compared} of {} metrics have enough data to compare the last {last} with the {last} before)",
+                path.display(),
+                report.matches,
+                report.findings.len()
             );
         }
         Command::Init { me, vrfkit, demos_dir } => init(&data_dir, me, vrfkit, demos_dir)?,
@@ -293,6 +360,58 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
         );
     }
     Ok(())
+}
+
+/// Full account UUID for a selector: a UUID prefix seen in the store.
+fn resolve_subject(store: &Store, sel: &str) -> Result<String> {
+    let sel = sel.trim().to_ascii_lowercase();
+    let hits: Vec<String> = store
+        .known_subjects()?
+        .into_iter()
+        .filter(|s| s.starts_with(&sel))
+        .collect();
+    match hits.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => anyhow::bail!("no scanned match has a player whose account starts with `{sel}`"),
+        many => anyhow::bail!("`{sel}` matches several accounts: {}", many.join(", ")),
+    }
+}
+
+/// A stored review: match id prefix, and a player by UUID prefix, pawn id or agent name.
+fn stored_review(data_dir: &Path, match_prefix: &str, me: Option<&str>) -> Result<MatchReview> {
+    let store = Store::open(&paths::db_path(data_dir))?;
+    let ids: Vec<String> = store
+        .matches()?
+        .into_iter()
+        .map(|m| m.0)
+        .filter(|id| id.starts_with(match_prefix.trim()))
+        .collect();
+    let id = match ids.as_slice() {
+        [one] => one.clone(),
+        [] => anyhow::bail!("no scanned match id starts with `{match_prefix}`; see `valreview matches`"),
+        many => anyhow::bail!("`{match_prefix}` matches {} matches; use a longer prefix", many.len()),
+    };
+    let sel = me
+        .context("pass --me (or set it with `valreview init`)")?
+        .trim()
+        .to_ascii_lowercase();
+    let players = store.players_of(&id)?;
+    let hits: Vec<&(String, u32, String)> = players
+        .iter()
+        .filter(|(subject, pawn, agent)| {
+            (sel.len() >= 4 && subject.starts_with(&sel)) || sel == pawn.to_string() || agent.eq_ignore_ascii_case(&sel)
+        })
+        .collect();
+    let subject = match hits.as_slice() {
+        [one] => one.0.clone(),
+        [] => anyhow::bail!("`{sel}` matches no player of match {id}"),
+        _ => anyhow::bail!("`{sel}` matches several players of match {id}; use an account-UUID prefix or pawn id"),
+    };
+    store.review(&id, &subject)?.with_context(|| {
+        format!(
+            "match {id} was stored by an older valreview without reviews; its raw export is gone, so it has no packet"
+        )
+    })
 }
 
 fn load(dir: &Path) -> Result<Game> {

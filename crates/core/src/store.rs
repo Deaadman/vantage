@@ -7,14 +7,13 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::analysis::Analysis;
 use crate::catalog::Catalog;
-use crate::clusters::cluster_deaths;
 use crate::context::MatchContext;
-use crate::deaths::{death_facts, is_traded};
-use crate::facts::round_facts;
+use crate::deaths::is_traded;
 use crate::game::Game;
+use crate::packet::MatchReview;
 use crate::time::now_rfc3339;
 
-pub const STORE_SCHEMA_VERSION: i64 = 2;
+pub const STORE_SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -98,6 +97,20 @@ CREATE TABLE round_facts (
 );
 ";
 
+/// Added in schema 3.
+const SCHEMA_V3: &str = "
+-- One MatchReview (everything a packet shows) per player per match.
+CREATE TABLE reviews (
+    match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
+    subject TEXT NOT NULL,
+    review_json TEXT NOT NULL,
+    PRIMARY KEY (match_id, subject)
+);
+";
+
+/// (match_id, played_at, map name or path)
+pub type MatchRow = (String, Option<String>, Option<String>);
+
 pub struct Store {
     conn: Connection,
 }
@@ -145,6 +158,7 @@ impl Store {
         if !has_meta {
             self.conn.execute_batch(SCHEMA)?;
             self.conn.execute_batch(SCHEMA_V2)?;
+            self.conn.execute_batch(SCHEMA_V3)?;
             self.conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
                 [STORE_SCHEMA_VERSION.to_string()],
@@ -161,10 +175,13 @@ impl Store {
         if version > STORE_SCHEMA_VERSION {
             bail!("database schema {version} is newer than this valreview ({STORE_SCHEMA_VERSION}); update valreview");
         }
+        // Matches stored before a migration lack the new rows; their raw
+        // exports are gone, so they stay without them.
         if version < 2 {
-            // v2 adds per-player round facts. Matches stored by v1 have none;
-            // their raw exports are gone, so they stay without until rescanned.
             self.conn.execute_batch(SCHEMA_V2)?;
+        }
+        if version < 3 {
+            self.conn.execute_batch(SCHEMA_V3)?;
         }
         self.conn.execute(
             "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
@@ -306,18 +323,21 @@ impl Store {
         }
         let analysis = Analysis::new(game, catalog);
         for p in game.players() {
-            let mut facts = death_facts(&analysis, p.pawn);
-            cluster_deaths(&mut facts, analysis.map);
-            for f in &facts {
+            let review = MatchReview::new(&analysis, &ctx, p);
+            tx.execute(
+                "INSERT INTO reviews (match_id, subject, review_json) VALUES (?1, ?2, ?3)",
+                params![ctx.match_id, p.subject, serde_json::to_string(&review)?],
+            )?;
+            for f in &review.death_facts {
                 tx.execute(
                     "INSERT INTO deaths (match_id, time_ms, victim_subject, round, fact_json) VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![ctx.match_id, f.time_ms, p.subject, f.round, serde_json::to_string(f)?],
                 )?;
             }
-            for f in round_facts(&analysis, p.pawn) {
+            for f in &review.round_facts {
                 tx.execute(
                     "INSERT INTO round_facts (match_id, subject, round, fact_json) VALUES (?1, ?2, ?3, ?4)",
-                    params![ctx.match_id, p.subject, f.round, serde_json::to_string(&f)?],
+                    params![ctx.match_id, p.subject, f.round, serde_json::to_string(f)?],
                 )?;
             }
         }
@@ -358,6 +378,54 @@ impl Store {
         Ok(subjects)
     }
 
+    /// One player's stored review of one match.
+    pub fn review(&self, match_id: &str, subject: &str) -> Result<Option<MatchReview>> {
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT review_json FROM reviews WHERE match_id = ?1 AND subject = ?2",
+                params![match_id, subject],
+                |r| r.get(0),
+            )
+            .optional()?;
+        json.map(|j| parse_review(&j)).transpose()
+    }
+
+    /// Every stored review of one player, oldest match first.
+    pub fn reviews_of(&self, subject: &str) -> Result<Vec<MatchReview>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT r.review_json FROM reviews r JOIN matches m USING (match_id)
+             WHERE r.subject = ?1 ORDER BY COALESCE(m.played_at, m.processed_at), m.match_id",
+        )?;
+        let rows = stmt
+            .query_map([subject], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.iter().map(|j| parse_review(j)).collect()
+    }
+
+    /// Stored matches, newest first: (match_id, played_at, map).
+    pub fn matches(&self) -> Result<Vec<MatchRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT match_id, played_at, COALESCE(map_name, map_url) FROM matches
+             ORDER BY COALESCE(played_at, processed_at) DESC, match_id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Players of one match: (subject, pawn, agent).
+    pub fn players_of(&self, match_id: &str) -> Result<Vec<(String, u32, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT subject, pawn, agent FROM players WHERE match_id = ?1 ORDER BY pawn")?;
+        let rows = stmt
+            .query_map([match_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     pub fn counts(&self) -> Result<StoreCounts> {
         let one = |sql: &str| -> Result<usize> { Ok(self.conn.query_row(sql, [], |r| r.get::<_, i64>(0))? as usize) };
         Ok(StoreCounts {
@@ -375,6 +443,18 @@ pub struct StoreCounts {
     pub kills: usize,
     pub deaths: usize,
     pub logged: usize,
+}
+
+fn parse_review(json: &str) -> Result<MatchReview> {
+    let r: MatchReview = serde_json::from_str(json).context("reading a stored review")?;
+    if r.schema_version != crate::packet::REVIEW_SCHEMA_VERSION {
+        bail!(
+            "stored review schema {} differs from this valreview's {}",
+            r.schema_version,
+            crate::packet::REVIEW_SCHEMA_VERSION
+        );
+    }
+    Ok(r)
 }
 
 #[cfg(test)]

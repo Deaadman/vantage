@@ -32,6 +32,13 @@ Local and personal use only: it never touches the game or the Riot client.
   Checked against the game's own numbers on the oracle replay: every player's
   `AggregateKills`/`AggregateDeaths` match the kill events, and damage dealt and
   taken match the CombatReport exactly.
+- Phase 5: `valreview trends` aggregates 34 facts across scanned matches and
+  compares the last N matches with the N before (default 20). Changes are ranked
+  by a two-proportion z (rates) or Welch's t (per round) times how consistent they
+  are, and only when both windows have 20+ matches and 30+ events; everything
+  else is labelled "not enough data". Death spots that repeat across matches on
+  a map are listed with match and round evidence. `scan` now stores a full review
+  per player, so `valreview packet --match <id>` works after the raw export is gone.
 
 ## Build
 
@@ -51,6 +58,9 @@ SHA-256), then:
 valreview init --vrfkit <path to vrfkit.exe>
 valreview sync
 valreview scan
+valreview matches
+valreview packet --match <id prefix> [--me <selector>] [--out <dir>]
+valreview trends [--last 20] [--out <dir>]
 ```
 
 Run `scan` after each session, once you have downloaded the replays in the
@@ -79,7 +89,9 @@ Files live in `%LOCALAPPDATA%\valreview\data` (override with `--data-dir` or
 - `config.toml`: `me`, `vrfkit`, `demos_dir`, optional `vrfkit_sha256` to accept
   a deliberately upgraded vrfkit
 - `catalog.json`: the valorant-api.com cache; a failed sync leaves it in place
-- `valreview.db`: SQLite schema 2 (matches, players, rounds, kills, deaths, round_facts, scan_log)
+- `valreview.db`: SQLite schema 3 (matches, players, rounds, kills, deaths, round_facts,
+  reviews, scan_log). Matches stored by an older schema keep their rows but lack
+  the newer ones; their raw exports are gone, so they cannot be re-derived.
 - `tracks/<match>.parquet`: player positions at 4 Hz
 
 ## Layout

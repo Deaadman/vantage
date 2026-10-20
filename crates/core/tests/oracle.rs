@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use valreview_core::deaths::is_traded;
 use valreview_core::select::select_player;
-use valreview_core::{Catalog, Export, Game, Review};
+use valreview_core::{Catalog, Export, Game, MatchReview};
 
 fn oracle_dir() -> Option<PathBuf> {
     let candidates = [
@@ -82,7 +82,7 @@ fn lotus_oracle() {
     }
     let me = select_player(game.players(), &catalog, "sova").unwrap();
     assert_eq!(me.agent_id.as_deref(), Some("320b2a48-4d9b-a075-30f1-1f93a9b638fa"));
-    let r = Review::new(&game, &catalog, me);
+    let r = MatchReview::from_game(&game, &catalog, me);
     let s = &r.summary;
     assert_eq!(s.deaths, 21);
     assert_eq!((s.first_deaths, s.first_death_rounds.as_slice()), (1, &[13][..]));
@@ -287,4 +287,63 @@ fn phase4_facts() {
     );
     assert_eq!(deaths[0].context.weapon_in_hand.as_deref(), Some("Bandit"));
     assert_eq!(deaths[0].context.magazine_ammo, Some(3));
+}
+
+#[test]
+fn reviews_and_trends() {
+    let Some(dir) = oracle_dir() else {
+        eprintln!("skipping: set VALREVIEW_ORACLE_EXPORT to the oracle export dir");
+        return;
+    };
+    let game = Game::new(Export::load(&dir).unwrap());
+    let catalog = Catalog::builtin();
+    let me = game.players().iter().find(|p| p.pawn == 1276).unwrap();
+    let review = MatchReview::from_game(&game, &catalog, me);
+
+    // A stored review renders the same packet as the live export.
+    let json = serde_json::to_string(&review).unwrap();
+    let back: MatchReview = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.packet_md(), review.packet_md());
+    assert_eq!(back.deaths_jsonl(), review.deaths_jsonl());
+
+    // 40 synthetic matches: the same match, except the last 20 lose every trade.
+    let reviews: Vec<MatchReview> = (0..40)
+        .map(|i| {
+            let mut r = back.clone();
+            r.context.match_id = format!("{i:08}-synthetic");
+            r.context.played_at = Some(format!("2026-10-{:02}T00:00:00Z", 1 + i / 2));
+            if i >= 20 {
+                for d in &mut r.death_facts {
+                    d.traded_within_3s = false;
+                }
+            }
+            r
+        })
+        .collect();
+    let report = valreview_core::trends::trends(&review.subject, &reviews, 20);
+    let top = &report.findings[0];
+    assert_eq!(
+        top.key,
+        "trade_rate",
+        "{:?}",
+        report.findings.iter().map(|f| f.key).collect::<Vec<_>>()
+    );
+    assert!(top.comparable);
+    assert_eq!(top.last.value, Some(0.0));
+    assert!((top.previous.value.unwrap() - 0.4).abs() < 1e-9);
+    assert!(top.score.unwrap() < -5.0);
+    assert_eq!(top.consistency, Some(1.0));
+    // Everything else is identical across windows, so nothing else is a change.
+    assert!(report.findings[1..].iter().all(|f| f.score.unwrap_or(0.0).abs() < 1e-9));
+    let md = report.markdown();
+    assert!(md.contains("1. **My deaths traded within 3 s, when a teammate was alive**"));
+    assert!(md.contains("00000020 (0.0% rounds without it 0,1,2,"), "{md}");
+    assert_eq!(report.ranked().count(), 1, "{md}");
+    // The A Hut spot repeats in every match.
+    assert!(report.spots.iter().any(|s| s.matches == 40 && s.deaths == 240));
+
+    // Below the floor, nothing is ranked.
+    let small = valreview_core::trends::trends(&review.subject, &reviews[..10], 20);
+    assert!(small.findings.iter().all(|f| !f.comparable));
+    assert!(small.markdown().contains("Not enough data"));
 }

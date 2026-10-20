@@ -22,9 +22,10 @@ pub mod select;
 pub mod store;
 pub mod time;
 pub mod tracks;
+pub mod trends;
 pub mod vrfkit;
 
 pub use catalog::Catalog;
 pub use export::Export;
 pub use game::Game;
-pub use packet::Review;
+pub use packet::MatchReview;
