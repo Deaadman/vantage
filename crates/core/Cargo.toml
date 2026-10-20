@@ -1,0 +1,13 @@
+[package]
+name = "valreview-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+arrow-array = "60.0.0"
+arrow-cast = "60"
+arrow-schema = "60.0.0"
+parquet = { version = "60.0.0", default-features = false, features = ["arrow", "zstd", "snap"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
