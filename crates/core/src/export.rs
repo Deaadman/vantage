@@ -264,11 +264,8 @@ impl MatchReview {
         o.push_str(HOW_TO_READ);
         let _ = writeln!(o, "## Caveats");
         let _ = writeln!(o);
-        match check_build(&c.replay_build) {
-            BuildSupport::Supported => {}
-            BuildSupport::Caveat(m) | BuildSupport::Unsupported(m) => {
-                let _ = writeln!(o, "- Replay build: {m}.");
-            }
+        if let BuildSupport::Unsupported(m) = check_build(&c.replay_build) {
+            let _ = writeln!(o, "- Replay build: {m}.");
         }
         for cv in CAVEATS.iter().chain(crate::sections::PHASE4_CAVEATS) {
             let _ = writeln!(o, "- {cv}");

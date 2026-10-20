@@ -57,7 +57,7 @@ impl MatchContext {
         let map = m.map_path.as_deref().and_then(|p| catalog.map_by_url(p));
         let build_note = match check_build(&m.replay_build) {
             BuildSupport::Supported => None,
-            BuildSupport::Caveat(s) | BuildSupport::Unsupported(s) => Some(s),
+            BuildSupport::Unsupported(s) => Some(s),
         };
 
         let mut sides: Vec<Option<u8>> = game.players().iter().map(|p| game.teams.side(p.pawn)).collect();

@@ -6,14 +6,10 @@ pub const VRFKIT_VERSION: &str = "v0.3.0";
 const SUPPORTED: (u32, u32) = (11_06, 13_08);
 /// The same range, for messages.
 pub const SUPPORTED_RANGE: &str = "11.06 to 13.08";
-/// Supported, but vrfkit verified it on very few replays.
-const LEAST_VERIFIED: &[u32] = &[13_08];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildSupport {
     Supported,
-    /// Supported with a caveat; the string says what.
-    Caveat(String),
     Unsupported(String),
 }
 
@@ -38,10 +34,6 @@ pub fn check_build(replay_build: &str) -> BuildSupport {
         BuildSupport::Unsupported(format!(
             "build {this} is older than vrfkit {VRFKIT_VERSION} supports (from {})",
             pretty(SUPPORTED.0)
-        ))
-    } else if LEAST_VERIFIED.contains(&code) {
-        BuildSupport::Caveat(format!(
-            "build {this} is the least-verified build in vrfkit {VRFKIT_VERSION}; treat odd numbers with suspicion"
         ))
     } else {
         BuildSupport::Supported
@@ -82,10 +74,7 @@ mod tests {
 
     #[test]
     fn builds() {
-        assert!(matches!(
-            check_build("++Ares-Core+release-13.08"),
-            BuildSupport::Caveat(_)
-        ));
+        assert_eq!(check_build("++Ares-Core+release-13.08"), BuildSupport::Supported);
         assert_eq!(check_build("++Ares-Core+release-13.05"), BuildSupport::Supported);
         assert!(check_build("++Ares-Core+release-13.10").is_unsupported());
         assert!(check_build("++Ares-Core+release-11.05").is_unsupported());

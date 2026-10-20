@@ -857,9 +857,8 @@ fn print_review(d: &ReviewData) {
 
 fn load(dir: &Path) -> Result<Game> {
     let export = Export::load(dir)?;
-    match check_build(&export.manifest.replay_build) {
-        BuildSupport::Supported => {}
-        BuildSupport::Caveat(msg) | BuildSupport::Unsupported(msg) => errln!("warning: {msg}"),
+    if let BuildSupport::Unsupported(msg) = check_build(&export.manifest.replay_build) {
+        errln!("warning: {msg}");
     }
     let game = Game::new(export);
     for w in &game.warnings {

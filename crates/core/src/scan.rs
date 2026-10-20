@@ -191,10 +191,8 @@ fn export_and_store(
     let export = Export::load(raw)?;
 
     let mut warnings = Vec::new();
-    match check_build(&export.manifest.replay_build) {
-        BuildSupport::Supported => {}
-        BuildSupport::Caveat(s) => warnings.push(s),
-        BuildSupport::Unsupported(s) => bail!("{s}"),
+    if let BuildSupport::Unsupported(s) = check_build(&export.manifest.replay_build) {
+        bail!("{s}");
     }
     if store.has_match(&export.manifest.match_id)? {
         let match_id = export.manifest.match_id.clone();
