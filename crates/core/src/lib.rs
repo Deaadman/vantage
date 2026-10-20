@@ -13,6 +13,7 @@ pub mod export;
 pub mod facts;
 pub mod fields;
 pub mod game;
+pub mod install;
 pub mod items;
 pub mod packet;
 pub mod paths;
@@ -23,6 +24,7 @@ pub mod store;
 pub mod time;
 pub mod tracks;
 pub mod trends;
+pub mod update;
 pub mod vrfkit;
 
 pub use catalog::Catalog;

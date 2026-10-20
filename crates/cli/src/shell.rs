@@ -5,7 +5,7 @@
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -19,8 +19,10 @@ use crossterm::{execute, queue};
 use valreview_core::Catalog;
 use valreview_core::builds::check_game_version;
 use valreview_core::config::Config;
+use valreview_core::install::{self, Layout};
 use valreview_core::paths;
 use valreview_core::store::Store;
+use valreview_core::update;
 use valreview_core::vrfkit::Vrfkit;
 
 use crate::Cli;
@@ -62,6 +64,13 @@ pub fn run(data_dir: &Path) -> Result<()> {
     out::capture(Some(tx));
     let result = Screen::on().map_err(anyhow::Error::from).and_then(|_screen| {
         let mut app = App::new(data_dir, rx);
+        let (update_tx, update_rx) = mpsc::channel();
+        app.update_rx = Some(update_rx);
+        let cfg = Config::load(data_dir).unwrap_or_default();
+        if update::auto_disabled(cfg.auto_update).is_none() {
+            let dir = data_dir.to_path_buf();
+            std::thread::spawn(move || check_for_update(&dir, &update_tx));
+        }
         let dir = data_dir.to_path_buf();
         app.start("Scanning replays", move || {
             launch(&dir);
@@ -149,6 +158,9 @@ struct App {
     rx: Receiver<(Kind, String)>,
     job: Option<Job>,
     notices: Vec<(Color, String)>,
+    /// What the background update check found, shown before the notices.
+    update_note: Option<(Color, String)>,
+    update_rx: Option<Receiver<(Color, String)>>,
     footer: String,
     tick: usize,
 }
@@ -169,6 +181,8 @@ impl App {
             rx,
             job: None,
             notices: vec![],
+            update_note: None,
+            update_rx: None,
             footer: String::new(),
             tick: 0,
         };
@@ -222,6 +236,10 @@ impl App {
         let mut dirty = true;
         loop {
             dirty |= self.drain();
+            if let Some(note) = self.update_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+                self.update_note = Some(note);
+                dirty = true;
+            }
             if self.job.as_ref().is_some_and(|j| j.handle.is_finished()) {
                 let job = self.job.take().expect("checked");
                 let flow = job.handle.join();
@@ -364,7 +382,7 @@ impl App {
             row.push((Style::fg(GREY), format!("  ↓ {} more lines · PgDn", self.scroll)));
         }
         let mut right = Row::new();
-        for (i, (color, text)) in self.notices.iter().enumerate() {
+        for (i, (color, text)) in self.update_note.iter().chain(&self.notices).enumerate() {
             if i > 0 {
                 right.push((Style::fg(GREY), " · ".into()));
             }
@@ -642,7 +660,7 @@ fn notices(data_dir: &Path) -> Vec<(Color, String)> {
     let cfg = Config::load(data_dir).unwrap_or_default();
     let mut out = Vec::new();
     if Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()).is_err() {
-        out.push((RED, "vrfkit not set up · Run /init --vrfkit <path>".to_owned()));
+        out.push((RED, "vrfkit not installed · Run /update".to_owned()));
     }
     if !cfg.demos_dir().is_some_and(|d| d.is_dir()) {
         out.push((YELLOW, "No replays yet · download a match in the client".to_owned()));
@@ -672,7 +690,7 @@ fn launch(data_dir: &Path) {
     }
     if let Err(e) = Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()) {
         outln!("Not set up yet: {e:#}");
-        dim("Run /init --vrfkit \"C:\\path\\to\\vrfkit.exe\", then /scan.");
+        dim("Run /update to install it (or /init --vrfkit <path> for your own copy), then /scan.");
         return;
     }
     match cfg.demos_dir() {
@@ -691,6 +709,46 @@ fn launch(data_dir: &Path) {
         None => dim("No replay folder set: /init --demos-dir <folder>"),
     }
     recent(&matches(data_dir));
+}
+
+/// In the background on launch: install a newer release (it applies on the
+/// next launch), or only say it exists when this exe was not installed by
+/// the installer (a dev build). Offline or failing checks stay quiet.
+fn check_for_update(data_dir: &Path, tx: &Sender<(Color, String)>) {
+    let installed = Layout::new()
+        .ok()
+        .filter(|l| std::env::current_exe().is_ok_and(|e| l.contains(&e)));
+    if let Some(layout) = &installed {
+        install::cleanup(layout, crate::VERSION);
+    }
+    let manifest = match update::latest() {
+        Ok(m) => m,
+        Err(e) => {
+            update::State::record(data_dir, format!("check failed: {e:#}"));
+            return;
+        }
+    };
+    let v = manifest.version.clone();
+    if !install::is_newer(&v, crate::VERSION) {
+        update::State::record(data_dir, format!("up to date ({})", crate::VERSION));
+        return;
+    }
+    let Some(layout) = installed else {
+        update::State::record(data_dir, format!("{v} available"));
+        let _ = tx.send((YELLOW, format!("Update {v} available · Run /update")));
+        return;
+    };
+    let _ = tx.send((GREY, format!("Updating to {v}…")));
+    match update::apply(&layout, &manifest, data_dir) {
+        Ok(_) => {
+            update::State::record(data_dir, format!("installed {v}"));
+            let _ = tx.send((ACCENT, format!("Updated to {v} · Restart to apply")));
+        }
+        Err(e) => {
+            update::State::record(data_dir, format!("failed: {e:#}"));
+            let _ = tx.send((YELLOW, "Update failed · Run /update".to_owned()));
+        }
+    }
 }
 
 /// Set `me` once exactly one account is in every scanned match (2+), as `init` would.
@@ -739,6 +797,7 @@ fn dim(s: &str) {
 fn commands() -> Vec<CommandInfo> {
     let mut out: Vec<CommandInfo> = Cli::command()
         .get_subcommands()
+        .filter(|sub| !sub.is_hide_set())
         .map(|sub| CommandInfo {
             name: sub.get_name().to_owned(),
             about: sub.get_about().map(|s| s.to_string()).unwrap_or_default(),

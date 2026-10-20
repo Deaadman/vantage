@@ -11,12 +11,17 @@ use clap::{CommandFactory, Parser, Subcommand};
 use valreview_core::builds::{BuildSupport, check_build, check_game_version};
 use valreview_core::catalog::{self, CatalogSource};
 use valreview_core::config::Config;
+use valreview_core::install::{self, Layout};
 use valreview_core::paths;
 use valreview_core::scan::{Outcome, ScanOptions, scan};
 use valreview_core::select::select_player;
 use valreview_core::store::Store;
-use valreview_core::vrfkit::Vrfkit;
+use valreview_core::update;
+use valreview_core::vrfkit::{PINNED, Vrfkit};
 use valreview_core::{Catalog, Export, Game, MatchReview};
+
+/// This build's version; updates compare against it.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
 #[command(
@@ -87,12 +92,21 @@ enum Command {
         /// Without it, init detects you once 2+ matches are scanned.
         #[arg(long)]
         me: Option<String>,
-        /// Path to vrfkit.exe (v0.3.0 Windows release).
+        /// Path to vrfkit.exe (default: the release `valreview update` installs).
         #[arg(long)]
         vrfkit: Option<PathBuf>,
         /// Replay folder (default: %LOCALAPPDATA%\VALORANT\Saved\Demos).
         #[arg(long)]
         demos_dir: Option<PathBuf>,
+    },
+    /// Download and install the newest valreview and the vrfkit it needs (restart to use it).
+    Update,
+    /// Install this exe and its vrfkit into %LOCALAPPDATA%alreview (install.ps1 runs this).
+    #[command(hide = true)]
+    Install {
+        /// Run by an older valreview applying an update: print nothing on success.
+        #[arg(long)]
+        update: bool,
     },
     /// List the players in a vrfkit export with their pawn, agent, team and K/D.
     Players {
@@ -112,7 +126,10 @@ fn run(cli: Cli) -> Result<()> {
     let data_dir = paths::data_dir(cli.data_dir.as_deref())?;
     match cli.command {
         Some(command) => {
-            if !matches!(command, Command::Sync | Command::Status) {
+            if !matches!(
+                command,
+                Command::Sync | Command::Status | Command::Update | Command::Install { .. }
+            ) {
                 startup_check(&data_dir);
             }
             run_command(&data_dir, command)
@@ -129,6 +146,8 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
     let data_dir = data_dir.to_path_buf();
     match command {
         Command::Status => status(&data_dir)?,
+        Command::Update => update_cmd(&data_dir)?,
+        Command::Install { update } => install_cmd(&data_dir, update)?,
         Command::Players { export_dir } => {
             let game = load(&export_dir)?;
             let catalog = load_catalog(&data_dir);
@@ -398,7 +417,7 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
     }
     if unsupported > 0 {
         outln!(
-            "update vrfkit (and set its path with `valreview init --vrfkit`) to read the {unsupported} replay(s) on newer builds; they are retried automatically after an update"
+            "run `valreview update` once a valreview release supports newer builds to read the {unsupported} replay(s); they are retried automatically after an update"
         );
     }
     if tip
@@ -510,9 +529,88 @@ fn startup_check(data_dir: &Path) {
     }
 }
 
+/// `valreview update`: installs the newest release, or repairs vrfkit when up to date.
+fn update_cmd(data_dir: &Path) -> Result<()> {
+    let layout = Layout::new()?;
+    if std::env::current_exe().is_ok_and(|e| layout.contains(&e)) {
+        install::cleanup(&layout, VERSION);
+    }
+    let manifest = update::latest().context("checking for updates failed")?;
+    if !install::is_newer(&manifest.version, VERSION) {
+        update::State::record(data_dir, format!("up to date ({VERSION})"));
+        if install::ensure_vrfkit(&layout)? {
+            outln!("installed vrfkit {}", PINNED.tag);
+        }
+        outln!("valreview is up to date ({VERSION})");
+        return Ok(());
+    }
+    outln!("updating valreview {VERSION} to {}…", manifest.version);
+    match update::apply(&layout, &manifest, data_dir) {
+        Ok(_) => {
+            update::State::record(data_dir, format!("installed {}", manifest.version));
+            outln!(
+                "Updated valreview from {VERSION} to {}. Restart valreview to use it.",
+                manifest.version
+            );
+            Ok(())
+        }
+        Err(e) => {
+            update::State::record(data_dir, format!("failed: {e:#}"));
+            Err(e)
+        }
+    }
+}
+
+/// `valreview install`: this exe into `versions`, its vrfkit, and `bin`.
+fn install_cmd(data_dir: &Path, quiet: bool) -> Result<()> {
+    let layout = Layout::new()?;
+    let exe = std::env::current_exe().context("finding this exe")?;
+    let installed = install::install(&layout, VERSION, &exe)?;
+    // An older install.ps1 or `init` may have pinned a path inside the
+    // install; the installed release is found without it, so drop it.
+    let mut cfg = Config::load(data_dir)?;
+    if cfg.vrfkit.as_deref().is_some_and(|p| p.starts_with(&layout.root)) {
+        cfg.vrfkit = None;
+        cfg.save(data_dir)?;
+    }
+    if quiet {
+        return Ok(());
+    }
+    if installed.vrfkit_downloaded {
+        outln!("installed vrfkit {} (SHA-256 verified)", PINNED.tag);
+    }
+    outln!("installed valreview {VERSION} to {}", layout.launcher().display());
+    let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d == layout.bin()));
+    if !on_path {
+        outln!(
+            "add {} to PATH to run `valreview` from any terminal",
+            layout.bin().display()
+        );
+    }
+    Ok(())
+}
+
 fn status(data_dir: &Path) -> Result<()> {
     outln!("data dir: {}", data_dir.display());
     let cfg = Config::load(data_dir)?;
+    let exe = std::env::current_exe().ok();
+    match Layout::new() {
+        Ok(l) if exe.as_deref().is_some_and(|e| l.contains(e)) => {
+            outln!("valreview: {VERSION}, installed in {}", l.root.display())
+        }
+        _ => outln!(
+            "valreview: {VERSION}, not installed (running from {})",
+            exe.as_deref().map_or("?".into(), |e| e.display().to_string())
+        ),
+    }
+    let last = update::State::load(data_dir).map_or_else(
+        || "no check yet".to_owned(),
+        |s| format!("last check {}: {}", s.checked_at, s.result),
+    );
+    match update::auto_disabled(cfg.auto_update) {
+        Some(why) => outln!("updates: {why} ({last})"),
+        None => outln!("updates: automatic in the shell ({last})"),
+    }
     outln!(
         "me: {}",
         cfg.me

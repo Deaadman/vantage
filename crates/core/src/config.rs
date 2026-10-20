@@ -16,6 +16,8 @@ pub struct Config {
     pub vrfkit_sha256: Option<String>,
     /// Where the client saves replays.
     pub demos_dir: Option<PathBuf>,
+    /// `false` stops the shell's background update check (`valreview update` still works).
+    pub auto_update: Option<bool>,
 }
 
 impl Config {

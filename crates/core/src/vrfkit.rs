@@ -7,13 +7,26 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
+/// The vrfkit release this valreview installs and runs.
+pub struct Pinned {
+    pub tag: &'static str,
+    pub zip_url: &'static str,
+    pub zip_sha256: &'static str,
+    /// SHA-256 of `vrfkit.exe` inside the ZIP.
+    pub exe_sha256: &'static str,
+}
+
+/// v0.3.0: the release ZIP matches GitHub's asset digest and the exe matches
+/// its `build-info.json`.
+pub const PINNED: Pinned = Pinned {
+    tag: "v0.3.0",
+    zip_url: "https://github.com/yakisoba0728/vrfkit/releases/download/v0.3.0/vrfkit-v0.3.0-windows-x64.zip",
+    zip_sha256: "58cd76fb926642de931e74d70b3ad3db1e696ffbd752e4a1a60fc6686c4540df",
+    exe_sha256: "1a211eebbaf0a794201baefa2b32162d74c93fec38a8db3a793c0d93429ba0ca",
+};
+
 /// Release binaries valreview has been checked against: (tag, SHA-256 of `vrfkit.exe`).
-/// v0.3.0: the release ZIP matches GitHub's asset digest
-/// (sha256:58cd76fb…40df) and the exe matches its `build-info.json`.
-pub const KNOWN_RELEASES: &[(&str, &str)] = &[(
-    "v0.3.0",
-    "1a211eebbaf0a794201baefa2b32162d74c93fec38a8db3a793c0d93429ba0ca",
-)];
+pub const KNOWN_RELEASES: &[(&str, &str)] = &[(PINNED.tag, PINNED.exe_sha256)];
 
 #[derive(Debug, Clone)]
 pub struct Vrfkit {
@@ -24,14 +37,15 @@ pub struct Vrfkit {
 }
 
 impl Vrfkit {
-    /// Finds vrfkit (configured path, else `vrfkit.exe` on PATH) and checks its hash.
+    /// Finds vrfkit (configured path, else the installed pinned release, else
+    /// `vrfkit.exe` on PATH) and checks its hash.
     pub fn locate(configured: Option<&Path>, accepted_sha256: Option<&str>) -> Result<Self> {
         let path = match configured {
             Some(p) => p.to_path_buf(),
-            None => find_on_path().context(
-                "vrfkit not found: download the v0.3.0 Windows release from \
-                 https://github.com/yakisoba0728/vrfkit/releases and run `valreview init --vrfkit <path to vrfkit.exe>`",
-            )?,
+            None => installed_path()
+                .filter(|p| p.is_file())
+                .or_else(find_on_path)
+                .context("vrfkit not found: run `valreview update` to install it")?,
         };
         if !path.is_file() {
             bail!(
@@ -111,6 +125,13 @@ pub fn parse_branch(inspect: &str) -> Option<String> {
         .find_map(|l| l.trim().strip_prefix("Branch:"))
         .map(|b| b.trim().to_owned())
         .filter(|b| !b.is_empty())
+}
+
+/// Where the installer puts the pinned release.
+pub fn installed_path() -> Option<PathBuf> {
+    crate::paths::install_root()
+        .ok()
+        .map(|r| crate::install::Layout { root: r }.vrfkit_exe(PINNED.tag))
 }
 
 fn find_on_path() -> Option<PathBuf> {

@@ -1,5 +1,6 @@
-# Publishes the release install.ps1 downloads: push a tag like v0.1.0 that
-# matches the version in crates/cli/Cargo.toml.
+# Publishes the release install.ps1 and the updater download: push a tag like
+# v0.1.0 that matches the version in crates/cli/Cargo.toml. Every release
+# carries valreview-windows-x64.exe and manifest.json (version, file, SHA-256).
 #
 # Disabled while valreview is in development: nothing runs on push. To turn it
 # on, replace the `on:` block with the commented one below.
@@ -19,7 +20,7 @@ jobs:
   release:
     runs-on: windows-latest
     env:
-      ASSET: valreview-windows-x64.zip
+      ASSET: valreview-windows-x64.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -43,12 +44,17 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          Compress-Archive -Path target/release/valreview.exe -DestinationPath $env:ASSET
+          Copy-Item target/release/valreview.exe $env:ASSET
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
           $hash = (Get-FileHash -Algorithm SHA256 $env:ASSET).Hash.ToLowerInvariant()
-          Set-Content -NoNewline -Encoding ascii -Path "$env:ASSET.sha256" -Value "$hash  $env:ASSET`n"
+          $manifest = @{
+            version = $version
+            platforms = @{ 'windows-x64' = @{ file = $env:ASSET; sha256 = $hash } }
+          }
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding ascii manifest.json
 
       - name: Publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME $env:ASSET "$env:ASSET.sha256" --title $env:GITHUB_REF_NAME --generate-notes --verify-tag
+        run: gh release create $env:GITHUB_REF_NAME $env:ASSET manifest.json --title $env:GITHUB_REF_NAME --generate-notes --verify-tag

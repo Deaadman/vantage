@@ -18,7 +18,7 @@ Replays are decoded by [vrfkit](https://github.com/yakisoba0728/vrfkit), which t
     irm https://raw.githubusercontent.com/Deaadman/valreview/main/install.ps1 | iex
     ```
 
-    This installs `valreview.exe` and the pinned vrfkit release to `%LOCALAPPDATA%\valreview\bin`, checks both against their SHA-256, and adds the folder to your PATH. Run it again to update.
+    This installs valreview and the vrfkit release it uses to `%LOCALAPPDATA%\valreview`, checks both against their SHA-256, and adds `%LOCALAPPDATA%\valreview\bin` to your PATH.
 
 2. Download your replays in the Valorant client, open a new terminal and run `valreview`.
 
@@ -32,12 +32,19 @@ The interactive shell scans your replay folder, works out which account is yours
 | `/trends` | Compares your last 20 matches with the 20 before and lists repeated death spots |
 | `/status` | Checks vrfkit, the catalog, the database and the replay folder |
 | `/sync` | Refreshes agents, maps and weapons from valorant-api.com |
+| `/update` | Installs the newest valreview now |
 
 Each one also works as a plain command, for example `valreview packet --match <id>`. Add `--help` to any of them for its flags.
 
+## Updates
+
+valreview updates itself. Each time you open the shell it checks GitHub for a new release, then downloads and installs it in the background, along with the vrfkit version that release needs. The bottom right shows "Updated to … · Restart to apply". The version you're using keeps working, and the next launch starts the new one.
+
+Run `valreview update` to update straight away. To turn off the background check, set `auto_update = false` in `config.toml` or the environment variable `VALREVIEW_DISABLE_AUTOUPDATER=1`; `valreview update` still works. `valreview status` shows the result of the last check.
+
 ## Your data
 
-Everything stays on your machine in `%LOCALAPPDATA%\valreview\data` (`--data-dir` or `VALREVIEW_DATA_DIR` to move it): the config, a SQLite database of match facts, and 4 Hz movement tracks. Raw replay exports are deleted once processed. The only network calls are the valorant-api.com catalog for agent and map names, and the installer's downloads from GitHub.
+Everything stays on your machine in `%LOCALAPPDATA%\valreview\data` (`--data-dir` or `VALREVIEW_DATA_DIR` to move it): the config, a SQLite database of match facts, and 4 Hz movement tracks. Raw replay exports are deleted once processed. The only network calls are the valorant-api.com catalog for agent and map names, and downloads of valreview and vrfkit releases from GitHub.
 
 ## Reporting bugs
 
