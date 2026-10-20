@@ -81,6 +81,38 @@ impl Vrfkit {
     }
 }
 
+impl Vrfkit {
+    /// The replay's build branch from `vrfkit inspect` (fast: header only),
+    /// e.g. `++Ares-Core+release-13.08`.
+    pub fn inspect_build(&self, vrf: &Path) -> Result<String> {
+        let output = Command::new(&self.path)
+            .arg("inspect")
+            .arg(vrf)
+            .arg("--redact-identifiers")
+            .output()
+            .with_context(|| format!("running {}", self.path.display()))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let last = stderr
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("no error output");
+            bail!("vrfkit inspect failed ({}): {last}", output.status);
+        }
+        parse_branch(&String::from_utf8_lossy(&output.stdout)).context("vrfkit inspect printed no Branch line")
+    }
+}
+
+/// The `Branch:` line of `vrfkit inspect` output.
+pub fn parse_branch(inspect: &str) -> Option<String> {
+    inspect
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("Branch:"))
+        .map(|b| b.trim().to_owned())
+        .filter(|b| !b.is_empty())
+}
+
 fn find_on_path() -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|d| d.join("vrfkit.exe"))
@@ -104,6 +136,16 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branch_line() {
+        let out = "=== Header ===
+  Replay version:   5.3.2 (changelist 2153182552)
+  Branch:           ++Ares-Core+release-13.08
+";
+        assert_eq!(parse_branch(out).as_deref(), Some("++Ares-Core+release-13.08"));
+        assert_eq!(parse_branch("nothing"), None);
+    }
 
     #[test]
     fn hashes_and_rejects_unknown_binaries() {

@@ -39,6 +39,14 @@ Local and personal use only: it never touches the game or the Riot client.
   else is labelled "not enough data". Death spots that repeat across matches on
   a map are listed with match and round evidence. `scan` now stores a full review
   per player, so `valreview packet --match <id>` works after the raw export is gone.
+- Phase 6: `valreview status` checks vrfkit, the catalog, the database and the
+  replay folder. Every command prints one line when the live game (from the
+  catalog) is past the builds vrfkit decodes, or when the catalog is over 30 days
+  old. `scan` reads each replay's build with `vrfkit inspect` first and skips
+  unsupported builds without exporting; failed or unsupported files are retried
+  automatically after a vrfkit change. A crash on one replay is reported and the
+  scan continues. Teams use spike carriers as well as kills. Schema versions are
+  in the database (`meta`), `packet.md`, `trends.md` and every JSON line.
 
 ## Build
 
@@ -104,6 +112,12 @@ Files live in `%LOCALAPPDATA%\valreview\data` (override with `--data-dir` or
 ```
 cargo test
 ```
+
+- `crates/core/tests/fixtures.rs` runs the whole pipeline (scan, rescan, `me`
+  detection, packets, trends, a corrupt file) on the three public replays in
+  `tests/fixtures/public` (vrfkit's CI fixtures, MIT; see the NOTICE there). It
+  needs vrfkit: set `VALREVIEW_VRFKIT=<path to vrfkit.exe>` or put it on PATH;
+  without it the test skips.
 
 The oracle test (`crates/core/tests/oracle.rs`) checks every number in the plan's
 test oracle. It needs the Lotus export, which is personal data and not committed:

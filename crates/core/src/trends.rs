@@ -12,6 +12,8 @@ use crate::analysis::Side;
 use crate::clusters::{self, centroid, leader_clusters};
 use crate::packet::MatchReview;
 
+pub const TRENDS_SCHEMA_VERSION: u32 = 1;
+
 /// Below these, a number is "not enough data", never a pattern.
 pub const MIN_MATCHES: usize = 20;
 pub const MIN_EVENTS: f64 = 30.0;
@@ -713,6 +715,12 @@ impl TrendReport {
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(o, "# Trends across {} matches", self.matches);
+        let _ = writeln!(o);
+        let _ = writeln!(
+            o,
+            "trends_schema: {TRENDS_SCHEMA_VERSION} · review_schema: {}",
+            crate::packet::REVIEW_SCHEMA_VERSION
+        );
         let _ = writeln!(o);
         let _ = writeln!(
             o,

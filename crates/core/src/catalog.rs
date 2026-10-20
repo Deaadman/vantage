@@ -169,6 +169,12 @@ impl Catalog {
         }
     }
 
+    /// Whole days since the sync, if the sync time is known.
+    pub fn age_days(&self, now_unix: i64) -> Option<i64> {
+        let t = parse_rfc3339(self.fetched_at.as_deref()?)?;
+        Some((now_unix - t).max(0) / 86_400)
+    }
+
     pub fn is_builtin(&self) -> bool {
         self.fetched_at.is_none()
     }
@@ -552,6 +558,23 @@ impl Catalog {
     }
 }
 
+/// `YYYY-MM-DDTHH:MM:SSZ` -> unix seconds (days-from-civil, Howard Hinnant).
+fn parse_rfc3339(s: &str) -> Option<i64> {
+    let (date, time) = s.trim_end_matches('Z').split_once('T')?;
+    let mut d = date.split('-').map(|x| x.parse::<i64>());
+    let (y, m, day) = (d.next()?.ok()?, d.next()?.ok()?, d.next()?.ok()?);
+    let mut t = time.split(':').map(|x| x.parse::<i64>());
+    let (hh, mm, ss) = (t.next()?.ok()?, t.next()?.ok()?, t.next()?.ok()?);
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + hh * 3600 + mm * 60 + ss)
+}
+
 /// `ShooterGame/Content/Equippables/Guns/Rifles/AK/AKPrimaryAsset` -> `Equippables/Guns/Rifles/AK`.
 fn asset_folder(asset_path: &str) -> String {
     let p = asset_path.strip_prefix("ShooterGame/Content/").unwrap_or(asset_path);
@@ -671,6 +694,17 @@ mod tests {
         let (callout, d) = lotus.nearest_callout([7944.0, 5708.0, 402.0]).unwrap();
         assert_eq!(callout.label(), "A Site");
         assert!(d < 300.0);
+    }
+
+    #[test]
+    fn age() {
+        assert_eq!(parse_rfc3339("2026-10-20T00:00:00Z"), Some(1_792_454_400));
+        let c = Catalog {
+            fetched_at: Some("2026-10-01T00:00:00Z".into()),
+            ..Catalog::builtin()
+        };
+        assert_eq!(c.age_days(1_792_454_400), Some(19));
+        assert_eq!(Catalog::builtin().age_days(0), None);
     }
 
     #[test]

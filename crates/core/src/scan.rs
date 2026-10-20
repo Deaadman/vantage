@@ -36,6 +36,14 @@ pub enum Outcome {
     Duplicate {
         match_id: String,
     },
+    /// The replay's build is outside what this vrfkit decodes; nothing was exported.
+    Unsupported {
+        reason: String,
+    },
+    /// Skipped: unsupported last time with the same vrfkit.
+    PreviouslyUnsupported {
+        reason: String,
+    },
     Failed {
         error: String,
     },
@@ -107,18 +115,50 @@ fn scan_one(
         .len();
     match store.file_state(file, size)? {
         FileState::Stored { .. } => return Ok(Outcome::AlreadyStored),
-        FileState::Logged { status, detail } if !opts.retry_failed => {
+        // Reported when first found; quiet afterwards.
+        FileState::Logged { status, .. } if status == "duplicate" => return Ok(Outcome::AlreadyStored),
+        // A different vrfkit may decode what this one could not, so retry then.
+        FileState::Logged {
+            status,
+            detail,
+            vrfkit_version,
+        } if !opts.retry_failed && vrfkit_version == vrfkit.version => {
             return Ok(match status.as_str() {
-                // Reported when first found; quiet afterwards.
-                "duplicate" => Outcome::AlreadyStored,
+                "unsupported" => Outcome::PreviouslyUnsupported { reason: detail },
                 _ => Outcome::PreviouslyFailed { detail },
             });
         }
         _ => {}
     }
 
+    // The header check costs ~50 ms and spares a doomed full export.
+    match vrfkit.inspect_build(vrf) {
+        Ok(build) => {
+            if let BuildSupport::Unsupported(reason) = check_build(&build) {
+                store.log_file(file, size, "unsupported", &reason, &vrfkit.version)?;
+                return Ok(Outcome::Unsupported { reason });
+            }
+        }
+        Err(e) => {
+            let error = format!("{e:#}");
+            store.log_file(file, size, "failed", &error, &vrfkit.version)?;
+            return Ok(Outcome::Failed { error });
+        }
+    }
+
     let raw = raw_dir(&opts.data_dir, vrf);
-    let result = export_and_store(store, vrfkit, catalog, opts, vrf, file, size, &raw);
+    // A bug on one odd replay must not end the whole scan.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        export_and_store(store, vrfkit, catalog, opts, vrf, file, size, &raw)
+    }))
+    .unwrap_or_else(|panic| {
+        let what = panic
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_owned())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic".into());
+        Err(anyhow::anyhow!("internal error in valreview (please report): {what}"))
+    });
     if !opts.keep_raw && raw.exists() {
         // Our own scratch directory under the data dir; nothing else lives there.
         let _ = std::fs::remove_dir_all(&raw);

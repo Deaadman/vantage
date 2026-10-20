@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use valreview_core::builds::{BuildSupport, check_build};
+use valreview_core::builds::{BuildSupport, check_build, check_game_version};
 use valreview_core::catalog::{self, CatalogSource};
 use valreview_core::config::Config;
 use valreview_core::paths;
@@ -65,6 +65,8 @@ enum Command {
     },
     /// Download agents, maps, weapons and seasons from valorant-api.com into the local cache.
     Sync,
+    /// Check vrfkit, the catalog, the database and the replay folder, and say what to update.
+    Status,
     /// Write config.toml: vrfkit path, replay folder, and which account is you.
     Init {
         /// Your account UUID, or a prefix of one seen in scanned matches.
@@ -101,7 +103,11 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     let data_dir = paths::data_dir(cli.data_dir.as_deref())?;
+    if !matches!(cli.command, Command::Sync | Command::Status) {
+        startup_check(&data_dir);
+    }
     match cli.command {
+        Command::Status => status(&data_dir)?,
         Command::Players { export_dir } => {
             let game = load(&export_dir)?;
             let catalog = load_catalog(&data_dir);
@@ -333,8 +339,9 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
             }
         }
         Outcome::Failed { error } => println!("  FAILED  {}: {error}", f.file),
+        Outcome::Unsupported { reason } => println!("  skipped {}: {reason}", f.file),
         Outcome::Duplicate { match_id } => println!("  dup     {} (same match as stored {match_id})", f.file),
-        Outcome::AlreadyStored | Outcome::PreviouslyFailed { .. } => {}
+        Outcome::AlreadyStored | Outcome::PreviouslyFailed { .. } | Outcome::PreviouslyUnsupported { .. } => {}
     })?;
 
     let count = |pred: fn(&Outcome) -> bool| results.iter().filter(|r| pred(&r.outcome)).count();
@@ -342,12 +349,18 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
     let failed = count(|o| matches!(o, Outcome::Failed { .. }));
     let seen = count(|o| matches!(o, Outcome::AlreadyStored | Outcome::Duplicate { .. }));
     let old_failed = count(|o| matches!(o, Outcome::PreviouslyFailed { .. }));
+    let unsupported = count(|o| matches!(o, Outcome::Unsupported { .. } | Outcome::PreviouslyUnsupported { .. }));
     println!(
-        "{} replays: {stored} new, {seen} already done, {failed} failed",
+        "{} replays: {stored} new, {seen} already done, {failed} failed, {unsupported} on a build this vrfkit cannot read",
         results.len()
     );
     if old_failed > 0 {
         println!("{old_failed} skipped because they failed before (--retry-failed to try again)");
+    }
+    if unsupported > 0 {
+        println!(
+            "update vrfkit (and set its path with `valreview init --vrfkit`) to read the {unsupported} replay(s) on newer builds; they are retried automatically after an update"
+        );
     }
     if cfg.me.is_none()
         && let (n, s) = store.subjects_in_every_match()?
@@ -428,6 +441,87 @@ fn load(dir: &Path) -> Result<Game> {
 }
 
 /// Never fails: falls back to built-in agent names with a one-line note.
+/// One line when the live game has moved past what vrfkit decodes, and one
+/// when the catalog is old. Never fails.
+fn startup_check(data_dir: &Path) {
+    let Ok(cat) = Catalog::load(&paths::catalog_path(data_dir)) else {
+        return;
+    };
+    if let Some(msg) = cat.game_version.as_deref().and_then(check_game_version) {
+        eprintln!("note: {msg}");
+    }
+    if let Some(days) = cat.age_days(valreview_core::time::now_unix()).filter(|&d| d > 30) {
+        eprintln!(
+            "note: the valorant-api.com catalog is {days} days old; run `valreview sync` for new agents and maps"
+        );
+    }
+}
+
+fn status(data_dir: &Path) -> Result<()> {
+    println!("data dir: {}", data_dir.display());
+    let cfg = Config::load(data_dir)?;
+    println!(
+        "me: {}",
+        cfg.me
+            .as_deref()
+            .unwrap_or("not set (run `valreview init` after scanning 2+ matches)")
+    );
+    match Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()) {
+        Ok(v) => println!(
+            "vrfkit: {} at {} (SHA-256 verified); decodes builds {}",
+            v.version,
+            v.path.display(),
+            valreview_core::builds::SUPPORTED_RANGE
+        ),
+        Err(e) => println!("vrfkit: PROBLEM: {e:#}"),
+    }
+    match Catalog::load(&paths::catalog_path(data_dir)) {
+        Ok(c) => {
+            let age = c
+                .age_days(valreview_core::time::now_unix())
+                .map(|d| format!("{d} days old"))
+                .unwrap_or_default();
+            println!(
+                "catalog: game version {}, {} agents, {} maps, {} weapons ({age})",
+                c.game_version.as_deref().unwrap_or("?"),
+                c.agents.len(),
+                c.maps.len(),
+                c.weapons.len()
+            );
+            if let Some(msg) = c.game_version.as_deref().and_then(check_game_version) {
+                println!("  UPDATE: {msg}");
+            }
+        }
+        Err(e) => println!("catalog: none or unreadable ({e:#}); run `valreview sync`"),
+    }
+    let db = paths::db_path(data_dir);
+    if db.is_file() {
+        let store = Store::open(&db)?;
+        let c = store.counts()?;
+        println!(
+            "database: schema {}, {} matches, {} deaths, {} replays logged as failed, unsupported or duplicate",
+            valreview_core::store::STORE_SCHEMA_VERSION,
+            c.matches,
+            c.deaths,
+            c.logged
+        );
+    } else {
+        println!("database: none yet (run `valreview scan`)");
+    }
+    match cfg.demos_dir() {
+        Some(d) if d.is_dir() => {
+            let n = valreview_core::scan::find_replays(&d).map(|v| v.len()).unwrap_or(0);
+            println!("replays: {n} in {}", d.display());
+        }
+        Some(d) => println!(
+            "replays: folder {} does not exist (download a replay in the client)",
+            d.display()
+        ),
+        None => println!("replays: no folder set (`valreview init --demos-dir`)"),
+    }
+    Ok(())
+}
+
 fn load_catalog(data_dir: &Path) -> Catalog {
     let (cat, source) = Catalog::load_or_builtin(&paths::catalog_path(data_dir));
     match source {

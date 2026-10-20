@@ -99,7 +99,8 @@ impl Game {
             }
         }
 
-        let teams = infer_teams(&export.manifest.players, &kills, &mut warnings);
+        let same_team = spike_carrier_pairs(&export, &rounds, &canon);
+        let teams = infer_teams(&export.manifest.players, &kills, &same_team, &mut warnings);
         Game {
             export,
             rounds,
@@ -152,15 +153,54 @@ impl Game {
     }
 }
 
-fn infer_teams(players: &[Player], kills: &[Kill], warnings: &mut Vec<String>) -> Teams {
-    let mut adj: BTreeMap<u32, Vec<u32>> = players.iter().map(|p| (p.pawn, Vec::new())).collect();
+/// Pairs of players who carried the spike in the same round: only attackers
+/// can, so each pair is on one team. This places players the kill graph
+/// cannot (no kills or deaths against a connected player).
+fn spike_carrier_pairs(export: &Export, rounds: &[Round], canon: &dyn Fn(u32) -> u32) -> Vec<(u32, u32)> {
+    let players: Vec<u32> = export.manifest.players.iter().map(|p| p.pawn).collect();
+    let bombs: Vec<u32> = export
+        .actors
+        .class
+        .iter()
+        .filter(|(_, c)| c.contains("BombEquippable"))
+        .map(|(&g, _)| g)
+        .collect();
+    let mut by_round: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
+    for c in export.fields.owners.iter().filter(|c| bombs.contains(&c.actor)) {
+        let holder = canon(c.value);
+        let Some(r) = rounds.iter().rposition(|r| r.start_ms <= c.time_ms) else {
+            continue;
+        };
+        if players.contains(&holder) {
+            let v = by_round.entry(r).or_default();
+            if !v.contains(&holder) {
+                v.push(holder);
+            }
+        }
+    }
+    by_round
+        .values()
+        .flat_map(|v| v.windows(2).map(|w| (w[0], w[1])))
+        .collect()
+}
+
+/// Two-colouring with parity: a kill joins opposite teams, a spike-carrier
+/// pair the same team. Side labels are arbitrary (0/1), not attack/defense.
+fn infer_teams(players: &[Player], kills: &[Kill], same_team: &[(u32, u32)], warnings: &mut Vec<String>) -> Teams {
+    // (neighbour, 1 = opposite team, 0 = same team)
+    let mut adj: BTreeMap<u32, Vec<(u32, u8)>> = players.iter().map(|p| (p.pawn, Vec::new())).collect();
     for k in kills.iter().filter(|k| !k.is_self_kill()) {
-        adj.entry(k.killer).or_default().push(k.victim);
-        adj.entry(k.victim).or_default().push(k.killer);
+        adj.entry(k.killer).or_default().push((k.victim, 1));
+        adj.entry(k.victim).or_default().push((k.killer, 1));
+    }
+    for &(a, b) in same_team {
+        adj.entry(a).or_default().push((b, 0));
+        adj.entry(b).or_default().push((a, 0));
     }
 
     let mut side: HashMap<u32, u8> = HashMap::new();
     let mut player_components = 0;
+    let mut isolated = 0;
     // Start from manifest order so the labels are deterministic.
     let starts: Vec<(u32, bool)> = players
         .iter()
@@ -171,14 +211,19 @@ fn infer_teams(players: &[Player], kills: &[Kill], warnings: &mut Vec<String>) -
         if side.contains_key(&start) {
             continue;
         }
+        if adj[&start].is_empty() && players.len() > 1 {
+            // Nothing ties this player to anyone: their team is unknown.
+            isolated += usize::from(is_player);
+            continue;
+        }
         player_components += usize::from(is_player);
         side.insert(start, 0);
         let mut queue = VecDeque::from([start]);
         while let Some(x) = queue.pop_front() {
             let sx = side[&x];
-            for &y in &adj[&x] {
+            for &(y, flip) in &adj[&x] {
                 if let std::collections::hash_map::Entry::Vacant(e) = side.entry(y) {
-                    e.insert(1 - sx);
+                    e.insert(sx ^ flip);
                     queue.push_back(y);
                 }
             }
@@ -186,16 +231,28 @@ fn infer_teams(players: &[Player], kills: &[Kill], warnings: &mut Vec<String>) -
     }
 
     for k in kills.iter().filter(|k| !k.is_self_kill()) {
-        if side.get(&k.killer) == side.get(&k.victim) {
+        if side.contains_key(&k.killer) && side.get(&k.killer) == side.get(&k.victim) {
             warnings.push(format!(
                 "kill at {} ms ({} -> {}) joins pawns already on the same side: a team kill, or teams are wrong",
                 k.time_ms, k.killer, k.victim
             ));
         }
     }
+    for &(a, b) in same_team {
+        if side.get(&a) != side.get(&b) {
+            warnings.push(format!(
+                "spike carriers {a} and {b} of one round ended up on different sides; teams are wrong"
+            ));
+        }
+    }
     if player_components > 1 {
         warnings.push(format!(
-            "the kill graph has {player_components} disconnected parts; teams for some players are a guess"
+            "kills and spike carries split the players into {player_components} groups; teams for some players are a guess"
+        ));
+    }
+    if isolated > 0 {
+        warnings.push(format!(
+            "{isolated} player(s) had no kills, deaths or spike carries; their team is unknown"
         ));
     }
     Teams { side }

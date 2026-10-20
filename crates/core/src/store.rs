@@ -119,8 +119,15 @@ pub struct Store {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileState {
     New,
-    Stored { match_id: String },
-    Logged { status: String, detail: String },
+    Stored {
+        match_id: String,
+    },
+    Logged {
+        status: String,
+        detail: String,
+        /// The vrfkit that produced this outcome.
+        vrfkit_version: String,
+    },
 }
 
 impl Store {
@@ -202,15 +209,21 @@ impl Store {
         if let Some(match_id) = stored {
             return Ok(FileState::Stored { match_id });
         }
-        let logged: Option<(String, String)> = self
+        let logged: Option<(String, String, String)> = self
             .conn
             .query_row(
-                "SELECT status, detail FROM scan_log WHERE source_file = ?1 AND source_size = ?2",
+                "SELECT status, detail, vrfkit_version FROM scan_log WHERE source_file = ?1 AND source_size = ?2",
                 params![source_file, source_size as i64],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
-        Ok(logged.map_or(FileState::New, |(status, detail)| FileState::Logged { status, detail }))
+        Ok(
+            logged.map_or(FileState::New, |(status, detail, vrfkit_version)| FileState::Logged {
+                status,
+                detail,
+                vrfkit_version,
+            }),
+        )
     }
 
     pub fn has_match(&self, match_id: &str) -> Result<bool> {
