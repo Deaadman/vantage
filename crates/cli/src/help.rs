@@ -34,7 +34,15 @@ const GENERAL: &[(bool, &str)] = &[
     (true, "Reviewing a match"),
     (
         false,
-        "  /packet writes packet.md, deaths.jsonl and rounds.jsonl for your newest match (or /packet --match <id>). Give them to an AI and ask it to review your play.",
+        "  /review shows how your newest match went (or /review --match <id>): your stats against the lobby, what to work on with the rounds behind it, every round and death, and your deaths on the map.",
+    ),
+    (
+        false,
+        "  /summary sums up all your matches on one map (or /summary --map Pearl): what keeps repeating across them, each match, and every death on the map. Enter on a match opens its review.",
+    ),
+    (
+        false,
+        "  /export writes the same match as packet.md, deaths.jsonl and rounds.jsonl to give to an AI.",
     ),
     (
         false,
@@ -51,7 +59,7 @@ const GENERAL: &[(bool, &str)] = &[
     (false, "  Ctrl+L           clear the screen"),
     (false, "  Ctrl+C           clear the line; twice on an empty line quits"),
     (false, ""),
-    (false, "Every command takes --help, for example /packet --help."),
+    (false, "Every command takes --help, for example /export --help."),
 ];
 
 pub enum HelpAction {

@@ -2,6 +2,7 @@
 mod out;
 mod editor;
 mod help;
+mod review_view;
 mod shell;
 
 use std::io::IsTerminal;
@@ -13,6 +14,7 @@ use valreview_core::builds::{BuildSupport, check_build, check_game_version};
 use valreview_core::catalog::{self, CatalogSource};
 use valreview_core::config::Config;
 use valreview_core::install::{self, Layout};
+use valreview_core::minimap::Minimap;
 use valreview_core::paths;
 use valreview_core::scan::{Outcome, ScanOptions, scan};
 use valreview_core::select::select_player;
@@ -20,6 +22,7 @@ use valreview_core::store::Store;
 use valreview_core::update;
 use valreview_core::vrfkit::{PINNED, Vrfkit};
 use valreview_core::{Catalog, Export, Game, MatchReview};
+use valreview_core::{review, summary};
 
 /// This build's version; updates compare against it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -55,7 +58,7 @@ enum Command {
         retry_failed: bool,
     },
     /// Write packet.md, deaths.jsonl and rounds.jsonl for one player of one match.
-    Packet {
+    Export {
         /// Directory written by `vrfkit export` (default: the newest scanned match).
         #[arg(conflicts_with = "match_id")]
         export_dir: Option<PathBuf>,
@@ -68,6 +71,24 @@ enum Command {
         /// Output directory (default: current directory).
         #[arg(long, default_value = ".")]
         out: PathBuf,
+    },
+    /// Show how a match went for you: stats against the lobby, what to work on, rounds, deaths, map.
+    Review {
+        /// A scanned match id (a unique prefix is enough; default: the newest).
+        #[arg(long = "match")]
+        match_id: Option<String>,
+        /// Account-UUID prefix, pawn id, or agent name (default: `me` from config).
+        #[arg(long)]
+        me: Option<String>,
+    },
+    /// Summarise all your matches on one map: what keeps repeating, and what goes well.
+    Summary {
+        /// Map name, e.g. Pearl (default: the map of your newest match).
+        #[arg(long)]
+        map: Option<String>,
+        /// Account UUID or prefix (default: `me` from config).
+        #[arg(long)]
+        me: Option<String>,
     },
     /// List scanned matches, newest first.
     Matches,
@@ -184,7 +205,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
                 );
             }
         }
-        Command::Packet {
+        Command::Export {
             export_dir,
             match_id,
             me,
@@ -231,6 +252,8 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
                 review.round_facts.len()
             );
         }
+        Command::Review { match_id, me } => print_review(&load_review(&data_dir, match_id, me)?),
+        Command::Summary { map, me } => print_summary(&load_summary(&data_dir, map, me)?),
         Command::Matches => {
             let store = Store::open(&paths::db_path(&data_dir))?;
             let matches = store.matches()?;
@@ -504,6 +527,221 @@ fn stored_review(data_dir: &Path, match_prefix: &str, me: Option<&str>) -> Resul
             "match {id} was stored by an older valreview without reviews; its raw export is gone, so it has no packet"
         )
     })
+}
+
+/// Everything `/review` shows for one match.
+pub struct ReviewData {
+    pub review: MatchReview,
+    pub overview: review::Overview,
+    pub map: Option<catalog::MapInfo>,
+    pub minimap: std::result::Result<Minimap, String>,
+}
+
+/// Loads my review of a stored match, the whole lobby's, and the map.
+pub(crate) fn load_review(data_dir: &Path, match_id: Option<String>, me: Option<String>) -> Result<ReviewData> {
+    let cfg = Config::load(data_dir)?;
+    let id = match match_id {
+        Some(id) => id,
+        None => newest_match(data_dir)?,
+    };
+    let review = stored_review(data_dir, &id, me.or(cfg.me).as_deref())?;
+    let store = Store::open(&paths::db_path(data_dir))?;
+    let match_id = &review.context.match_id;
+    let mut lobby = Vec::new();
+    for (subject, _, _) in store.players_of(match_id)? {
+        if let Some(r) = store.review(match_id, &subject)? {
+            lobby.push(r);
+        }
+    }
+    let overview = review::overview(&review, &lobby);
+    let catalog = load_catalog(data_dir);
+    let map = review
+        .context
+        .map_url
+        .as_deref()
+        .and_then(|u| catalog.map_by_url(u))
+        .cloned();
+    let minimap = match &map {
+        Some(m) => Minimap::load(data_dir, m).map_err(|e| format!("{e:#}")),
+        None => Err("the catalog does not know this map; run `valreview sync`".into()),
+    };
+    Ok(ReviewData {
+        review,
+        overview,
+        map,
+        minimap,
+    })
+}
+
+/// Everything `/summary` shows for one map.
+pub struct SummaryData {
+    pub summary: summary::Summary,
+    /// My reviews on the map, oldest first.
+    pub reviews: Vec<MatchReview>,
+    pub map: Option<catalog::MapInfo>,
+    pub minimap: std::result::Result<Minimap, String>,
+}
+
+/// Loads my reviews on one map (default: my newest match's), each with its lobby.
+pub(crate) fn load_summary(data_dir: &Path, map: Option<String>, me: Option<String>) -> Result<SummaryData> {
+    let cfg = Config::load(data_dir)?;
+    let store = Store::open(&paths::db_path(data_dir))?;
+    let sel = me.or(cfg.me).context("pass --me or set it with `valreview init`")?;
+    let subject = resolve_subject(&store, &sel)?;
+    let all = store.reviews_of(&subject)?;
+    let name = |r: &MatchReview| r.map_name().trim_matches('`').to_owned();
+    let map_name = match map {
+        Some(m) => m,
+        None => all
+            .last()
+            .map(name)
+            .context("no stored matches; run `valreview scan`")?,
+    };
+    let mine: Vec<MatchReview> = all
+        .into_iter()
+        .filter(|r| name(r).eq_ignore_ascii_case(map_name.trim()))
+        .collect();
+    let Some(first) = mine.first() else {
+        anyhow::bail!("you have no stored matches on {map_name}; see `valreview matches`");
+    };
+    let map_name = name(first);
+    let mut played = Vec::new();
+    for r in &mine {
+        let id = &r.context.match_id;
+        let mut lobby = Vec::new();
+        for (s, _, _) in store.players_of(id)? {
+            if let Some(l) = store.review(id, &s)? {
+                lobby.push(l);
+            }
+        }
+        played.push(summary::Played { me: r.clone(), lobby });
+    }
+    let catalog = load_catalog(data_dir);
+    let map = first
+        .context
+        .map_url
+        .as_deref()
+        .and_then(|u| catalog.map_by_url(u))
+        .cloned();
+    let minimap = match &map {
+        Some(m) => Minimap::load(data_dir, m).map_err(|e| format!("{e:#}")),
+        None => Err("the catalog does not know this map; run `valreview sync`".into()),
+    };
+    Ok(SummaryData {
+        summary: summary::summary(&map_name, &played),
+        reviews: mine,
+        map,
+        minimap,
+    })
+}
+
+/// `valreview summary` outside the shell.
+fn print_summary(d: &SummaryData) {
+    let s = &d.summary;
+    outln!(
+        "{} · {} match{} · {}",
+        s.map,
+        s.matches.len(),
+        if s.matches.len() == 1 { "" } else { "es" },
+        s.agents
+    );
+    if let Some(note) = &s.note {
+        outln!("{note}");
+    }
+    outln!();
+    for st in &s.stats {
+        outln!("  {:<24} {}", st.label, st.value);
+    }
+    outln!();
+    outln!("Matches");
+    for m in &s.matches {
+        outln!(
+            "  {}  {:<10} {}–{}  {}/{}  {:.0} dmg/round{}",
+            m.label,
+            m.agent,
+            m.won,
+            m.lost,
+            m.kills,
+            m.deaths,
+            m.adr,
+            m.adr_rank
+                .map(|r| format!(" ({} of {})", review::ordinal(r), m.of))
+                .unwrap_or_default()
+        );
+    }
+    outln!();
+    outln!("Work on");
+    for (i, f) in s.work_on.iter().enumerate() {
+        outln!("  {}. {}", i + 1, f.title);
+        for e in &f.evidence {
+            outln!("     {e}");
+        }
+    }
+    if s.work_on.is_empty() {
+        outln!("  nothing repeats yet");
+    }
+    outln!();
+    outln!("Went well");
+    for f in &s.went_well {
+        outln!("  - {}", f.title);
+    }
+    if s.went_well.is_empty() {
+        outln!("  nothing stood out");
+    }
+}
+
+/// `valreview review` outside the shell: the Overview and Work on tabs as text.
+fn print_review(d: &ReviewData) {
+    let o = &d.overview;
+    outln!(
+        "{} on {} · {} {}–{} · {}/{}",
+        o.agent,
+        o.map,
+        if o.won > o.lost {
+            "won"
+        } else if o.won < o.lost {
+            "lost"
+        } else {
+            "drew"
+        },
+        o.won,
+        o.lost,
+        o.kills,
+        o.deaths
+    );
+    outln!();
+    for s in &o.stats {
+        let rank = s
+            .rank
+            .map(|r| format!("{} of {}", review::ordinal(r), s.of))
+            .unwrap_or_default();
+        outln!("  {:<24} {:<16} {rank}", s.label, s.value);
+    }
+    outln!();
+    outln!("Work on");
+    for (i, f) in o.work_on.iter().enumerate() {
+        outln!("  {}. {}", i + 1, f.title);
+        for e in &f.evidence {
+            outln!("     {e}");
+        }
+    }
+    if o.work_on.is_empty() {
+        outln!("  nothing stood out");
+    }
+    outln!();
+    outln!("Went well");
+    for f in &o.went_well {
+        outln!("  - {}", f.title);
+    }
+    if o.went_well.is_empty() {
+        outln!("  nothing stood out");
+    }
+    for w in &d.review.warnings {
+        errln!("note: {w}");
+    }
+    if let Some(note) = &d.review.context.build_note {
+        errln!("note: {note}");
+    }
 }
 
 fn load(dir: &Path) -> Result<Game> {

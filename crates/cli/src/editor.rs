@@ -26,6 +26,8 @@ pub struct MatchInfo {
     pub id: String,
     /// `2026-10-19 21:04  Ascent`.
     pub label: String,
+    /// `Ascent`, for completing `--map`.
+    pub map: String,
 }
 
 #[derive(Debug, Default)]
@@ -93,10 +95,17 @@ pub fn suggest(before: &str, ctx: &Context) -> Suggestions {
     if let Some(flag) = cmd.flags.iter().find(|f| f.long == prev && f.value.is_some()) {
         if flag.long == "--match" {
             items = match_items(ctx, &word, "");
+        } else if flag.long == "--map" {
+            items = map_items(ctx, &word, "");
         }
     } else if word.is_empty() || word.starts_with('-') {
-        if word.is_empty() && cmd.name == "packet" && tokens.len() == 1 {
-            items = match_items(ctx, "", "--match ");
+        // A bare command offers what it is about, then its flags.
+        if word.is_empty() && tokens.len() == 1 {
+            match cmd.name.as_str() {
+                "export" | "review" => items = match_items(ctx, "", "--match "),
+                "summary" => items = map_items(ctx, "", "--map "),
+                _ => {}
+            }
         }
         items.extend(
             cmd.flags
@@ -117,6 +126,28 @@ pub fn suggest(before: &str, ctx: &Context) -> Suggestions {
         items,
         command_word: false,
     }
+}
+
+/// Maps with stored matches, most played first.
+fn map_items(ctx: &Context, prefix: &str, value_prefix: &str) -> Vec<Suggestion> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for m in ctx.matches.iter().filter(|m| m.map != "?") {
+        match counts.iter_mut().find(|(name, _)| *name == m.map) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((m.map.clone(), 1)),
+        }
+    }
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let prefix = prefix.to_lowercase();
+    counts
+        .into_iter()
+        .filter(|(name, _)| name.to_lowercase().starts_with(&prefix))
+        .map(|(name, n)| Suggestion {
+            value: format!("{value_prefix}{name}"),
+            label: name,
+            description: format!("{n} match{}", if n == 1 { "" } else { "es" }),
+        })
+        .collect()
 }
 
 fn match_items(ctx: &Context, prefix: &str, value_prefix: &str) -> Vec<Suggestion> {
@@ -375,7 +406,7 @@ mod tests {
             commands: vec![
                 cmd("scan", vec![flag("--keep-raw", None), flag("--retry-failed", None)]),
                 cmd(
-                    "packet",
+                    "export",
                     vec![
                         flag("--match", Some("ID")),
                         flag("--me", Some("ME")),
@@ -389,10 +420,17 @@ mod tests {
                 MatchInfo {
                     id: "aaaa1111-0000".into(),
                     label: "2026-10-19  Ascent".into(),
+                    map: "Ascent".into(),
                 },
                 MatchInfo {
                     id: "bbbb2222-0000".into(),
                     label: "2026-10-18  Lotus".into(),
+                    map: "Lotus".into(),
+                },
+                MatchInfo {
+                    id: "cccc3333-0000".into(),
+                    label: "2026-10-17  Lotus".into(),
+                    map: "Lotus".into(),
                 },
             ],
         }
@@ -431,26 +469,45 @@ mod tests {
     #[test]
     fn arguments() {
         let c = ctx();
-        // A bare `/packet ` offers the stored matches, then the flags.
-        let s = suggest("/packet ", &c);
+        // A bare `/export ` offers the stored matches, then the flags.
+        let s = suggest("/export ", &c);
         assert!(!s.command_word);
         assert_eq!(
             values(&s),
             [
                 "--match aaaa1111-0000",
                 "--match bbbb2222-0000",
+                "--match cccc3333-0000",
                 "--match",
                 "--me",
                 "--out"
             ]
         );
         assert_eq!(s.items[0].label, "aaaa1111");
-        assert_eq!(values(&suggest("/packet --match b", &c)), ["bbbb2222-0000"]);
-        assert_eq!(values(&suggest("/packet --m", &c)), ["--match", "--me"]);
+        // `/review` offers matches the same way; `/summary` offers maps, most played first.
+        let mut c = c;
+        for (name, flag) in [("review", "--match"), ("summary", "--map")] {
+            c.commands.push(CommandInfo {
+                name: name.into(),
+                about: String::new(),
+                flags: vec![FlagInfo {
+                    long: flag.into(),
+                    help: String::new(),
+                    value: Some("X".into()),
+                }],
+            });
+        }
+        assert_eq!(values(&suggest("/review ", &c))[0], "--match aaaa1111-0000");
+        let maps = suggest("/summary ", &c);
+        assert_eq!(values(&maps)[..2], ["--map Lotus", "--map Ascent"]);
+        assert_eq!(maps.items[0].description, "2 matches");
+        assert_eq!(values(&suggest("/summary --map lo", &c)), ["Lotus"]);
+        assert_eq!(values(&suggest("/export --match b", &c)), ["bbbb2222-0000"]);
+        assert_eq!(values(&suggest("/export --m", &c)), ["--match", "--me"]);
         // Used flags drop out; values of other flags get nothing.
         assert_eq!(values(&suggest("/scan --keep-raw ", &c)), ["--retry-failed"]);
         assert!(suggest("/trends --last ", &c).items.is_empty());
-        assert!(suggest("/packet --out C:/x", &c).items.is_empty());
+        assert!(suggest("/export --out C:/x", &c).items.is_empty());
         assert!(suggest("/nope ", &c).items.is_empty());
     }
 
@@ -474,20 +531,20 @@ mod tests {
             ed.handle(key(KeyCode::Enter), &c),
             Action::Submit("/trends --last 10".into())
         );
-        typed(&mut ed, &c, "/packet ");
-        assert_eq!(ed.handle(key(KeyCode::Enter), &c), Action::Submit("/packet".into()));
+        typed(&mut ed, &c, "/export ");
+        assert_eq!(ed.handle(key(KeyCode::Enter), &c), Action::Submit("/export".into()));
     }
 
     #[test]
     fn tab_completes() {
         let c = ctx();
         let mut ed = Editor::new(vec![]);
-        typed(&mut ed, &c, "/pa");
+        typed(&mut ed, &c, "/exp");
         ed.handle(key(KeyCode::Tab), &c);
-        assert_eq!(ed.line(), "/packet ");
+        assert_eq!(ed.line(), "/export ");
         ed.handle(key(KeyCode::Down), &c);
         ed.handle(key(KeyCode::Tab), &c);
-        assert_eq!(ed.line(), "/packet --match bbbb2222-0000 ");
+        assert_eq!(ed.line(), "/export --match bbbb2222-0000 ");
         // Right arrow at the end takes the grey hint.
         let mut ed = Editor::new(vec![]);
         typed(&mut ed, &c, "/tre");

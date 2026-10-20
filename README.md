@@ -2,7 +2,7 @@
 
 ![](https://img.shields.io/badge/Windows-x64-blue?style=flat-square) ![](https://img.shields.io/badge/vrfkit-v0.3.0-blueviolet?style=flat-square) [![](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 
-valreview reads your own Valorant replays and writes facts about your deaths, gunfights, positioning, utility, economy and rounds in a form an AI can review. It tracks trends across matches and points out death spots that keep repeating. It runs locally, for personal use, and never touches the game or the Riot client.
+valreview reads your own Valorant replays and shows you how each match went: your stats against the rest of the lobby, what to work on (with the rounds behind each point), every round and death, and where you died on the map. It tracks trends across matches, and it can export a match as facts for an AI to review. It runs locally, for personal use, and never touches the game or the Riot client.
 
 Replays are decoded by [vrfkit](https://github.com/yakisoba0728/vrfkit), which the installer sets up for you.
 
@@ -28,13 +28,38 @@ Type `/` to see the commands, or `/help` for an overview, every command and the 
 
 | Command | Does |
 | --- | --- |
-| `/packet` | Writes `packet.md`, `deaths.jsonl` and `rounds.jsonl` for a match (newest by default) for an AI to review |
+| `/review` | Opens a match (newest by default): Overview, Work on, Rounds, Deaths and Map tabs |
+| `/summary` | Sums up all your matches on one map (`--map Pearl`, default the newest match's map): what keeps repeating |
+| `/export` | Writes the same match as `packet.md`, `deaths.jsonl` and `rounds.jsonl` for an AI to review |
 | `/trends` | Compares your last 20 matches with the 20 before and lists repeated death spots |
 | `/matches` | Lists stored matches |
 | `/scan` | Processes the replay folder now (`--retry-failed` tries failed replays again) |
 | `/status` | Checks vrfkit, the catalog, the database and the replay folder |
 
-Each one also works as a plain command, for example `valreview packet --match <id>`. Add `--help` to any of them for its flags. `valreview sync` and `valreview update` also still work by hand, although the shell runs them for you.
+Each one also works as a plain command, for example `valreview export --match <id>`. Add `--help` to any of them for its flags. Outside the shell, `valreview review` and `valreview summary` print their Overview and Work on tabs as text. `valreview sync` and `valreview update` also still work by hand, although the shell runs them for you.
+
+### Reviewing a match
+
+`/review` compares you with the other nine players, using the stored review of everyone in the match:
+
+- **Overview** ranks your damage per round, K/D, headshots, KST (kill, survived or traded), first kills and first deaths against the lobby. It also shows the scoreboard, what went well, and your top three things to work on.
+- **Work on** ranks what stood out, each with its evidence. Examples are a spot where you keep dying, an enemy who won most of your fights, deaths with your ult ready, deaths without hitting your killer, weapons or ranges where you lose, and fighting on with a rifle when the round is lost. Enter jumps to the rounds involved.
+- **Rounds** has one line per round (side, result, buy, kills, damage, how you died) and the detail for the selected round.
+- **Deaths** lists every death with the full picture: the fight, your aim, what you held, who was near, whether you were traded.
+- **Map** draws the minimap in the terminal with your deaths, the sites and repeated spots. ↑↓ steps through the deaths.
+
+### Summing up a map
+
+`/summary` looks across every match you have on one map, because a mistake that repeats is a habit rather than a bad game. Each finding says in how many of the matches it shows up, for example "You die at A Hut in 4 of 5 matches", and lists the evidence match by match. It uses the same panel as `/review`, with these differences:
+
+- **Overview** totals your rounds won (attack and defense), damage, headshots, first kills and first deaths against the lobbies you played in, and lists every match.
+- **Work on** has the cross-match findings: death spots that repeat across matches, enemy agents that beat you whoever plays them, ult-ready deaths, deaths without hitting your killer, headshots below the lobby, a side or a site that keeps losing (for example retakes on B), and late first fights.
+- **Matches** lists each match. Enter opens its full `/review`, and Esc comes back to the summary.
+- **Deaths** and **Map** show every death on that map across the matches.
+
+Patterns need a few matches to mean anything. With fewer than 3 on a map, the summary says so and points you to `/review`.
+
+Rounds count from 1 here, as in the game. The packet counts from 0. Findings describe what the replay measured; the packet's caveats (for example a less-verified game build) apply to them too.
 
 ## Updates
 

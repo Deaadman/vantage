@@ -625,7 +625,8 @@ fn welch_t(a: &Window, b: &Window) -> Option<f64> {
 }
 
 /// Death spots that repeat across matches on the same map.
-fn spots_across_matches(reviews: &[MatchReview]) -> Vec<SpotAcrossMatches> {
+/// Death spots (leader clusters per map) that span 2+ matches.
+pub fn spots_across_matches(reviews: &[MatchReview]) -> Vec<SpotAcrossMatches> {
     let mut by_map: BTreeMap<String, Vec<(&MatchReview, &crate::deaths::DeathFact)>> = BTreeMap::new();
     for r in reviews {
         for d in &r.death_facts {
@@ -742,7 +743,7 @@ impl TrendReport {
              \"not enough data\", not a pattern. `score` is a two-proportion z (rates) or\n\
              Welch's t over per-match values (per round); `consistency` is the share of the\n\
              recent matches on the same side of the previous value as the change. Evidence\n\
-             is match ids (first 8 characters) and round numbers; `valreview packet --match`\n\
+             is match ids (first 8 characters) and round numbers; `valreview export --match`\n\
              shows any of them. The caveats in each packet apply here too. What a change\n\
              means is for you to judge."
         );

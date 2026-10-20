@@ -30,6 +30,7 @@ use crate::Cli;
 use crate::editor::{Action, CommandInfo, Context, Editor, FlagInfo, MatchInfo};
 use crate::help::{HelpAction, HelpPanel};
 use crate::out::{self, Kind};
+use crate::review_view::{ReviewAction, ReviewPanel};
 
 const PROMPT: &str = "❯ ";
 const MENU_ROWS: usize = 8;
@@ -43,10 +44,10 @@ const SYNC_AFTER_DAYS: i64 = 1;
 const SPINNER: [&str; 6] = ["·", "✢", "✳", "✶", "✻", "✽"];
 
 /// Valorant red: the logo and problems.
-const RED: Color = Color::Rgb { r: 255, g: 70, b: 85 };
+pub(crate) const RED: Color = Color::Rgb { r: 255, g: 70, b: 85 };
 /// The highlighted menu row and command names.
 pub(crate) const ACCENT: Color = Color::Rgb { r: 177, g: 185, b: 249 };
-const YELLOW: Color = Color::Rgb { r: 255, g: 193, b: 7 };
+pub(crate) const YELLOW: Color = Color::Rgb { r: 255, g: 193, b: 7 };
 pub(crate) const GREY: Color = Color::Rgb { r: 140, g: 140, b: 140 };
 const RULE: Color = Color::Rgb { r: 110, g: 110, b: 110 };
 pub(crate) const BRIGHT: Color = Color::Rgb { r: 240, g: 240, b: 240 };
@@ -147,6 +148,10 @@ enum Flow {
     Continue,
     Clear,
     Exit,
+    /// Open the review panel on this match.
+    Review(Box<crate::ReviewData>),
+    /// Open the review panel on a map's summary.
+    Summary(Box<crate::SummaryData>),
 }
 
 enum Item {
@@ -185,6 +190,10 @@ struct App {
     watch: Watch,
     /// The `/help` panel, drawn in place of the input while open.
     help: Option<HelpPanel>,
+    /// The `/review` panel, drawn over the whole screen while open.
+    review: Option<ReviewPanel>,
+    /// Panels a review was opened from (a summary), reopened by Esc.
+    review_back: Vec<ReviewPanel>,
 }
 
 /// The replay folder as of the last scan, and what has changed since.
@@ -237,6 +246,8 @@ impl App {
                 pending: HashMap::new(),
             },
             help: None,
+            review: None,
+            review_back: vec![],
         };
         app.clear();
         app.refresh();
@@ -335,6 +346,8 @@ impl App {
                     Ok(Flow::Exit) => return Ok(()),
                     Ok(Flow::Clear) => self.clear(),
                     Ok(Flow::Continue) => {}
+                    Ok(Flow::Review(data)) => self.review = Some(ReviewPanel::new(*data)),
+                    Ok(Flow::Summary(data)) => self.review = Some(ReviewPanel::summary(*data)),
                     Err(_) => self.transcript.push(Item::Line(
                         Kind::Error,
                         "internal error: the command crashed (please report)".into(),
@@ -373,6 +386,30 @@ impl App {
 
     /// Handle one key. False to quit.
     fn key(&mut self, key: KeyEvent) -> bool {
+        if let Some(panel) = &mut self.review {
+            match panel.key(key) {
+                ReviewAction::None => {}
+                ReviewAction::Close => self.review = self.review_back.pop(),
+                // A match from a summary: open it, and come back on Esc.
+                ReviewAction::Open(id) if self.job.is_none() => {
+                    if let Some(current) = self.review.take() {
+                        self.review_back.push(current);
+                    }
+                    let dir = self.data_dir.clone();
+                    self.start("Opening the match", false, move || {
+                        match crate::load_review(&dir, Some(id), None) {
+                            Ok(data) => Flow::Review(Box::new(data)),
+                            Err(e) => {
+                                out::emit(Kind::Error, format!("error: {e:#}"));
+                                Flow::Continue
+                            }
+                        }
+                    });
+                }
+                ReviewAction::Open(_) => {}
+            }
+            return true;
+        }
         if let Some(panel) = &mut self.help {
             match panel.key(key, &self.ctx.commands) {
                 HelpAction::None => {}
@@ -433,6 +470,10 @@ impl App {
         let (w, h) = terminal::size().map(|(w, h)| (w as usize, h as usize))?;
         let (w, h) = (w.max(20), h.max(8));
 
+        if let Some(panel) = &mut self.review {
+            let rows = panel.rows(w, h);
+            return self.paint(out, w, h, &rows, None);
+        }
         if let Some(panel) = &mut self.help {
             let panel_h = (h * 4 / 5).max(14).min(h);
             let bottom = panel.rows(&self.ctx.commands, w, panel_h);
@@ -550,7 +591,7 @@ impl App {
             Some(if self.ctx.matches.is_empty() {
                 "Try \"/status\"".to_owned()
             } else {
-                "Try \"/packet\" to review your newest match".to_owned()
+                "Try \"/review\" to see how your newest match went".to_owned()
             })
         } else {
             self.editor.ghost(&self.ctx)
@@ -919,7 +960,7 @@ fn recent(matches: &[MatchInfo]) {
     if matches.len() > RECENT_MATCHES {
         dim(&format!("  …and {} more (/matches)", matches.len() - RECENT_MATCHES));
     }
-    dim("/packet reviews the newest; /packet <space> picks another");
+    dim("/review shows how the newest went; /review --match <id> picks another");
 }
 
 fn dim(s: &str) {
@@ -969,13 +1010,16 @@ fn matches(data_dir: &Path) -> Vec<MatchInfo> {
         return vec![];
     };
     rows.into_iter()
-        .map(|(id, played, map)| MatchInfo {
-            id,
-            label: format!(
-                "{}  {}",
-                played.as_deref().map(short_time).unwrap_or_else(|| "?".into()),
-                map.as_deref().map(short_map).unwrap_or("?")
-            ),
+        .map(|(id, played, map)| {
+            let map = map.as_deref().map(short_map).unwrap_or("?").to_owned();
+            MatchInfo {
+                id,
+                label: format!(
+                    "{}  {map}",
+                    played.as_deref().map(short_time).unwrap_or_else(|| "?".into())
+                ),
+                map,
+            }
         })
         .collect()
 }
@@ -1016,6 +1060,25 @@ fn execute_line(line: &str, data_dir: &Path) -> Flow {
         return Flow::Continue;
     };
     let dir = cli.data_dir.unwrap_or_else(|| data_dir.to_path_buf());
+    // In the shell, a review opens the panel instead of printing.
+    if let crate::Command::Summary { map, me } = command {
+        return match crate::load_summary(&dir, map, me) {
+            Ok(data) => Flow::Summary(Box::new(data)),
+            Err(e) => {
+                out::emit(Kind::Error, format!("error: {e:#}"));
+                Flow::Continue
+            }
+        };
+    }
+    if let crate::Command::Review { match_id, me } = command {
+        return match crate::load_review(&dir, match_id, me) {
+            Ok(data) => Flow::Review(Box::new(data)),
+            Err(e) => {
+                out::emit(Kind::Error, format!("error: {e:#}"));
+                Flow::Continue
+            }
+        };
+    }
     if let Err(e) = crate::run_command(&dir, command) {
         out::emit(Kind::Error, format!("error: {e:#}"));
     }
@@ -1084,7 +1147,7 @@ mod tests {
 
     #[test]
     fn words() {
-        assert_eq!(split_words("/packet  --match ab"), ["/packet", "--match", "ab"]);
+        assert_eq!(split_words("/export  --match ab"), ["/export", "--match", "ab"]);
         assert_eq!(
             split_words(r#"/init --vrfkit "C:\Program Files\vrfkit.exe""#),
             ["/init", "--vrfkit", r"C:\Program Files\vrfkit.exe"]
@@ -1101,7 +1164,7 @@ mod tests {
         let cmds = commands();
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
         for n in [
-            "scan", "packet", "matches", "trends", "status", "init", "players", "help", "exit",
+            "scan", "export", "matches", "trends", "status", "init", "players", "help", "exit",
         ] {
             assert!(names.contains(&n), "{n}");
         }
@@ -1110,8 +1173,8 @@ mod tests {
             assert!(!names.contains(&n), "{n}");
         }
         assert!(cmds.iter().all(|c| !c.about.is_empty()));
-        let packet = cmds.iter().find(|c| c.name == "packet").unwrap();
-        let m = packet.flags.iter().find(|f| f.long == "--match").unwrap();
+        let export = cmds.iter().find(|c| c.name == "export").unwrap();
+        let m = export.flags.iter().find(|f| f.long == "--match").unwrap();
         assert!(m.value.is_some() && !m.help.is_empty());
         let scan = cmds.iter().find(|c| c.name == "scan").unwrap();
         assert!(scan.flags.iter().any(|f| f.long == "--keep-raw" && f.value.is_none()));
