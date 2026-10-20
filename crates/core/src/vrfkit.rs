@@ -49,7 +49,7 @@ impl Vrfkit {
         };
         if !path.is_file() {
             bail!(
-                "vrfkit not found at {}; fix it with `vantage init --vrfkit <path>`",
+                "vrfkit not found at {}; fix vrfkit in config.toml, or remove it to use the one `vantage update` installs",
                 path.display()
             );
         }

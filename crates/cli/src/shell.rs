@@ -1110,11 +1110,11 @@ fn notices(data_dir: &Path, update: bool) -> Vec<(Color, String)> {
         let patch = v.splitn(3, '.').take(2).collect::<Vec<_>>().join(".");
         out.push((
             YELLOW,
-            format!("Can't read VALORANT {patch} replays yet · waiting on an update"),
+            format!("VALORANT v{patch} isn't supported · wait for an update"),
         ));
     }
     if !cfg.demos_dir().is_some_and(|d| d.is_dir()) {
-        out.push((YELLOW, "No replays yet · download a match in the client".to_owned()));
+        out.push((YELLOW, "No replays found".to_owned()));
     }
     out
 }
@@ -1483,13 +1483,13 @@ mod tests {
         let msgs = || {
             vec![
                 (ACCENT, "Update available! Restart to apply".to_owned()),
-                (YELLOW, "No replays yet · download a match in the client".to_owned()),
+                (YELLOW, "No replays found".to_owned()),
             ]
             .into_iter()
         };
         let wide = text(&status_right(Row::new(), msgs(), 140));
         assert!(wide.contains("Restart to apply") && wide.contains("No replays"));
-        let narrow = text(&status_right(Row::new(), msgs(), 60));
+        let narrow = text(&status_right(Row::new(), msgs(), 45));
         assert!(narrow.contains("Restart to apply") && !narrow.contains("No replays"));
     }
 
