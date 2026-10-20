@@ -16,12 +16,17 @@ pub enum Kind {
     Dim,
     /// Section titles.
     Bold,
+    /// Something that worked, in green.
+    Good,
 }
 
-static SINK: Mutex<Option<Sender<(Kind, String)>>> = Mutex::new(None);
+/// One transcript line: pieces in their own styles.
+pub type Line = Vec<(Kind, String)>;
+
+static SINK: Mutex<Option<Sender<Line>>> = Mutex::new(None);
 
 /// Send output to `tx` instead of the terminal; `None` restores the terminal.
-pub fn capture(tx: Option<Sender<(Kind, String)>>) {
+pub fn capture(tx: Option<Sender<Line>>) {
     if let Ok(mut sink) = SINK.lock() {
         *sink = tx;
     }
@@ -32,12 +37,28 @@ pub fn emit(kind: Kind, text: String) {
     match sink {
         Some(tx) => {
             for line in text.split('\n') {
-                let _ = tx.send((kind, line.trim_end_matches('\r').to_owned()));
+                let _ = tx.send(vec![(kind, line.trim_end_matches('\r').to_owned())]);
             }
         }
-        None if kind == Kind::Out || kind == Kind::Dim || kind == Kind::Bold => println!("{text}"),
+        None if matches!(kind, Kind::Out | Kind::Dim | Kind::Bold | Kind::Good) => println!("{text}"),
         None => eprintln!("{text}"),
     }
+}
+
+/// One line built from styled pieces; plain text on stdout outside the shell.
+pub fn row(pieces: Line) {
+    let sink = SINK.lock().ok().and_then(|s| s.clone());
+    match sink {
+        Some(tx) => {
+            let _ = tx.send(pieces);
+        }
+        None => println!("{}", pieces.into_iter().map(|(_, t)| t).collect::<String>()),
+    }
+}
+
+/// Output is going to the shell's transcript.
+pub fn in_shell() -> bool {
+    SINK.lock().is_ok_and(|s| s.is_some())
 }
 
 /// `println!`, or a transcript line in the shell.

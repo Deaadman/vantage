@@ -35,7 +35,6 @@ use crate::review_view::{ReviewAction, ReviewPanel};
 const PROMPT: &str = "❯ ";
 const MENU_ROWS: usize = 8;
 const HISTORY_LINES: usize = 500;
-const RECENT_MATCHES: usize = 5;
 const TICK: Duration = Duration::from_millis(80);
 /// How often the replay folder is checked for new downloads.
 const WATCH_EVERY: Duration = Duration::from_secs(3);
@@ -91,11 +90,18 @@ pub fn run(data_dir: &Path) -> Result<()> {
                 }
             });
         }
-        let dir = data_dir.to_path_buf();
-        app.start("Scanning replays", true, move || {
-            launch(&dir);
-            Flow::Continue
-        });
+        if paths::catalog_path(data_dir).is_file() {
+            app.start_launch();
+        } else {
+            // First run: names for agents, maps and weapons before anything else.
+            let path = paths::catalog_path(data_dir);
+            app.start("Fetching VALORANT data", false, move || {
+                if let Err(e) = fetch_catalog(&path) {
+                    errln!("Couldn't fetch VALORANT data, so built-in names are used: {e:#}");
+                }
+                Flow::Launch
+            });
+        }
         app.event_loop()
     });
     out::capture(None);
@@ -146,6 +152,8 @@ fn console_title() -> Option<String> {
 
 enum Flow {
     Continue,
+    /// Start the launch scan (after the first-run fetch).
+    Launch,
     Clear,
     Exit,
     /// Open the review panel on this match.
@@ -161,6 +169,8 @@ enum Item {
         folder: String,
     },
     Line(Kind, String),
+    /// A line of pieces in their own styles; never wrapped.
+    Row(out::Line),
     /// A line the user sent.
     Echo(String),
 }
@@ -179,7 +189,7 @@ struct App {
     transcript: Vec<Item>,
     /// Rows scrolled up from the newest output.
     scroll: usize,
-    rx: Receiver<(Kind, String)>,
+    rx: Receiver<out::Line>,
     job: Option<Job>,
     notices: Vec<(Color, String)>,
     /// What the background update check found, shown before the notices.
@@ -221,7 +231,7 @@ fn is_help(line: &str) -> bool {
 }
 
 impl App {
-    fn new(data_dir: &Path, rx: Receiver<(Kind, String)>) -> Self {
+    fn new(data_dir: &Path, rx: Receiver<out::Line>) -> Self {
         let history_path = data_dir.join("history.txt");
         let mut app = App {
             data_dir: data_dir.to_path_buf(),
@@ -293,6 +303,15 @@ impl App {
         });
     }
 
+    /// The launch scan: scan and set `me`.
+    fn start_launch(&mut self) {
+        let dir = self.data_dir.clone();
+        self.start("Scanning replays", true, move || {
+            launch(&dir);
+            Flow::Continue
+        });
+    }
+
     /// Scan replays that appeared or changed since the last scan, once their
     /// size holds still for a poll (a download in progress keeps growing).
     fn poll_replays(&mut self) {
@@ -321,8 +340,14 @@ impl App {
 
     fn drain(&mut self) -> bool {
         let mut any = false;
-        while let Ok((kind, text)) = self.rx.try_recv() {
-            self.transcript.push(Item::Line(kind, text));
+        while let Ok(mut line) = self.rx.try_recv() {
+            self.transcript.push(match line.len() {
+                1 => {
+                    let (kind, text) = line.remove(0);
+                    Item::Line(kind, text)
+                }
+                _ => Item::Row(line),
+            });
             self.scroll = 0;
             any = true;
         }
@@ -346,6 +371,7 @@ impl App {
                     Ok(Flow::Exit) => return Ok(()),
                     Ok(Flow::Clear) => self.clear(),
                     Ok(Flow::Continue) => {}
+                    Ok(Flow::Launch) => self.start_launch(),
                     Ok(Flow::Review(data)) => self.review = Some(ReviewPanel::new(*data)),
                     Ok(Flow::Summary(data)) => self.review = Some(ReviewPanel::summary(*data)),
                     Err(_) => self.transcript.push(Item::Line(
@@ -667,7 +693,7 @@ fn transcript_rows(items: &[Item], w: usize) -> Vec<Row> {
                 rows.push(vec![]);
                 let text: [Row; 3] = [
                     vec![
-                        (Style::default().bold(), "valreview".into()),
+                        (Style::default().bold(), "Val Review".into()),
                         (Style::fg(GREY), format!(" v{}", env!("CARGO_PKG_VERSION"))),
                     ],
                     vec![(Style::fg(GREY), setup.clone())],
@@ -681,16 +707,14 @@ fn transcript_rows(items: &[Item], w: usize) -> Vec<Row> {
                 rows.push(vec![]);
             }
             Item::Line(kind, text) => {
-                let style = match kind {
-                    Kind::Out => Style::default(),
-                    Kind::Warn => Style::fg(YELLOW),
-                    Kind::Error => Style::fg(RED),
-                    Kind::Dim => Style::fg(GREY),
-                    Kind::Bold => Style::default().bold(),
-                };
                 for piece in wrap(text, text_w) {
-                    rows.push(vec![(style, format!(" {piece}"))]);
+                    rows.push(vec![(kind_style(*kind), format!(" {piece}"))]);
                 }
+            }
+            Item::Row(pieces) => {
+                let mut row: Row = vec![(Style::default(), " ".into())];
+                row.extend(pieces.iter().map(|(kind, text)| (kind_style(*kind), text.clone())));
+                rows.push(row);
             }
             Item::Echo(text) => {
                 rows.push(vec![]);
@@ -711,6 +735,17 @@ fn transcript_rows(items: &[Item], w: usize) -> Vec<Row> {
         }
     }
     rows
+}
+
+fn kind_style(kind: Kind) -> Style {
+    match kind {
+        Kind::Out => Style::default(),
+        Kind::Warn => Style::fg(YELLOW),
+        Kind::Error => Style::fg(RED),
+        Kind::Dim => Style::fg(GREY),
+        Kind::Bold => Style::default().bold(),
+        Kind::Good => Style::fg(crate::review_view::GREEN),
+    }
 }
 
 /// Wrap at spaces into rows of at most `w` chars, breaking a longer word
@@ -811,7 +846,7 @@ fn highlight(text: &str, query: &str, words: bool, base: Style) -> Row {
     row
 }
 
-/// Beside the logo: vrfkit and game build, then the replay folder.
+/// Beside the logo: the game build and vrfkit, then the replay folder.
 fn header_text(data_dir: &Path) -> (String, String) {
     let cfg = Config::load(data_dir).unwrap_or_default();
     let vrfkit = Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref())
@@ -820,13 +855,13 @@ fn header_text(data_dir: &Path) -> (String, String) {
         .ok()
         .and_then(|c| c.game_version)
         .map_or_else(
-            || "no catalog yet".to_owned(),
-            |v| format!("game {}", v.splitn(3, '.').take(2).collect::<Vec<_>>().join(".")),
+            || "VALORANT version unknown".to_owned(),
+            |v| format!("VALORANT v{}", v.splitn(3, '.').take(2).collect::<Vec<_>>().join(".")),
         );
     let folder = cfg
         .demos_dir()
         .map_or_else(|| "no replay folder set".to_owned(), |d| d.display().to_string());
-    (format!("{vrfkit} · {game}"), folder)
+    (format!("{game} · {vrfkit}"), folder)
 }
 
 /// Setup problems and updates, for the right of the status line.
@@ -852,16 +887,14 @@ fn notices(data_dir: &Path) -> Vec<(Color, String)> {
     out
 }
 
-/// On launch: fetch the catalog if there is none, scan, set `me`, list recent matches.
+/// The agent, map and weapon names from valorant-api.com, saved to `path`.
+fn fetch_catalog(path: &Path) -> Result<()> {
+    valreview_core::catalog::fetch()?.save(path)
+}
+
+/// On launch: scan and set `me`.
 fn launch(data_dir: &Path) {
     let cfg = Config::load(data_dir).unwrap_or_default();
-    if !paths::catalog_path(data_dir).is_file() {
-        dim("Fetching agent, map and weapon names from valorant-api.com (first run only)");
-        if let Err(e) = crate::run_command(data_dir, crate::Command::Sync) {
-            errln!("sync failed, using built-in names: {e:#}");
-        }
-        outln!();
-    }
     if let Err(e) = Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()) {
         outln!("Not set up yet: {e:#}");
         dim("Run /update to install it (or /init --vrfkit <path> for your own copy), then /scan.");
@@ -882,7 +915,6 @@ fn launch(data_dir: &Path) {
         }
         None => dim("No replay folder set: /init --demos-dir <folder>"),
     }
-    recent(&matches(data_dir));
 }
 
 /// In the background on launch: install a newer release (it applies on the
@@ -946,21 +978,6 @@ fn detect_me(data_dir: &Path) {
             subjects[0]
         );
     }
-}
-
-fn recent(matches: &[MatchInfo]) {
-    if matches.is_empty() {
-        return;
-    }
-    outln!();
-    out::emit(Kind::Bold, "Recent matches".into());
-    for m in matches.iter().take(RECENT_MATCHES) {
-        outln!("  {}  {}", &m.id[..m.id.len().min(8)], m.label);
-    }
-    if matches.len() > RECENT_MATCHES {
-        dim(&format!("  …and {} more (/matches)", matches.len() - RECENT_MATCHES));
-    }
-    dim("/review shows how the newest went; /review --match <id> picks another");
 }
 
 fn dim(s: &str) {
@@ -1192,13 +1209,13 @@ mod tests {
         assert_eq!(rows.iter().map(text).collect::<Vec<_>>(), [" abcdefghij", " klmn"]);
         let rows = transcript_rows(
             &[Item::Header {
-                setup: "vrfkit v0.3.0 · game 13.08".into(),
+                setup: "VALORANT v13.08 · vrfkit v0.3.0".into(),
                 folder: "C:\\Demos".into(),
             }],
             80,
         );
         assert_eq!(rows.len(), 5);
-        assert!(text(&rows[1]).contains("valreview v"));
+        assert!(text(&rows[1]).contains("Val Review v"));
     }
 
     #[test]

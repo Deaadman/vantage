@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
+use out::Kind;
 use valreview_core::builds::{BuildSupport, check_build, check_game_version};
 use valreview_core::catalog::{self, CatalogSource};
 use valreview_core::config::Config;
@@ -32,7 +33,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
     name = "valreview",
     version,
     about = "Facts about your own Valorant replays, for review",
-    after_help = "Run without a command for the interactive shell: it scans, lists recent matches and takes /commands."
+    after_help = "Run without a command for the interactive shell: it scans your replays and takes /commands."
 )]
 struct Cli {
     /// Where catalog.json and later the database live
@@ -411,42 +412,79 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
         keep_raw,
         retry_failed,
     };
-    outln!("scanning {} with vrfkit {}", opts.demos_dir.display(), vrfkit.version);
+    let results = scan(&mut store, &vrfkit, &catalog, &opts, |_| {})?;
 
-    let results = scan(&mut store, &vrfkit, &catalog, &opts, |f| match &f.outcome {
-        Outcome::Stored {
-            match_id,
-            map,
-            warnings,
-        } => {
-            outln!("  stored  {} -> {match_id} ({map})", f.file);
-            for w in warnings {
-                outln!("          warning: {w}");
-            }
-        }
-        Outcome::Failed { error } => outln!("  FAILED  {}: {error}", f.file),
-        Outcome::Unsupported { reason } => outln!("  skipped {}: {reason}", f.file),
-        Outcome::Duplicate { match_id } => outln!("  dup     {} (same match as stored {match_id})", f.file),
-        Outcome::AlreadyStored | Outcome::PreviouslyFailed { .. } | Outcome::PreviouslyUnsupported { .. } => {}
-    })?;
-
+    // One summary line, then only what needs attention.
     let count = |pred: fn(&Outcome) -> bool| results.iter().filter(|r| pred(&r.outcome)).count();
     let stored = count(|o| matches!(o, Outcome::Stored { .. }));
-    let failed = count(|o| matches!(o, Outcome::Failed { .. }));
     let seen = count(|o| matches!(o, Outcome::AlreadyStored | Outcome::Duplicate { .. }));
     let old_failed = count(|o| matches!(o, Outcome::PreviouslyFailed { .. }));
     let unsupported = count(|o| matches!(o, Outcome::Unsupported { .. } | Outcome::PreviouslyUnsupported { .. }));
-    outln!(
-        "{} replays: {stored} new, {seen} already done, {failed} failed, {unsupported} on a build this vrfkit cannot read",
-        results.len()
-    );
-    if old_failed > 0 {
-        outln!("{old_failed} skipped because they failed before (--retry-failed to try again)");
+    let n = results.len();
+    out::row(vec![
+        (
+            Kind::Bold,
+            format!("Scanned {n} replay{}", if n == 1 { "" } else { "s" }),
+        ),
+        (Kind::Dim, format!("  {stored} new · {seen} already done")),
+    ]);
+    for f in &results {
+        match &f.outcome {
+            Outcome::Stored {
+                match_id,
+                map,
+                warnings,
+            } => {
+                out::row(vec![
+                    (Kind::Good, "  + ".into()),
+                    (Kind::Out, map.clone()),
+                    (
+                        Kind::Dim,
+                        format!("  {} · {}", &match_id[..match_id.len().min(8)], f.file),
+                    ),
+                ]);
+                for w in warnings {
+                    out::emit(Kind::Dim, format!("      warning: {w}"));
+                }
+            }
+            Outcome::Failed { error } => {
+                out::row(vec![
+                    (Kind::Error, "  ✕ ".into()),
+                    (Kind::Out, f.file.clone()),
+                    (Kind::Dim, "  failed".into()),
+                ]);
+                out::emit(Kind::Dim, format!("      {error}"));
+            }
+            _ => {}
+        }
     }
     if unsupported > 0 {
-        outln!(
-            "run `valreview update` once a valreview release supports newer builds to read the {unsupported} replay(s); they are retried automatically after an update"
-        );
+        out::row(vec![
+            (Kind::Warn, "  ! ".into()),
+            (
+                Kind::Out,
+                format!("{unsupported} on a game build vrfkit can't read yet"),
+            ),
+            (Kind::Dim, " · tried again after an update".into()),
+        ]);
+    }
+    if old_failed > 0 {
+        let retry = if out::in_shell() {
+            "/scan --retry-failed"
+        } else {
+            "valreview scan --retry-failed"
+        };
+        out::row(vec![
+            (Kind::Warn, "  ! ".into()),
+            (
+                Kind::Out,
+                format!(
+                    "{old_failed} skipped, {} failed before",
+                    if old_failed == 1 { "it" } else { "they" }
+                ),
+            ),
+            (Kind::Dim, format!(" · {retry} tries again")),
+        ]);
     }
     if tip
         && cfg.me.is_none()

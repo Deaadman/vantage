@@ -22,7 +22,7 @@ Replays are decoded by [vrfkit](https://github.com/yakisoba0728/vrfkit), which t
 
 2. Download your replays in the Valorant client, open a new terminal and run `valreview`.
 
-The interactive shell looks after itself. When it opens, it scans your replay folder, works out which account is yours and lists your recent matches. It then keeps watching the folder, so a replay you download while it's open is processed as soon as the download finishes. Agent, map and weapon names are refreshed from valorant-api.com once a day, and valreview updates itself (see below).
+The interactive shell looks after itself. When it opens, it scans your replay folder, and works out which account is yours. It then keeps watching the folder, so a replay you download while it's open is processed as soon as the download finishes. Agent, map and weapon names are refreshed from valorant-api.com once a day, and valreview updates itself (see below).
 
 Type `/` to see the commands, or `/help` for an overview, every command and the keyboard shortcuts:
 
