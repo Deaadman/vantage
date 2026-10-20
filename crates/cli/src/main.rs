@@ -8,6 +8,7 @@ mod panel;
 #[cfg(test)]
 mod render_tests;
 mod review_view;
+mod session_log;
 mod settings;
 mod shell;
 
@@ -118,14 +119,32 @@ enum Command {
 }
 
 fn main() {
-    if let Err(e) = run(Cli::parse()) {
-        errln!("error: {e:#}");
-        std::process::exit(1);
+    session_log::install_panic_hook();
+    let cli = Cli::parse();
+    // Caught so a crash in the shell is reported after the terminal is restored.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(cli))) {
+        Ok(Ok(())) => session_log::write("INFO", "exited"),
+        Ok(Err(e)) => {
+            out::emit(Kind::Error, format!("error: {e:#}"));
+            std::process::exit(1);
+        }
+        Err(_) => {
+            match session_log::path() {
+                Some(p) => eprintln!(
+                    "{APP_NAME} crashed. Please send this file with your bug report:
+  {}",
+                    p.display()
+                ),
+                None => eprintln!("{APP_NAME} crashed."),
+            }
+            std::process::exit(101);
+        }
     }
 }
 
 fn run(cli: Cli) -> Result<()> {
     let data_dir = paths::data_dir(cli.data_dir.as_deref())?;
+    session_log::start(&data_dir, cli.command.as_ref().map_or("shell", Command::name));
     match cli.command {
         Some(command) => {
             if !matches!(
@@ -140,6 +159,25 @@ fn run(cli: Cli) -> Result<()> {
         None => {
             Cli::command().print_help()?;
             Ok(())
+        }
+    }
+}
+
+impl Command {
+    /// For the session log, which never records arguments.
+    fn name(&self) -> &'static str {
+        match self {
+            Command::Review { .. } => "review",
+            Command::Plan { .. } => "plan",
+            Command::Habits => "habits",
+            Command::Focus { .. } => "focus",
+            Command::Rank => "rank",
+            Command::Matches { .. } => "matches",
+            Command::Scan { .. } => "scan",
+            Command::Settings => "settings",
+            Command::Sync => "sync",
+            Command::Update => "update",
+            Command::Install { .. } => "install",
         }
     }
 }
@@ -221,6 +259,7 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
         retry_failed,
     };
     let results = scan(&mut store, &vrfkit, &catalog, &opts, |_| {})?;
+    log_scan(&results);
 
     // One summary line, then only what needs attention.
     let count = |pred: fn(&Outcome) -> bool| results.iter().filter(|r| pred(&r.outcome)).count();
@@ -274,6 +313,29 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
         ]);
     }
     Ok(ids)
+}
+
+/// What went wrong with each replay, for the session log: the screen only counts them.
+fn log_scan(results: &[vantage_core::scan::FileOutcome]) {
+    for f in results {
+        match &f.outcome {
+            Outcome::Failed { error } => session_log::write("WARN", &format!("{} couldn't be read: {error}", f.file)),
+            Outcome::Unsupported { reason } => session_log::write("WARN", &format!("{} unsupported: {reason}", f.file)),
+            Outcome::Stored { warnings, .. } if !warnings.is_empty() => session_log::write(
+                "WARN",
+                &format!(
+                    "{} stored with warnings:
+{}",
+                    f.file,
+                    warnings.join(
+                        "
+"
+                    )
+                ),
+            ),
+            _ => {}
+        }
+    }
 }
 
 fn me_of(cfg: &Config) -> Result<String> {

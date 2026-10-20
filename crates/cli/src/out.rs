@@ -34,7 +34,23 @@ pub fn capture(tx: Option<Sender<Line>>) {
     }
 }
 
+/// Whether output is going to the shell's transcript.
+pub fn captured() -> bool {
+    SINK.lock().is_ok_and(|s| s.is_some())
+}
+
+/// Shows `text`; warnings and errors also go to the session log.
 pub fn emit(kind: Kind, text: String) {
+    match kind {
+        Kind::Warn => crate::session_log::write("WARN", &text),
+        Kind::Error => crate::session_log::write("ERROR", &text),
+        _ => {}
+    }
+    show(kind, text);
+}
+
+/// Shows `text` without logging it (the user's own typing, echoed back).
+pub fn show(kind: Kind, text: String) {
     let sink = SINK.lock().ok().and_then(|s| s.clone());
     match sink {
         Some(tx) => {

@@ -84,6 +84,13 @@ pub fn status_groups(data_dir: &Path) -> StatusGroups {
             ("Replays", replays),
             ("Clips", clip_dir),
             ("Screenshots", vec![piece(Kind::Out, shots)]),
+            (
+                "Logs",
+                vec![piece(
+                    Kind::Out,
+                    crate::session_log::dir(data_dir).display().to_string(),
+                )],
+            ),
         ],
     ]
 }

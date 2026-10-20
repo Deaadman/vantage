@@ -510,7 +510,10 @@ impl App {
                     }
                     Err(_) => self.transcript.push(Item::Line(
                         Kind::Error,
-                        "internal error: the command crashed (please report)".into(),
+                        format!(
+                            "internal error: the command crashed (please report){}",
+                            crate::session_log::hint()
+                        ),
                     )),
                 }
                 self.refresh();
@@ -1337,13 +1340,14 @@ fn execute_line(line: &str, data_dir: &Path) -> Flow {
         Err(e) => {
             // Also how `--help` prints.
             let kind = if e.use_stderr() { Kind::Error } else { Kind::Out };
-            out::emit(kind, e.render().to_string().trim_end().to_owned());
+            out::show(kind, e.render().to_string().trim_end().to_owned());
             return Flow::Continue;
         }
     };
     let Some(command) = cli.command else {
         return Flow::Continue;
     };
+    crate::session_log::write("CMD", command.name());
     let dir = cli.data_dir.unwrap_or_else(|| data_dir.to_path_buf());
     // In the shell, these open a panel instead of printing.
     match command {
