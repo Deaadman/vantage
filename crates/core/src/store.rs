@@ -391,6 +391,29 @@ impl Store {
         Ok(subjects)
     }
 
+    /// Accounts in at least `min` stored matches, most matches first:
+    /// (subject, matches, agents played, most played first).
+    pub fn accounts(&self, min: usize) -> Result<Vec<(String, usize, Vec<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT subject, COUNT(DISTINCT match_id) AS n FROM players
+             GROUP BY subject HAVING n >= ?1 ORDER BY n DESC, subject",
+        )?;
+        let rows = stmt
+            .query_map([min as i64], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut agents = self
+            .conn
+            .prepare("SELECT agent FROM players WHERE subject = ?1 GROUP BY agent ORDER BY COUNT(*) DESC, agent")?;
+        rows.into_iter()
+            .map(|(subject, n)| {
+                let played = agents
+                    .query_map([&subject], |r| r.get(0))?
+                    .collect::<rusqlite::Result<Vec<String>>>()?;
+                Ok((subject, n as usize, played))
+            })
+            .collect()
+    }
+
     /// One player's stored review of one match.
     pub fn review(&self, match_id: &str, subject: &str) -> Result<Option<MatchReview>> {
         let json: Option<String> = self
@@ -483,6 +506,41 @@ mod tests {
         // A different size is a different file.
         assert_eq!(s.file_state("a.vrf", 11).unwrap(), FileState::New);
         assert_eq!(s.subjects_in_every_match().unwrap(), (0, vec![]));
+    }
+
+    #[test]
+    fn accounts_by_matches() {
+        let s = Store::open_in_memory().unwrap();
+        let add = |m: &str, subject: &str, agent: &str| {
+            s.conn
+                .execute(
+                    "INSERT OR IGNORE INTO matches (match_id, source_file, source_size, replay_build, duration_ms,
+                     rounds, vrfkit_version, processed_at, context_json) VALUES (?1, ?1, 1, 'b', 0, 0, 'v', 't', '{}')",
+                    [m],
+                )
+                .unwrap();
+            s.conn
+                .execute(
+                    "INSERT INTO players (match_id, subject, pawn, agent, kills, deaths, reconnects)
+                     VALUES (?1, ?2, 0, ?3, 0, 0, 0)",
+                    [m, subject, agent],
+                )
+                .unwrap();
+        };
+        for (m, agent) in [("m1", "Sova"), ("m2", "Fade"), ("m3", "Sova")] {
+            add(m, "me", agent);
+        }
+        add("m1", "duo", "Jett");
+        add("m2", "duo", "Jett");
+        add("m3", "once", "Omen");
+        let accounts = s.accounts(2).unwrap();
+        assert_eq!(
+            accounts,
+            [
+                ("me".to_owned(), 3, vec!["Sova".to_owned(), "Fade".to_owned()]),
+                ("duo".to_owned(), 2, vec!["Jett".to_owned()]),
+            ]
+        );
     }
 
     #[test]

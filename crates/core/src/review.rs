@@ -723,7 +723,7 @@ fn list(v: &[u32]) -> String {
 }
 
 /// `Vandal ×3, Phantom ×1`, most common first.
-pub(crate) fn tally(it: impl Iterator<Item = String>) -> String {
+pub fn tally(it: impl Iterator<Item = String>) -> String {
     let mut m: BTreeMap<String, usize> = BTreeMap::new();
     for s in it {
         *m.entry(s).or_insert(0) += 1;

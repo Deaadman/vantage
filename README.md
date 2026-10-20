@@ -31,10 +31,10 @@ Type `/` to see the commands, or `/help` for an overview, every command and the 
 | `/review` | Opens a match (newest by default): Overview, Work on, Rounds, Deaths and Map tabs |
 | `/summary` | Sums up all your matches on one map (`--map Pearl`, default the newest match's map): what keeps repeating |
 | `/export` | Writes the same match as `export.md`, `deaths.jsonl` and `rounds.jsonl` for an AI to review |
-| `/trends` | Compares your last 20 matches with the 20 before and lists repeated death spots |
-| `/matches` | Lists stored matches |
+| `/trends` | Charts your damage, K/D, headshots, KST and first deaths across matches, and the death spots that repeat |
+| `/matches` | Lists stored matches by day, newest first |
 | `/scan` | Processes the replay folder now (`--retry-failed` tries failed replays again) |
-| `/status` | Checks vrfkit, the catalog, the database and the replay folder |
+| `/settings` | Shows versions and setup (Status), and changes the replay folder, vrfkit and your account, and turns automatic updates, folder watching and keeping raw exports on or off (Config) |
 
 Each one also works as a plain command, for example `valreview export --match <id>`. Add `--help` to any of them for its flags. Outside the shell, `valreview review` and `valreview summary` print their Overview and Work on tabs as text. `valreview sync` and `valreview update` also still work by hand, although the shell runs them for you.
 
@@ -65,7 +65,7 @@ Rounds count from 1 here, as in the game. The export counts from 0. Findings des
 
 valreview updates itself. Each time you open the shell it checks GitHub for a new release, then downloads and installs it in the background, along with the vrfkit version that release needs. The bottom right shows "Updated to … · Restart to apply". The version you're using keeps working, and the next launch starts the new one.
 
-Run `valreview update` to update straight away. To turn off the background check, set `auto_update = false` in `config.toml` or the environment variable `VALREVIEW_DISABLE_AUTOUPDATER=1`; `valreview update` still works. `valreview status` shows the result of the last check.
+Run `valreview update` to update straight away. To turn off the background check, turn off Automatic updates in `/settings` (it saves `auto_update = false` in `config.toml`) or set the environment variable `VALREVIEW_DISABLE_AUTOUPDATER=1`; `valreview update` still works. `valreview settings` shows the result of the last check.
 
 ## Your data
 
@@ -73,7 +73,7 @@ Everything stays on your machine in `%LOCALAPPDATA%\valreview\data` (`--data-dir
 
 ## Reporting bugs
 
-File a [GitHub issue](https://github.com/Deaadman/valreview/issues). Include the output of `valreview status`.
+File a [GitHub issue](https://github.com/Deaadman/valreview/issues). Include the output of `valreview settings`.
 
 ## Development
 

@@ -31,6 +31,8 @@ use crate::editor::{Action, CommandInfo, Context, Editor, FlagInfo, MatchInfo};
 use crate::help::{HelpAction, HelpPanel};
 use crate::out::{self, Kind};
 use crate::review_view::{ReviewAction, ReviewPanel};
+use crate::settings::{SettingsAction, SettingsPanel};
+use crate::trends_view::{TrendsData, TrendsPanel};
 
 const PROMPT: &str = "❯ ";
 const MENU_ROWS: usize = 8;
@@ -160,6 +162,32 @@ enum Flow {
     Review(Box<crate::ReviewData>),
     /// Open the review panel on a map's summary.
     Summary(Box<crate::SummaryData>),
+    /// Open the trends panel.
+    Trends(Box<TrendsData>),
+    /// Open the settings panel.
+    Settings,
+}
+
+/// What covers the whole screen: a review or summary, or the trends.
+enum Panel {
+    Review(ReviewPanel),
+    Trends(TrendsPanel),
+}
+
+impl Panel {
+    fn key(&mut self, key: KeyEvent) -> ReviewAction {
+        match self {
+            Panel::Review(p) => p.key(key),
+            Panel::Trends(p) => p.key(key),
+        }
+    }
+
+    fn rows(&mut self, w: usize, h: usize) -> Vec<Row> {
+        match self {
+            Panel::Review(p) => p.rows(w, h),
+            Panel::Trends(p) => p.rows(w, h),
+        }
+    }
 }
 
 enum Item {
@@ -200,10 +228,12 @@ struct App {
     watch: Watch,
     /// The `/help` panel, drawn in place of the input while open.
     help: Option<HelpPanel>,
-    /// The `/review` panel, drawn over the whole screen while open.
-    review: Option<ReviewPanel>,
-    /// Panels a review was opened from (a summary), reopened by Esc.
-    review_back: Vec<ReviewPanel>,
+    /// The `/settings` panel, drawn in place of the input while open.
+    settings: Option<SettingsPanel>,
+    /// The `/review`, `/summary` or `/trends` panel, over the whole screen while open.
+    review: Option<Panel>,
+    /// Panels a review was opened from (a summary or the trends), reopened by Esc.
+    review_back: Vec<Panel>,
 }
 
 /// The replay folder as of the last scan, and what has changed since.
@@ -256,6 +286,7 @@ impl App {
                 pending: HashMap::new(),
             },
             help: None,
+            settings: None,
             review: None,
             review_back: vec![],
         };
@@ -315,6 +346,10 @@ impl App {
     /// Scan replays that appeared or changed since the last scan, once their
     /// size holds still for a poll (a download in progress keeps growing).
     fn poll_replays(&mut self) {
+        if Config::load(&self.data_dir).is_ok_and(|c| c.watch == Some(false)) {
+            self.watch.pending.clear();
+            return;
+        }
         let changed: HashMap<PathBuf, u64> = replay_sizes(&self.data_dir)
             .into_iter()
             .filter(|(p, size)| self.watch.seen.get(p) != Some(size))
@@ -372,8 +407,13 @@ impl App {
                     Ok(Flow::Clear) => self.clear(),
                     Ok(Flow::Continue) => {}
                     Ok(Flow::Launch) => self.start_launch(),
-                    Ok(Flow::Review(data)) => self.review = Some(ReviewPanel::new(*data)),
-                    Ok(Flow::Summary(data)) => self.review = Some(ReviewPanel::summary(*data)),
+                    Ok(Flow::Review(data)) => self.review = Some(Panel::Review(ReviewPanel::new(*data))),
+                    Ok(Flow::Summary(data)) => self.review = Some(Panel::Review(ReviewPanel::summary(*data))),
+                    Ok(Flow::Trends(data)) => self.review = Some(Panel::Trends(TrendsPanel::new(*data))),
+                    Ok(Flow::Settings) => {
+                        let note = self.update_note.as_ref().map(|(_, t)| t.clone());
+                        self.settings = Some(SettingsPanel::new(&self.data_dir, note));
+                    }
                     Err(_) => self.transcript.push(Item::Line(
                         Kind::Error,
                         "internal error: the command crashed (please report)".into(),
@@ -416,7 +456,7 @@ impl App {
             match panel.key(key) {
                 ReviewAction::None => {}
                 ReviewAction::Close => self.review = self.review_back.pop(),
-                // A match from a summary: open it, and come back on Esc.
+                // A match from a summary or the trends: open it, and come back on Esc.
                 ReviewAction::Open(id) if self.job.is_none() => {
                     if let Some(current) = self.review.take() {
                         self.review_back.push(current);
@@ -433,6 +473,14 @@ impl App {
                     });
                 }
                 ReviewAction::Open(_) => {}
+            }
+            return true;
+        }
+        if let Some(panel) = &mut self.settings {
+            match panel.key(key) {
+                SettingsAction::None => {}
+                SettingsAction::Close => self.settings = None,
+                SettingsAction::Changed => self.refresh(),
             }
             return true;
         }
@@ -500,9 +548,13 @@ impl App {
             let rows = panel.rows(w, h);
             return self.paint(out, w, h, &rows, None);
         }
+        let panel_h = (h * 4 / 5).max(14).min(h);
         if let Some(panel) = &mut self.help {
-            let panel_h = (h * 4 / 5).max(14).min(h);
             let bottom = panel.rows(&self.ctx.commands, w, panel_h);
+            return self.paint(out, w, h, &bottom, None);
+        }
+        if let Some(panel) = &mut self.settings {
+            let bottom = panel.rows(w, panel_h);
             return self.paint(out, w, h, &bottom, None);
         }
 
@@ -615,7 +667,7 @@ impl App {
         }
         let ghost = if line.is_empty() {
             Some(if self.ctx.matches.is_empty() {
-                "Try \"/status\"".to_owned()
+                "Try \"/settings\"".to_owned()
             } else {
                 "Try \"/review\" to see how your newest match went".to_owned()
             })
@@ -652,7 +704,7 @@ impl Style {
 /// One screen row as styled pieces.
 pub(crate) type Row = Vec<(Style, String)>;
 
-fn row_width(row: &Row) -> usize {
+pub(crate) fn row_width(row: &Row) -> usize {
     row.iter().map(|(_, s)| s.chars().count()).sum()
 }
 
@@ -737,7 +789,7 @@ fn transcript_rows(items: &[Item], w: usize) -> Vec<Row> {
     rows
 }
 
-fn kind_style(kind: Kind) -> Style {
+pub(crate) fn kind_style(kind: Kind) -> Style {
     match kind {
         Kind::Out => Style::default(),
         Kind::Warn => Style::fg(YELLOW),
@@ -817,7 +869,7 @@ fn menu_rows(items: &[crate::editor::Suggestion], sel: usize, typed: &str) -> Ve
 
 /// `text` split into plain and bold-white pieces where it matches `query`:
 /// the first occurrence, or (`words`) every word that starts with it.
-fn highlight(text: &str, query: &str, words: bool, base: Style) -> Row {
+pub(crate) fn highlight(text: &str, query: &str, words: bool, base: Style) -> Row {
     let chars: Vec<char> = text.chars().collect();
     let lower: Vec<char> = text.to_lowercase().chars().collect();
     let q: Vec<char> = query.chars().collect();
@@ -1087,6 +1139,18 @@ fn execute_line(line: &str, data_dir: &Path) -> Flow {
             }
         };
     }
+    if let crate::Command::Settings = command {
+        return Flow::Settings;
+    }
+    if let crate::Command::Trends { me } = command {
+        return match crate::load_trends(&dir, me) {
+            Ok(data) => Flow::Trends(Box::new(data)),
+            Err(e) => {
+                out::emit(Kind::Error, format!("error: {e:#}"));
+                Flow::Continue
+            }
+        };
+    }
     if let crate::Command::Review { match_id, me } = command {
         return match crate::load_review(&dir, match_id, me) {
             Ok(data) => Flow::Review(Box::new(data)),
@@ -1181,7 +1245,7 @@ mod tests {
         let cmds = commands();
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
         for n in [
-            "scan", "export", "matches", "trends", "status", "init", "players", "help", "exit",
+            "scan", "export", "matches", "trends", "settings", "init", "players", "help", "exit",
         ] {
             assert!(names.contains(&n), "{n}");
         }

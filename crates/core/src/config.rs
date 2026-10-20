@@ -18,6 +18,10 @@ pub struct Config {
     pub demos_dir: Option<PathBuf>,
     /// `false` stops the shell's background update check (`valreview update` still works).
     pub auto_update: Option<bool>,
+    /// `false` stops the shell watching the replay folder for new downloads.
+    pub watch: Option<bool>,
+    /// `true` keeps each raw vrfkit export (about 45 MB a match) after a scan.
+    pub keep_raw: Option<bool>,
 }
 
 impl Config {
@@ -68,6 +72,15 @@ mod tests {
         let back = Config::load(&dir).unwrap();
         assert_eq!(back.me, c.me);
         assert_eq!(back.vrfkit, c.vrfkit);
+        assert_eq!((back.watch, back.keep_raw), (None, None));
+        let c = Config {
+            watch: Some(false),
+            keep_raw: Some(true),
+            ..c
+        };
+        c.save(&dir).unwrap();
+        let back = Config::load(&dir).unwrap();
+        assert_eq!((back.watch, back.keep_raw), (Some(false), Some(true)));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -3,7 +3,9 @@ mod out;
 mod editor;
 mod help;
 mod review_view;
+mod settings;
 mod shell;
+mod trends_view;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -91,26 +93,21 @@ enum Command {
         #[arg(long)]
         me: Option<String>,
     },
-    /// List scanned matches, newest first.
+    /// List scanned matches by day, newest first.
     Matches,
-    /// Aggregate your facts across scanned matches and compare the last N with the N before.
+    /// Chart your stats across matches, and the death spots that repeat.
     Trends {
-        /// Window size: compare the last N matches with the N before them.
-        #[arg(long, default_value_t = 20)]
-        last: usize,
         /// Account UUID or prefix (default: `me` from config).
         #[arg(long)]
         me: Option<String>,
-        /// Output directory for trends.md (default: current directory).
-        #[arg(long, default_value = ".")]
-        out: PathBuf,
     },
     // Hidden: the shell syncs on launch once the cache is a day old.
     /// Download agents, maps, weapons and seasons from valorant-api.com into the local cache.
     #[command(hide = true)]
     Sync,
-    /// Check vrfkit, the catalog, the database and the replay folder, and say what to update.
-    Status,
+    /// Show versions and setup, and change where things are.
+    #[command(alias = "status")]
+    Settings,
     /// Write config.toml: vrfkit path, replay folder, and which account is you.
     Init {
         /// Your account UUID, or a prefix of one seen in scanned matches.
@@ -155,7 +152,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(command) => {
             if !matches!(
                 command,
-                Command::Sync | Command::Status | Command::Update | Command::Install { .. }
+                Command::Sync | Command::Settings | Command::Update | Command::Install { .. }
             ) {
                 startup_check(&data_dir);
             }
@@ -172,7 +169,7 @@ fn run(cli: Cli) -> Result<()> {
 fn run_command(data_dir: &Path, command: Command) -> Result<()> {
     let data_dir = data_dir.to_path_buf();
     match command {
-        Command::Status => status(&data_dir)?,
+        Command::Settings => settings::print_status(&data_dir),
         Command::Update => update_cmd(&data_dir)?,
         Command::Install { update } => install_cmd(&data_dir, update)?,
         Command::Players { export_dir } => {
@@ -255,42 +252,8 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
         }
         Command::Review { match_id, me } => print_review(&load_review(&data_dir, match_id, me)?),
         Command::Summary { map, me } => print_summary(&load_summary(&data_dir, map, me)?),
-        Command::Matches => {
-            let store = Store::open(&paths::db_path(&data_dir))?;
-            let matches = store.matches()?;
-            if matches.is_empty() {
-                outln!("no scanned matches; run `valreview scan`");
-            }
-            for (id, played, map) in matches {
-                outln!(
-                    "{id}  {}  {}",
-                    played.as_deref().unwrap_or("?"),
-                    map.as_deref().unwrap_or("?")
-                );
-            }
-        }
-        Command::Trends { last, me, out } => {
-            let cfg = Config::load(&data_dir)?;
-            let store = Store::open(&paths::db_path(&data_dir))?;
-            let sel = me.or(cfg.me).context("pass --me or set it with `valreview init`")?;
-            let subject = resolve_subject(&store, &sel)?;
-            let reviews = store.reviews_of(&subject)?;
-            if reviews.is_empty() {
-                anyhow::bail!("no stored matches for {subject}; run `valreview scan`");
-            }
-            let report = valreview_core::trends::trends(&subject, &reviews, last);
-            std::fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
-            let out = std::path::absolute(&out).unwrap_or(out);
-            let path = out.join("trends.md");
-            std::fs::write(&path, report.markdown()).with_context(|| format!("writing {}", path.display()))?;
-            let compared = report.findings.iter().filter(|f| f.comparable).count();
-            outln!(
-                "wrote {} ({} matches; {compared} of {} metrics have enough data to compare the last {last} with the {last} before)",
-                path.display(),
-                report.matches,
-                report.findings.len()
-            );
-        }
+        Command::Matches => print_matches(&data_dir)?,
+        Command::Trends { me } => trends_view::print_trends(&load_trends(&data_dir, me)?),
         Command::Init { me, vrfkit, demos_dir } => init(&data_dir, me, vrfkit, demos_dir)?,
         Command::Scan {
             demos_dir,
@@ -409,7 +372,7 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
     let opts = ScanOptions {
         demos_dir,
         data_dir: data_dir.to_path_buf(),
-        keep_raw,
+        keep_raw: keep_raw || cfg.keep_raw == Some(true),
         retry_failed,
     };
     let results = scan(&mut store, &vrfkit, &catalog, &opts, |_| {})?;
@@ -608,6 +571,116 @@ pub(crate) fn load_review(data_dir: &Path, match_id: Option<String>, me: Option<
         overview,
         map,
         minimap,
+    })
+}
+
+const WEEKDAYS: [&str; 7] = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+];
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+/// `Monday 19 October` and how long ago it was (`yesterday`), for a
+/// `YYYY-MM-DD` date and today's day number (days since 1970-01-01).
+fn day_heading(ymd: &str, today: i64) -> Option<(String, Option<String>)> {
+    let mut parts = ymd.splitn(3, '-').map(|p| p.parse::<i64>().ok());
+    let (Some(Some(y)), Some(Some(m @ 1..=12)), Some(Some(d))) = (parts.next(), parts.next(), parts.next()) else {
+        return None;
+    };
+    let day = valreview_core::time::days_from_civil(y, m, d);
+    let weekday = WEEKDAYS[(day + 4).rem_euclid(7) as usize];
+    let ago = match today - day {
+        0 => Some("today".to_owned()),
+        1 => Some("yesterday".to_owned()),
+        n @ 2..=6 => Some(format!("{n} days ago")),
+        _ => None,
+    };
+    Some((format!("{weekday} {d} {}", MONTHS[m as usize - 1]), ago))
+}
+
+/// `matches`: every stored match under a heading for its day, newest first.
+fn print_matches(data_dir: &Path) -> Result<()> {
+    let store = Store::open(&paths::db_path(data_dir))?;
+    let matches = store.matches()?;
+    if matches.is_empty() {
+        outln!("No matches yet. Download one in the client and it shows up here.");
+        return Ok(());
+    }
+    let me = Config::load(data_dir)?.me;
+    let today = valreview_core::time::now_unix().div_euclid(86_400);
+    let mut day: Option<String> = None;
+    for (id, played, map) in matches {
+        let played = played.unwrap_or_default();
+        let date = played.get(..10).unwrap_or("").to_owned();
+        if day.as_ref() != Some(&date) {
+            if day.is_some() {
+                outln!();
+            }
+            let mut heading = vec![(Kind::Bold, "Date unknown".to_owned())];
+            if let Some((name, ago)) = day_heading(&date, today) {
+                heading = vec![(Kind::Bold, name)];
+                heading.extend(ago.map(|a| (Kind::Dim, format!(" · {a}"))));
+            }
+            out::row(heading);
+            day = Some(date);
+        }
+        let time = played.get(11..16).unwrap_or("--:--");
+        let review = me.as_deref().and_then(|m| store.review(&id, m).ok().flatten());
+        let map = review
+            .as_ref()
+            .map(|r| r.map_name().trim_matches('`').to_owned())
+            .or_else(|| map.map(|m| m.rsplit('/').next().unwrap_or(&m).to_owned()))
+            .unwrap_or_else(|| "?".into());
+        let mut row = vec![(Kind::Dim, format!("  {time}  ")), (Kind::Out, format!("{map:<8}"))];
+        if let Some(r) = &review {
+            let won = r.round_facts.iter().filter(|f| f.won == Some(true)).count();
+            let lost = r.round_facts.iter().filter(|f| f.won == Some(false)).count();
+            let (res, kind) = match won.cmp(&lost) {
+                std::cmp::Ordering::Greater => ("W", Kind::Good),
+                std::cmp::Ordering::Less => ("L", Kind::Error),
+                std::cmp::Ordering::Equal => ("D", Kind::Warn),
+            };
+            row.push((Kind::Out, format!("{:<8}", r.agent)));
+            row.push((kind, format!("{res} {won:>2}–{lost:<2}")));
+            row.push((Kind::Dim, format!("  {:>5}", format!("{}/{}", r.kills, r.deaths))));
+        }
+        row.push((Kind::Dim, format!("  {}", &id[..id.len().min(8)])));
+        out::row(row);
+    }
+    Ok(())
+}
+
+/// My reviews, oldest first, for `/trends`.
+pub(crate) fn load_trends(data_dir: &Path, me: Option<String>) -> Result<trends_view::TrendsData> {
+    let cfg = Config::load(data_dir)?;
+    let store = Store::open(&paths::db_path(data_dir))?;
+    let sel = me.or(cfg.me).context("pass --me or set it with `valreview init`")?;
+    let subject = resolve_subject(&store, &sel)?;
+    let reviews = store.reviews_of(&subject)?;
+    if reviews.is_empty() {
+        anyhow::bail!("no stored matches for {subject}; run `valreview scan`");
+    }
+    Ok(trends_view::TrendsData {
+        matches: reviews.iter().map(trends_view::TrendMatch::new).collect(),
+        reviews,
     })
 }
 
@@ -871,89 +944,6 @@ fn install_cmd(data_dir: &Path, quiet: bool) -> Result<()> {
     Ok(())
 }
 
-fn status(data_dir: &Path) -> Result<()> {
-    outln!("data dir: {}", data_dir.display());
-    let cfg = Config::load(data_dir)?;
-    let exe = std::env::current_exe().ok();
-    match Layout::new() {
-        Ok(l) if exe.as_deref().is_some_and(|e| l.contains(e)) => {
-            outln!("valreview: {VERSION}, installed in {}", l.root.display())
-        }
-        _ => outln!(
-            "valreview: {VERSION}, not installed (running from {})",
-            exe.as_deref().map_or("?".into(), |e| e.display().to_string())
-        ),
-    }
-    let last = update::State::load(data_dir).map_or_else(
-        || "no check yet".to_owned(),
-        |s| format!("last check {}: {}", s.checked_at, s.result),
-    );
-    match update::auto_disabled(cfg.auto_update) {
-        Some(why) => outln!("updates: {why} ({last})"),
-        None => outln!("updates: automatic in the shell ({last})"),
-    }
-    outln!(
-        "me: {}",
-        cfg.me
-            .as_deref()
-            .unwrap_or("not set (run `valreview init` after scanning 2+ matches)")
-    );
-    match Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()) {
-        Ok(v) => outln!(
-            "vrfkit: {} at {} (SHA-256 verified); decodes builds {}",
-            v.version,
-            v.path.display(),
-            valreview_core::builds::SUPPORTED_RANGE
-        ),
-        Err(e) => outln!("vrfkit: PROBLEM: {e:#}"),
-    }
-    match Catalog::load(&paths::catalog_path(data_dir)) {
-        Ok(c) => {
-            let age = c
-                .age_days(valreview_core::time::now_unix())
-                .map(|d| format!("{d} days old"))
-                .unwrap_or_default();
-            outln!(
-                "catalog: game version {}, {} agents, {} maps, {} weapons ({age})",
-                c.game_version.as_deref().unwrap_or("?"),
-                c.agents.len(),
-                c.maps.len(),
-                c.weapons.len()
-            );
-            if let Some(msg) = c.game_version.as_deref().and_then(check_game_version) {
-                outln!("  UPDATE: {msg}");
-            }
-        }
-        Err(e) => outln!("catalog: none or unreadable ({e:#}); run `valreview sync`"),
-    }
-    let db = paths::db_path(data_dir);
-    if db.is_file() {
-        let store = Store::open(&db)?;
-        let c = store.counts()?;
-        outln!(
-            "database: schema {}, {} matches, {} deaths, {} replays logged as failed, unsupported or duplicate",
-            valreview_core::store::STORE_SCHEMA_VERSION,
-            c.matches,
-            c.deaths,
-            c.logged
-        );
-    } else {
-        outln!("database: none yet (run `valreview scan`)");
-    }
-    match cfg.demos_dir() {
-        Some(d) if d.is_dir() => {
-            let n = valreview_core::scan::find_replays(&d).map(|v| v.len()).unwrap_or(0);
-            outln!("replays: {n} in {}", d.display());
-        }
-        Some(d) => outln!(
-            "replays: folder {} does not exist (download a replay in the client)",
-            d.display()
-        ),
-        None => outln!("replays: no folder set (`valreview init --demos-dir`)"),
-    }
-    Ok(())
-}
-
 fn load_catalog(data_dir: &Path) -> Catalog {
     let (cat, source) = Catalog::load_or_builtin(&paths::catalog_path(data_dir));
     match source {
@@ -968,4 +958,21 @@ fn load_catalog(data_dir: &Path) -> Catalog {
         }
     }
     cat
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn day_headings() {
+        let today = valreview_core::time::days_from_civil(2026, 10, 20);
+        let h = |d: &str| day_heading(d, today);
+        let day = |name: &str, ago: Option<&str>| Some((name.to_owned(), ago.map(str::to_owned)));
+        assert_eq!(h("2026-10-20"), day("Tuesday 20 October", Some("today")));
+        assert_eq!(h("2026-10-19"), day("Monday 19 October", Some("yesterday")));
+        assert_eq!(h("2026-10-14"), day("Wednesday 14 October", Some("6 days ago")));
+        assert_eq!(h("2026-10-13"), day("Tuesday 13 October", None));
+        assert_eq!(h(""), None);
+    }
 }

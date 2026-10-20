@@ -46,7 +46,7 @@ const GENERAL: &[(bool, &str)] = &[
     ),
     (
         false,
-        "  /trends compares your last 20 matches with the 20 before and lists death spots that repeat.",
+        "  /trends charts your damage, K/D, headshots and more across matches, and the death spots that repeat.",
     ),
     (false, ""),
     (true, "Keys"),

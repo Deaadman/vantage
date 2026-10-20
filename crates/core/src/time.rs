@@ -19,6 +19,16 @@ pub fn ue_ticks_to_unix(ticks: i64) -> i64 {
     ticks / 10_000_000 - UE_EPOCH_TO_UNIX_S
 }
 
+/// Days since 1970-01-01 of a calendar date (days-from-civil, Howard Hinnant).
+pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// Unix seconds to `YYYY-MM-DDTHH:MM:SSZ` (days-to-civil, Howard Hinnant).
 pub fn rfc3339_utc(secs: i64) -> String {
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
@@ -48,6 +58,9 @@ mod tests {
         assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
         assert_eq!(rfc3339_utc(1_792_454_400), "2026-10-20T00:00:00Z");
         assert_eq!(rfc3339_utc(951_825_599), "2000-02-29T11:59:59Z");
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(2026, 10, 20) * 86_400, 1_792_454_400);
+        assert_eq!(days_from_civil(2000, 2, 29) * 86_400 + 43_199, 951_825_599);
         // The oracle replay's manifest.timestamp_ticks.
         assert_eq!(
             rfc3339_utc(ue_ticks_to_unix(639_278_797_629_240_000)),
