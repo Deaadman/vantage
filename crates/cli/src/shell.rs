@@ -1451,7 +1451,7 @@ mod tests {
         let cmds = commands();
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
         for n in [
-            "review", "plan", "habits", "focus", "rank", "matches", "scan", "settings", "help", "exit",
+            "review", "plan", "habits", "focus", "rank", "matches", "scan", "settings", "logs", "help", "exit",
         ] {
             assert!(names.contains(&n), "{n}");
         }

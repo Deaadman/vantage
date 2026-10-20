@@ -101,6 +101,8 @@ enum Command {
     /// Your rank, clip folder, focus and other settings
     #[command(alias = "status")]
     Settings,
+    /// Open the folder of session logs, to attach one to a bug report
+    Logs,
     // Hidden: the shell syncs on launch once the cache is a day old.
     /// Download agents, maps and weapons from valorant-api.com into the local cache.
     #[command(hide = true)]
@@ -149,7 +151,7 @@ fn run(cli: Cli) -> Result<()> {
         Some(command) => {
             if !matches!(
                 command,
-                Command::Sync | Command::Settings | Command::Update | Command::Install { .. }
+                Command::Sync | Command::Settings | Command::Logs | Command::Update | Command::Install { .. }
             ) {
                 startup_check(&data_dir);
             }
@@ -175,6 +177,7 @@ impl Command {
             Command::Matches { .. } => "matches",
             Command::Scan { .. } => "scan",
             Command::Settings => "settings",
+            Command::Logs => "logs",
             Command::Sync => "sync",
             Command::Update => "update",
             Command::Install { .. } => "install",
@@ -186,6 +189,16 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
     let data_dir = data_dir.to_path_buf();
     match command {
         Command::Settings => settings::print_status(&data_dir),
+        Command::Logs => {
+            let dir = session_log::dir(&data_dir);
+            std::fs::create_dir_all(&dir).with_context(|| format!("couldn't create {}", dir.display()))?;
+            // Explorer opens Documents instead of a path with forward slashes.
+            std::process::Command::new("explorer")
+                .arg(dir.to_string_lossy().replace('/', "\\"))
+                .spawn()
+                .context("couldn't open File Explorer")?;
+            outln!("Opened {} in File Explorer.", dir.display());
+        }
         Command::Update => update_cmd(&data_dir)?,
         Command::Install { update } => install_cmd(&data_dir, update)?,
         Command::Review { match_id } => print_review(&load_review(&data_dir, match_id)?),

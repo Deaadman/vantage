@@ -66,7 +66,7 @@ pub fn path() -> Option<PathBuf> {
     LOG.lock().ok()?.as_ref().map(|l| l.path.clone())
 }
 
-/// One entry; continuation lines are indented under it.
+/// One entry; continuation lines line up under its text.
 pub fn write(level: &str, text: &str) {
     let Ok(mut slot) = LOG.lock() else {
         return;
@@ -76,7 +76,7 @@ pub fn write(level: &str, text: &str) {
     };
     let text = scrub(text, &log.scrub);
     let secs = log.started.elapsed().as_secs_f64();
-    let body = text.trim_end().replace('\n', "\n              ");
+    let body = text.trim_end().replace('\n', &format!("\n{:19}", ""));
     let _ = writeln!(log.file, "[{secs:>9.3}s] {level:<5} {body}");
 }
 
