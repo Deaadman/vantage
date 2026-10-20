@@ -1,4 +1,4 @@
-//! `valreview.db`: matches, players, rounds, kills, death facts, and the scan log.
+//! `vantage.db`: matches, players, rounds, kills, death facts, and the scan log.
 
 use std::path::Path;
 
@@ -180,7 +180,9 @@ impl Store {
             .parse()
             .context("bad schema_version in meta")?;
         if version > STORE_SCHEMA_VERSION {
-            bail!("database schema {version} is newer than this valreview ({STORE_SCHEMA_VERSION}); update valreview");
+            bail!(
+                "database schema {version} is newer than this version of Vantage ({STORE_SCHEMA_VERSION}); update Vantage"
+            );
         }
         // Matches stored before a migration lack the new rows; their raw
         // exports are gone, so they stay without them.
@@ -528,7 +530,7 @@ fn parse_review(json: &str) -> Result<MatchReview> {
     let r: MatchReview = serde_json::from_str(json).context("reading a stored review")?;
     if r.schema_version != crate::export::REVIEW_SCHEMA_VERSION {
         bail!(
-            "stored review schema {} differs from this valreview's {}",
+            "stored review schema {} differs from this version's {}",
             r.schema_version,
             crate::export::REVIEW_SCHEMA_VERSION
         );
@@ -588,7 +590,7 @@ mod tests {
 
     #[test]
     fn reopening_keeps_schema() {
-        let path = std::env::temp_dir().join(format!("valreview-store-{}.db", std::process::id()));
+        let path = std::env::temp_dir().join(format!("vantage-store-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         Store::open(&path)
             .unwrap()

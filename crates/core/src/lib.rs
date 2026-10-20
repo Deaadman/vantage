@@ -1,4 +1,4 @@
-//! valreview core: turns a `vrfkit export` directory into facts about one
+//! Vantage core: turns a `vrfkit export` directory into facts about one
 //! player's play. No CLI concerns live here.
 #![recursion_limit = "256"]
 

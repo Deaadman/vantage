@@ -30,11 +30,11 @@ pub fn videos_dir() -> Option<PathBuf> {
     directories::UserDirs::new().and_then(|d| d.video_dir().map(Path::to_path_buf))
 }
 
-/// Where screenshots go: `Documents\valreview\Clips`.
+/// Where screenshots go: `Pictures\Vantage\Clips`.
 pub fn shots_root() -> Option<PathBuf> {
     directories::UserDirs::new()
-        .and_then(|d| d.document_dir().map(Path::to_path_buf))
-        .map(|d| d.join("valreview").join("Clips"))
+        .and_then(|d| d.picture_dir().map(Path::to_path_buf))
+        .map(|d| d.join("Vantage").join("Clips"))
 }
 
 /// The known apps' usual folders and how many VALORANT clips each holds.
@@ -201,7 +201,7 @@ impl ShotStyle {
 /// Seconds before the death of each moment taken.
 const MOMENTS_S: [f64; 3] = [3.0, 1.0, 0.0];
 
-/// `ffmpeg.exe` on PATH or in `%LOCALAPPDATA%\valreview\ffmpeg`.
+/// `ffmpeg.exe` on PATH or in `%LOCALAPPDATA%\vantage\ffmpeg`.
 pub fn ffmpeg() -> Option<PathBuf> {
     let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn finds_only_valorant_videos_in_a_shared_folder() {
-        let dir = std::env::temp_dir().join(format!("valreview-clips-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vantage-clips-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("VALORANT")).unwrap();
         std::fs::write(dir.join("VALORANT").join("a.mp4"), b"").unwrap();

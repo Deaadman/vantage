@@ -1,5 +1,5 @@
 //! One pass over `fields.parquet` (about 1.8 M rows) that keeps only the rows
-//! valreview uses, already typed. Every field read here was checked to exist
+//! Vantage uses, already typed. Every field read here was checked to exist
 //! and carry typed values in a real 13.08 export before it was used.
 
 use std::collections::HashMap;

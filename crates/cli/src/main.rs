@@ -3,6 +3,7 @@ mod out;
 mod coach_views;
 mod editor;
 mod help;
+mod logo;
 mod panel;
 #[cfg(test)]
 mod render_tests;
@@ -16,39 +17,39 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use out::Kind;
-use valreview_core::builds::check_game_version;
-use valreview_core::catalog::{self, CatalogSource};
-use valreview_core::clips::{self, Matched, ShotStyle};
-use valreview_core::coach::{self, Debrief, plural};
-use valreview_core::config::Config;
-use valreview_core::habits;
-use valreview_core::install::{self, Layout};
-use valreview_core::minimap::Minimap;
-use valreview_core::paths;
-use valreview_core::ranks;
-use valreview_core::scan::{Outcome, ScanOptions, scan};
-use valreview_core::store::{MyMatch, Store};
-use valreview_core::update;
-use valreview_core::vrfkit::{PINNED, Vrfkit};
-use valreview_core::{Catalog, MatchReview, ai};
+use vantage_core::builds::check_game_version;
+use vantage_core::catalog::{self, CatalogSource};
+use vantage_core::clips::{self, Matched, ShotStyle};
+use vantage_core::coach::{self, Debrief, plural};
+use vantage_core::config::Config;
+use vantage_core::habits;
+use vantage_core::install::{self, Layout};
+use vantage_core::minimap::Minimap;
+use vantage_core::paths;
+use vantage_core::ranks;
+use vantage_core::scan::{Outcome, ScanOptions, scan};
+use vantage_core::store::{MyMatch, Store};
+use vantage_core::update;
+use vantage_core::vrfkit::{PINNED, Vrfkit};
+use vantage_core::{Catalog, MatchReview, ai};
 
 /// This build's version; updates compare against it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The name on screen.
-pub const APP_NAME: &str = "Val Review";
+pub const APP_NAME: &str = "Vantage";
 /// `/matches` shows this many unless `--all`.
 pub const MATCHES_SHOWN: usize = 10;
 
 #[derive(Parser)]
 #[command(
-    name = "valreview",
+    name = "vantage",
     version,
     about = "A VALORANT coach that reads your own replays",
     after_help = "Run without a command for the interactive shell: it watches your replays and takes /commands."
 )]
 struct Cli {
     /// Where the database and settings live
-    /// (default: $VALREVIEW_DATA_DIR, else %LOCALAPPDATA%\valreview\data).
+    /// (default: $VANTAGE_DATA_DIR, else %LOCALAPPDATA%\vantage\data).
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
     #[command(subcommand)]
@@ -104,13 +105,13 @@ enum Command {
     #[command(hide = true)]
     Sync,
     // Hidden: the shell updates in the background on launch.
-    /// Download and install the newest Val Review and the vrfkit it needs (restart to use it).
+    /// Download and install the newest Vantage and the vrfkit it needs (restart to use it).
     #[command(hide = true)]
     Update,
-    /// Install this exe and its vrfkit into %LOCALAPPDATA%\valreview (install.ps1 runs this).
+    /// Install this exe and its vrfkit into %LOCALAPPDATA%\vantage (install.ps1 runs this).
     #[command(hide = true)]
     Install {
-        /// Run by an older valreview applying an update: print nothing on success.
+        /// Run by an older Vantage applying an update: print nothing on success.
         #[arg(long)]
         update: bool,
     },
@@ -267,7 +268,7 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
             (Kind::Warn, "  ! ".into()),
             (
                 Kind::Out,
-                format!("{unsupported} from a VALORANT version Val Review can't read yet"),
+                format!("{unsupported} from a VALORANT version Vantage can't read yet"),
             ),
             (Kind::Dim, " · read after the next update".into()),
         ]);
@@ -278,7 +279,7 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
 fn me_of(cfg: &Config) -> Result<String> {
     cfg.me
         .clone()
-        .context("Val Review doesn't know which account is you yet. It finds you once 2 matches share one account, or pick it in /settings.")
+        .context("Vantage doesn't know which account is you yet. It finds you once 2 matches share one account, or pick it in /settings.")
 }
 
 /// The id of a stored match from a prefix, or the newest.
@@ -327,7 +328,7 @@ fn map_and_minimap(
         .cloned();
     let minimap = match &map {
         Some(m) => Minimap::load(data_dir, m).map_err(|e| format!("{e:#}")),
-        None => Err("Val Review doesn't know this map yet".into()),
+        None => Err("Vantage doesn't know this map yet".into()),
     };
     (map, minimap)
 }
@@ -432,7 +433,7 @@ pub(crate) fn load_review(data_dir: &Path, match_id: Option<String>) -> Result<R
     let id = find_match(&store, match_id.as_deref())?;
     let review = store
         .review(&id, &me)?
-        .context("You aren't in this match, or it was stored by an older valreview. /matches lists yours.")?;
+        .context("You aren't in this match, or it was stored by an older Vantage. /matches lists yours.")?;
     let lobby = lobby_of(&store, &id)?;
     let debrief = coach::debrief(&review, &lobby);
     let mine = store.reviews_of(&me)?;
@@ -474,9 +475,7 @@ fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
         d.played_at.as_deref().and_then(|t| t.get(..10)).unwrap_or("undated"),
         d.map
     );
-    let shots_dir = clips::shots_root()
-        .unwrap_or_else(|| dir.join("valreview"))
-        .join(folder);
+    let shots_dir = clips::shots_root().unwrap_or_else(|| dir.join("vantage")).join(folder);
     let mut shots = Vec::new();
     let mut shot_error = None;
     if per_death.iter().any(Option::is_some) {
@@ -531,7 +530,7 @@ pub(crate) fn load_plan(data_dir: &Path, map: Option<String>) -> Result<coach_vi
                 .cloned()
                 .with_context(|| {
                     format!(
-                        "Val Review doesn't know a map called {m}. Try one of: {}.",
+                        "Vantage doesn't know a map called {m}. Try one of: {}.",
                         known.join(", ")
                     )
                 })?
@@ -552,7 +551,7 @@ pub(crate) fn load_plan(data_dir: &Path, map: Option<String>) -> Result<coach_vi
         }
     };
     let here: Vec<MatchReview> = mine.into_iter().filter(|r| name(r) == map_name).collect();
-    let plan = valreview_core::plan::plan(&map_name, &here);
+    let plan = vantage_core::plan::plan(&map_name, &here);
     let fix = here.last().and_then(|r| {
         let d = coach::debrief(r, &[]);
         d.fixes.first().map(|f| (f.title.clone(), f.try_short.clone()))
@@ -595,7 +594,7 @@ pub(crate) fn load_habits(data_dir: &Path) -> Result<(Vec<habits::Progress>, &'s
 }
 
 /// My rank, how I compare with my lobbies, and my focus's name.
-pub(crate) fn load_rank(data_dir: &Path) -> Result<(String, valreview_core::standing::Standing, &'static str)> {
+pub(crate) fn load_rank(data_dir: &Path) -> Result<(String, vantage_core::standing::Standing, &'static str)> {
     let cfg = Config::load(data_dir)?;
     let rank = cfg
         .rank
@@ -609,7 +608,7 @@ pub(crate) fn load_rank(data_dir: &Path) -> Result<(String, valreview_core::stan
             recent
                 .iter()
                 .map(|r| {
-                    Ok(valreview_core::standing::Game {
+                    Ok(vantage_core::standing::Game {
                         lobby: lobby_of(&store, &r.context.match_id)?,
                         me: r.clone(),
                     })
@@ -620,7 +619,7 @@ pub(crate) fn load_rank(data_dir: &Path) -> Result<(String, valreview_core::stan
     };
     Ok((
         rank,
-        valreview_core::standing::standing(&games),
+        vantage_core::standing::standing(&games),
         habits::focus(cfg.focus.as_deref()).name,
     ))
 }
@@ -642,7 +641,7 @@ fn focus_cmd(data_dir: &Path, habit: Option<String>) -> Result<()> {
         (Kind::Paint(shell::YELLOW, true), "◆ ".into()),
         (Kind::Out, "Your focus is now ".into()),
         (Kind::Bold, h.name.into()),
-        (Kind::Out, ". After each match, Val Review checks it first.".into()),
+        (Kind::Out, ". After each match, Vantage checks it first.".into()),
     ]);
     out::emit(Kind::Dim, format!("  What to do: {}", h.drill));
     Ok(())
@@ -768,7 +767,7 @@ fn day_parts(ymd: &str) -> Option<(i64, i64, i64)> {
     let (Some(Some(y)), Some(Some(m @ 1..=12)), Some(Some(d))) = (parts.next(), parts.next(), parts.next()) else {
         return None;
     };
-    Some((valreview_core::time::days_from_civil(y, m, d), m, d))
+    Some((vantage_core::time::days_from_civil(y, m, d), m, d))
 }
 
 /// `Monday 19 October` and how long ago it was (`yesterday`), for a
@@ -822,7 +821,7 @@ fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
     } else {
         matches.len().min(MATCHES_SHOWN)
     };
-    let today = valreview_core::time::now_unix().div_euclid(86_400);
+    let today = vantage_core::time::now_unix().div_euclid(86_400);
     let mut day: Option<String> = None;
     for m in &matches[..shown] {
         let played = m.played_at.clone().unwrap_or_default();
@@ -864,7 +863,7 @@ fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
     Ok(())
 }
 
-/// `valreview review` outside the shell: the Debrief as text.
+/// `vantage review` outside the shell: the Debrief as text.
 fn print_review(d: &ReviewData) {
     let b = &d.debrief;
     outln!(
@@ -899,7 +898,7 @@ fn print_review(d: &ReviewData) {
     }
 }
 
-/// `valreview plan` outside the shell.
+/// `vantage plan` outside the shell.
 fn print_plan(d: &coach_views::PlanData) {
     let p = &d.plan;
     outln!("{} · {}", p.map, plural(p.matches, "match"));
@@ -931,7 +930,7 @@ fn startup_check(data_dir: &Path) {
     }
 }
 
-/// `valreview update`: installs the newest release, or repairs vrfkit when up to date.
+/// `vantage update`: installs the newest release, or repairs vrfkit when up to date.
 fn update_cmd(data_dir: &Path) -> Result<()> {
     let layout = Layout::new()?;
     if std::env::current_exe().is_ok_and(|e| layout.contains(&e)) {
@@ -956,7 +955,7 @@ fn update_cmd(data_dir: &Path) -> Result<()> {
             out::emit(
                 Kind::Dim,
                 format!(
-                    "  Restart {APP_NAME} to use it: /exit, then run valreview again. What's new shows when it opens."
+                    "  Restart {APP_NAME} to use it: /exit, then run vantage again. What's new shows when it opens."
                 ),
             );
             Ok(())
@@ -968,7 +967,7 @@ fn update_cmd(data_dir: &Path) -> Result<()> {
     }
 }
 
-/// `valreview install`: this exe into `versions`, its vrfkit, and `bin`.
+/// `vantage install`: this exe into `versions`, its vrfkit, and `bin`.
 fn install_cmd(data_dir: &Path, quiet: bool) -> Result<()> {
     let layout = Layout::new()?;
     let exe = std::env::current_exe().context("finding this exe")?;
@@ -990,7 +989,7 @@ fn install_cmd(data_dir: &Path, quiet: bool) -> Result<()> {
     let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d == layout.bin()));
     if !on_path {
         outln!(
-            "add {} to PATH to run `valreview` from any terminal",
+            "add {} to PATH to run `vantage` from any terminal",
             layout.bin().display()
         );
     }
@@ -1015,7 +1014,7 @@ mod tests {
 
     #[test]
     fn day_headings() {
-        let today = valreview_core::time::days_from_civil(2026, 10, 20);
+        let today = vantage_core::time::days_from_civil(2026, 10, 20);
         let h = |d: &str| day_heading(d, today);
         let day = |name: &str, ago: Option<&str>| Some((name.to_owned(), ago.map(str::to_owned)));
         assert_eq!(h("2026-10-20"), day("Tuesday 20 October", Some("today")));

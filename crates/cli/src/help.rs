@@ -7,20 +7,20 @@ use crate::editor::CommandInfo;
 use crate::shell::{ACCENT, BRIGHT, GREY, Row, Style, wrap};
 
 const TABS: [&str; 2] = ["General", "Commands"];
-const ISSUES: &str = "https://github.com/Deaadman/valreview/issues";
-const HOME: &str = "https://github.com/Deaadman/valreview";
+const ISSUES: &str = "https://github.com/Deaadman/vantage/issues";
+const HOME: &str = "https://github.com/Deaadman/vantage";
 
 /// What the General tab says: (style, text) lines; long ones wrap.
 const GENERAL: &[(bool, &str)] = &[
     (
         false,
-        "Val Review watches your VALORANT replays and coaches you: why you died, what to fix, and what works at your rank. Everything stays on this computer unless you turn on AI review.",
+        "Vantage watches your VALORANT replays and coaches you: why you died, what to fix, and what works at your rank. Everything stays on this computer unless you turn on AI review.",
     ),
     (false, ""),
     (true, "After a match"),
     (
         false,
-        "  Download the replay in the client. Val Review picks it up, checks your focus habit, and tells you how it went.",
+        "  Download the replay in the client. Vantage picks it up, checks your focus habit, and tells you how it went.",
     ),
     (
         false,

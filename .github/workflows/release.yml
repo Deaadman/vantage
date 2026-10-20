@@ -1,8 +1,8 @@
 # Publishes the release install.ps1 and the updater download: push a tag like
 # v0.1.0 that matches the version in crates/cli/Cargo.toml. Every release
-# carries valreview-windows-x64.exe and manifest.json (version, file, SHA-256).
+# carries vantage-windows-x64.exe and manifest.json (version, file, SHA-256).
 #
-# Disabled while valreview is in development: nothing runs on push. To turn it
+# Disabled while Vantage is in development: nothing runs on push. To turn it
 # on, replace the `on:` block with the commented one below.
 
 name: Release
@@ -20,7 +20,7 @@ jobs:
   release:
     runs-on: windows-latest
     env:
-      ASSET: valreview-windows-x64.exe
+      ASSET: vantage-windows-x64.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +28,7 @@ jobs:
         shell: pwsh
         run: |
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
-            Where-Object name -eq 'valreview' | Select-Object -ExpandProperty version
+            Where-Object name -eq 'vantage' | Select-Object -ExpandProperty version
           if ("v$version" -ne $env:GITHUB_REF_NAME) {
             throw "tag $env:GITHUB_REF_NAME does not match crates/cli version $version"
           }
@@ -39,12 +39,12 @@ jobs:
         run: cargo test --release --locked
 
       - name: Build
-        run: cargo build --release --locked -p valreview
+        run: cargo build --release --locked -p vantage
 
       - name: Package
         shell: pwsh
         run: |
-          Copy-Item target/release/valreview.exe $env:ASSET
+          Copy-Item target/release/vantage.exe $env:ASSET
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
           $hash = (Get-FileHash -Algorithm SHA256 $env:ASSET).Hash.ToLowerInvariant()
           $manifest = @{

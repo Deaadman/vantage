@@ -286,7 +286,7 @@ impl MatchReview {
                 if self.catalog_synced {
                     ""
                 } else {
-                    " (no catalog synced: run `valreview sync`)"
+                    " (no catalog synced: run `vantage sync`)"
                 }
             );
         }

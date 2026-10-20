@@ -2,16 +2,16 @@
 //! scan with the real vrfkit, store, rescan, detect `me`, render exports and
 //! trends, and report a corrupt file.
 //!
-//! Needs vrfkit v0.3.0: `$VALREVIEW_VRFKIT`, else `vrfkit.exe` on PATH. Skips
+//! Needs vrfkit v0.3.0: `$VANTAGE_VRFKIT`, else `vrfkit.exe` on PATH. Skips
 //! (passes with a note) without it.
 
 use std::path::PathBuf;
 
-use valreview_core::Catalog;
-use valreview_core::scan::{Outcome, ScanOptions, scan};
-use valreview_core::store::Store;
-use valreview_core::trends::trends;
-use valreview_core::vrfkit::{Vrfkit, sha256_file};
+use vantage_core::Catalog;
+use vantage_core::scan::{Outcome, ScanOptions, scan};
+use vantage_core::store::Store;
+use vantage_core::trends::trends;
+use vantage_core::vrfkit::{Vrfkit, sha256_file};
 
 const FIXTURES: [(&str, &str); 3] = [
     (
@@ -33,13 +33,13 @@ fn fixtures_dir() -> PathBuf {
 }
 
 fn vrfkit() -> Option<Vrfkit> {
-    let configured = std::env::var_os("VALREVIEW_VRFKIT").map(PathBuf::from);
+    let configured = std::env::var_os("VANTAGE_VRFKIT").map(PathBuf::from);
     Vrfkit::locate(configured.as_deref(), None).ok()
 }
 
 /// A fresh directory under the system temp dir for one test.
 fn temp_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("valreview-{name}-{}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("vantage-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -55,12 +55,12 @@ fn fixtures_are_the_pinned_files() {
 #[test]
 fn scan_public_fixtures() {
     let Some(vrfkit) = vrfkit() else {
-        eprintln!("skipping: set VALREVIEW_VRFKIT to vrfkit.exe v0.3.0");
+        eprintln!("skipping: set VANTAGE_VRFKIT to vrfkit.exe v0.3.0");
         return;
     };
     let data = temp_dir("fixtures");
     let catalog = Catalog::builtin();
-    let mut store = Store::open(&data.join("valreview.db")).unwrap();
+    let mut store = Store::open(&data.join("vantage.db")).unwrap();
     let opts = ScanOptions {
         demos_dir: fixtures_dir(),
         data_dir: data.clone(),
@@ -120,7 +120,7 @@ fn scan_public_fixtures() {
 #[test]
 fn corrupt_replay_is_reported_once() {
     let Some(vrfkit) = vrfkit() else {
-        eprintln!("skipping: set VALREVIEW_VRFKIT to vrfkit.exe v0.3.0");
+        eprintln!("skipping: set VANTAGE_VRFKIT to vrfkit.exe v0.3.0");
         return;
     };
     let data = temp_dir("corrupt");
@@ -128,7 +128,7 @@ fn corrupt_replay_is_reported_once() {
     std::fs::create_dir_all(&demos).unwrap();
     std::fs::write(demos.join("corrupt.vrf"), (0u8..=200).collect::<Vec<u8>>()).unwrap();
     let catalog = Catalog::builtin();
-    let mut store = Store::open(&data.join("valreview.db")).unwrap();
+    let mut store = Store::open(&data.join("vantage.db")).unwrap();
     let mut opts = ScanOptions {
         demos_dir: demos.clone(),
         data_dir: data.clone(),

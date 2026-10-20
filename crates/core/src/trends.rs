@@ -743,7 +743,7 @@ impl TrendReport {
              \"not enough data\", not a pattern. `score` is a two-proportion z (rates) or\n\
              Welch's t over per-match values (per round); `consistency` is the share of the\n\
              recent matches on the same side of the previous value as the change. Evidence\n\
-             is match ids (first 8 characters) and round numbers; `valreview export --match`\n\
+             is match ids (first 8 characters) and round numbers; `vantage export --match`\n\
              shows any of them. The caveats in each export apply here too. What a change\n\
              means is for you to judge."
         );

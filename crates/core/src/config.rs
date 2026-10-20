@@ -16,7 +16,7 @@ pub struct Config {
     pub vrfkit_sha256: Option<String>,
     /// Where the client saves replays.
     pub demos_dir: Option<PathBuf>,
-    /// `false` stops the shell's background update check (`valreview update` still works).
+    /// `false` stops the shell's background update check (`vantage update` still works).
     pub auto_update: Option<bool>,
     /// `false` stops the shell watching the replay folder for new downloads.
     pub watch: Option<bool>,
@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let dir = std::env::temp_dir().join(format!("valreview-config-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vantage-config-{}", std::process::id()));
         assert!(Config::load(&dir).unwrap().me.is_none());
         let c = Config {
             me: Some("43082880-1822-5e84-a3f2-337d8a51a958".into()),

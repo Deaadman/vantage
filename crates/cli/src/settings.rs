@@ -1,15 +1,15 @@
-//! `/settings`: what Val Review runs with (Status) and what you can change
+//! `/settings`: what Vantage runs with (Status) and what you can change
 //! (Config), drawn in place of the input box until Esc. Outside the shell,
-//! `valreview settings` prints the Status tab.
+//! `vantage settings` prints the Status tab.
 
 use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::Color;
-use valreview_core::clips::{self, ShotStyle};
-use valreview_core::config::Config;
-use valreview_core::store::Store;
-use valreview_core::{ai, habits, paths, ranks};
+use vantage_core::clips::{self, ShotStyle};
+use vantage_core::config::Config;
+use vantage_core::store::Store;
+use vantage_core::{ai, habits, paths, ranks};
 
 use crate::out::{self, Kind, Line};
 use crate::panel::{pad, rank_color};
@@ -88,7 +88,7 @@ pub fn status_groups(data_dir: &Path) -> StatusGroups {
     ]
 }
 
-/// `valreview settings` outside the shell: the Status tab as text.
+/// `vantage settings` outside the shell: the Status tab as text.
 pub fn print_status(data_dir: &Path) {
     for (i, group) in status_groups(data_dir).into_iter().enumerate() {
         if i > 0 {

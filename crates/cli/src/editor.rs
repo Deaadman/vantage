@@ -169,7 +169,7 @@ fn match_items(ctx: &Context, prefix: &str, value_prefix: &str) -> Vec<Suggestio
 
 fn habit_items(prefix: &str) -> Vec<Suggestion> {
     let p = prefix.to_lowercase();
-    valreview_core::habits::HABITS
+    vantage_core::habits::HABITS
         .iter()
         .filter(|h| h.slug.starts_with(&p))
         .map(|h| Suggestion {

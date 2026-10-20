@@ -2,13 +2,13 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 use crossterm::style::Color;
-use valreview_core::catalog::MapInfo;
-use valreview_core::coach::plural;
-use valreview_core::habits::{Progress, Trend, spark};
-use valreview_core::minimap::Minimap;
-use valreview_core::plan::{Plan, SidePlan, Tone};
-use valreview_core::ranks::{self, Band};
-use valreview_core::standing::Standing;
+use vantage_core::catalog::MapInfo;
+use vantage_core::coach::plural;
+use vantage_core::habits::{Progress, Trend, spark};
+use vantage_core::minimap::Minimap;
+use vantage_core::plan::{Plan, SidePlan, Tone};
+use vantage_core::ranks::{self, Band};
+use vantage_core::standing::Standing;
 
 use crate::panel::{
     MapCache, body_height, bullet, field, frame, heading, is_close, map_rows_h, pad, para, rank_color, rule_line,
@@ -56,7 +56,7 @@ impl PlanPanel {
     }
 
     fn full(&self) -> bool {
-        self.d.plan.matches >= valreview_core::plan::FULL_AT
+        self.d.plan.matches >= vantage_core::plan::FULL_AT
     }
 
     pub fn key(&mut self, key: KeyEvent) -> CoachAction {
@@ -173,7 +173,7 @@ impl PlanPanel {
                 "You've played {} on {}. After {}, this becomes your own plan: where you win and lose on each side. Until then, here's what matters on {}{at}.",
                 plural(p.matches, "match"),
                 p.map,
-                valreview_core::plan::FULL_AT,
+                vantage_core::plan::FULL_AT,
                 p.map
             ),
             2,
@@ -182,7 +182,7 @@ impl PlanPanel {
         );
         b.push(vec![]);
         b.push(heading(&format!("On {}", p.map), None));
-        for t in valreview_core::plan::tips(&p.map) {
+        for t in vantage_core::plan::tips(&p.map) {
             b.extend(bullet("•", ACCENT, t, w));
         }
         if let Some(r) = rank {
@@ -332,8 +332,8 @@ impl HabitsPanel {
     }
 
     pub fn rows(&mut self, w: usize, h: usize) -> Vec<Row> {
-        let n = self.matches.min(valreview_core::habits::WINDOW);
-        let focus_name = valreview_core::habits::focus(Some(self.focus)).name;
+        let n = self.matches.min(vantage_core::habits::WINDOW);
+        let focus_name = vantage_core::habits::focus(Some(self.focus)).name;
         let title: Row = vec![
             (Style::fg(ACCENT).bold(), "  Habits  ".into()),
             (Style::fg(GREY), format!("your last {} · focus: ", plural(n, "match"))),

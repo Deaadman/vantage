@@ -67,7 +67,7 @@ pub fn tracks_path(data_dir: &Path, match_id: &str) -> PathBuf {
 pub fn find_replays(demos_dir: &Path) -> Result<Vec<PathBuf>> {
     if !demos_dir.is_dir() {
         bail!(
-            "replay folder {} does not exist. Download a replay in the client first, or set demos_dir with `valreview init --demos-dir`",
+            "replay folder {} does not exist. Download a replay in the client first, or set demos_dir with `vantage init --demos-dir`",
             demos_dir.display()
         );
     }
@@ -157,7 +157,7 @@ fn scan_one(
             .map(|s| (*s).to_owned())
             .or_else(|| panic.downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "unknown panic".into());
-        Err(anyhow::anyhow!("internal error in valreview (please report): {what}"))
+        Err(anyhow::anyhow!("internal error in Vantage (please report): {what}"))
     });
     if !opts.keep_raw && raw.exists() {
         // Our own scratch directory under the data dir; nothing else lives there.

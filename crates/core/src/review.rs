@@ -1,4 +1,4 @@
-//! A match overview for one player, built in valreview rather than left to an
+//! A match overview for one player, built in Vantage rather than left to an
 //! AI: everyone's stats from the stored reviews of the whole lobby, and
 //! findings ranked by how far a number sits from the lobby or from a fixed
 //! threshold. Every finding names the rounds behind it; none of it is advice

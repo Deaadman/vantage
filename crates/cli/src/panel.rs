@@ -4,8 +4,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::Color;
-use valreview_core::catalog::MapInfo;
-use valreview_core::minimap::Minimap;
+use vantage_core::catalog::MapInfo;
+use vantage_core::minimap::Minimap;
 
 use crate::review_view::GREEN;
 use crate::shell::{ACCENT, BRIGHT, GREY, Row, Style, wrap};
@@ -255,7 +255,7 @@ pub fn rgb((r, g, b): (u8, u8, u8)) -> Color {
 
 /// A rank in its in-game colour; grey when unset.
 pub fn rank_color(rank: Option<&str>) -> Color {
-    rank.and_then(valreview_core::ranks::colour).map_or(GREY, rgb)
+    rank.and_then(vantage_core::ranks::colour).map_or(GREY, rgb)
 }
 
 /// The minimap in half blocks, `rows_h` rows tall and twice that many

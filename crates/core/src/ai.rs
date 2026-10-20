@@ -1,7 +1,7 @@
 //! The optional AI review: the match's facts and the death screenshots go to
 //! the player's own AI (Claude, ChatGPT or Gemini with their API key, or a
 //! model on this PC through Ollama). The answer must fit the fixed format
-//! `valreview.ai-review/1`, and it is saved once per match: it can't be
+//! `vantage.ai-review/1`, and it is saved once per match: it can't be
 //! rerun, so every match is judged the same way, once.
 
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::coach::Debrief;
 
 pub const FORMAT_VERSION: u32 = 1;
-pub const SCHEMA: &str = "valreview.ai-review/1";
+pub const SCHEMA: &str = "vantage.ai-review/1";
 const TIMEOUT: Duration = Duration::from_secs(300);
 const OLLAMA: &str = "http://localhost:11434";
 
@@ -87,7 +87,7 @@ pub fn category_label(c: &str) -> &str {
 
 /// The format, field by field, as `/review` shows it.
 pub const FORMAT: [(&str, &str); 13] = [
-    ("schema", "\"valreview.ai-review/1\""),
+    ("schema", "\"vantage.ai-review/1\""),
     ("summary", "text, at most 2 sentences"),
     ("findings", "1 to 5, most costly first, each with:"),
     ("  category", "one of the categories below"),
@@ -217,11 +217,11 @@ pub fn prompt(d: &Debrief, shots: &[Shot]) -> String {
     let mut s = String::new();
     s.push_str(
         "You are reviewing one VALORANT match for the player who played it, from screenshots of their deaths. \
-         valreview has already worked out everything the replay data shows (listed below). Add only what the \
+         Vantage has already worked out everything the replay data shows (listed below). Add only what the \
          screenshots show and the data can't: where the player stood, which angles could see them, where their \
          crosshair was before the fight, how they peeked. Write in plain, second-person English with no statistics jargon.\n\n",
     );
-    s.push_str("Answer with JSON only, in exactly this format (valreview.ai-review/1):\n");
+    s.push_str("Answer with JSON only, in exactly this format (vantage.ai-review/1):\n");
     for (k, v) in FORMAT {
         s.push_str(&format!("- {k}: {v}\n"));
     }
@@ -241,7 +241,7 @@ pub fn prompt(d: &Debrief, shots: &[Shot]) -> String {
         d.summary
     ));
     if !d.fixes.is_empty() {
-        s.push_str("What valreview already found:\n");
+        s.push_str("What Vantage already found:\n");
         for f in d.fixes.iter().take(5) {
             s.push_str(&format!("- {}: {}\n", f.title, f.short));
         }

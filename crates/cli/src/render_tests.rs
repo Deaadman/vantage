@@ -2,10 +2,10 @@
 //! every panel is exactly as tall as asked, and rows fit 112 and 140 columns.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use valreview_core::analysis::Side;
-use valreview_core::clips::{Matched, ShotStyle};
-use valreview_core::coach::{self, sample};
-use valreview_core::{ai, habits, plan, standing};
+use vantage_core::analysis::Side;
+use vantage_core::clips::{Matched, ShotStyle};
+use vantage_core::coach::{self, sample};
+use vantage_core::{ai, habits, plan, standing};
 
 use crate::coach_views::{HabitsPanel, PlanData, PlanPanel, RankPanel};
 use crate::review_view::ReviewPanel;
@@ -18,7 +18,7 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
-fn match_review() -> valreview_core::MatchReview {
+fn match_review() -> vantage_core::MatchReview {
     let rounds: Vec<(bool, Side)> = (0..24)
         .map(|i| (i % 3 != 0, if i < 12 { Side::Attack } else { Side::Defense }))
         .collect();
@@ -120,7 +120,7 @@ fn review_tabs_fit() {
                 })
             })
             .collect(),
-        shots_dir: "C:\\Users\\Player\\Documents\\valreview\\Clips\\2026-10-19 Lotus".into(),
+        shots_dir: "C:\\Users\\Player\\Pictures\\Vantage\\Clips\\2026-10-19 Lotus".into(),
         shots: vec![(1, vec!["R01.jpg".into()]), (7, vec!["R07.jpg".into()])],
         shot_error: None,
         style: ShotStyle::Strip,
@@ -191,7 +191,7 @@ fn plan_habits_and_rank_fit() {
 
 #[test]
 fn settings_fit() {
-    let dir = std::env::temp_dir().join(format!("valreview-render-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("vantage-render-{}", std::process::id()));
     let mut p = crate::settings::SettingsPanel::new(&dir);
     for (w, h) in SIZES {
         assert!(p.rows(w, h).len() <= h);
@@ -210,11 +210,11 @@ fn settings_fit() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Every panel loaded from a real data folder, when `VALREVIEW_SMOKE_DATA` names one.
+/// Every panel loaded from a real data folder, when `VANTAGE_SMOKE_DATA` names one.
 #[test]
 fn real_data_panels_open_and_fit() {
-    let Some(dir) = std::env::var_os("VALREVIEW_SMOKE_DATA").map(std::path::PathBuf::from) else {
-        eprintln!("skipping: set VALREVIEW_SMOKE_DATA to a data folder with scanned matches");
+    let Some(dir) = std::env::var_os("VANTAGE_SMOKE_DATA").map(std::path::PathBuf::from) else {
+        eprintln!("skipping: set VANTAGE_SMOKE_DATA to a data folder with scanned matches");
         return;
     };
     for m in crate::my_matches(&dir) {

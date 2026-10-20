@@ -1,4 +1,4 @@
-//! `valreview` with no command: a full-screen shell. Output fills the top of
+//! `vantage` with no command: a full-screen shell. Output fills the top of
 //! the terminal; the input box stays pinned to the bottom, with the command
 //! menu opening above it. Commands run on a worker thread and print into the
 //! transcript through `out`, so the screen keeps drawing while they work.
@@ -17,19 +17,20 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::style::{Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle};
 use crossterm::{execute, queue};
-use valreview_core::Catalog;
-use valreview_core::ai;
-use valreview_core::builds::check_game_version;
-use valreview_core::config::Config;
-use valreview_core::install::{self, Layout};
-use valreview_core::paths;
-use valreview_core::store::Store;
-use valreview_core::update::{self, WhatsNew};
-use valreview_core::vrfkit::Vrfkit;
+use vantage_core::Catalog;
+use vantage_core::ai;
+use vantage_core::builds::check_game_version;
+use vantage_core::config::Config;
+use vantage_core::install::{self, Layout};
+use vantage_core::paths;
+use vantage_core::store::Store;
+use vantage_core::update::{self, WhatsNew};
+use vantage_core::vrfkit::Vrfkit;
 
 use crate::coach_views::{CoachAction, HabitsPanel, PlanData, PlanPanel, RankPanel};
 use crate::editor::{Action, CommandInfo, Context, Editor, FlagInfo, MatchInfo};
 use crate::help::{HelpAction, HelpPanel};
+use crate::logo;
 use crate::out::{self, Kind};
 use crate::panel::rank_color;
 use crate::review_view::{ReviewAction, ReviewPanel};
@@ -69,14 +70,11 @@ const RULE: Color = Color::Rgb { r: 110, g: 110, b: 110 };
 pub(crate) const BRIGHT: Color = Color::Rgb { r: 240, g: 240, b: 240 };
 const ECHO_BG: Color = Color::Rgb { r: 45, g: 45, b: 45 };
 
-/// A pixel crosshair, three rows of half blocks.
-const LOGO: [&str; 3] = ["▄▀▀▀█▀▀▀▄", "█▄▄ ▀ ▄▄█", "▀▄▄▄█▄▄▄▀"];
-
 /// Shell-only commands, after the clap ones.
 const BUILTINS: [(&str, &str); 3] = [
     ("help", "Show the commands and keys"),
     ("clear", "Clear the screen"),
-    ("exit", "Quit Val Review"),
+    ("exit", "Quit Vantage"),
 ];
 
 /// What the background update check found.
@@ -117,12 +115,12 @@ pub fn run(data_dir: &Path) -> Result<()> {
         // With no catalog yet, `launch` fetches one first; an old one refreshes quietly.
         let path = paths::catalog_path(data_dir);
         let stale = Catalog::load(&path).ok().is_some_and(|c| {
-            c.age_days(valreview_core::time::now_unix())
+            c.age_days(vantage_core::time::now_unix())
                 .is_none_or(|d| d >= SYNC_AFTER_DAYS)
         });
         if stale {
             std::thread::spawn(move || {
-                if let Ok(cat) = valreview_core::catalog::fetch() {
+                if let Ok(cat) = vantage_core::catalog::fetch() {
                     let _ = cat.save(&path);
                 }
             });
@@ -255,6 +253,8 @@ enum Item {
         rank: Option<String>,
         game: String,
         folder: String,
+        /// The logo's frame: it plays once at launch, then stays on the last.
+        logo: usize,
     },
     Line(Kind, String),
     /// A line of pieces in their own styles; never wrapped.
@@ -293,6 +293,8 @@ struct App {
     settings: Option<SettingsPanel>,
     /// A full-screen panel while open.
     panel: Option<Panel>,
+    /// When the shell opened, for the launch logo.
+    launched: Instant,
 }
 
 /// The replay folder as of the last scan, and what has changed since.
@@ -308,7 +310,7 @@ fn replay_sizes(data_dir: &Path) -> HashMap<PathBuf, u64> {
     let Some(dir) = Config::load(data_dir).ok().and_then(|c| c.demos_dir()) else {
         return HashMap::new();
     };
-    valreview_core::scan::find_replays(&dir)
+    vantage_core::scan::find_replays(&dir)
         .unwrap_or_default()
         .into_iter()
         .filter_map(|p| Some((p.clone(), std::fs::metadata(&p).ok()?.len())))
@@ -358,6 +360,7 @@ impl App {
             help: None,
             settings: None,
             panel: None,
+            launched: Instant::now(),
         };
         app.clear();
         app.refresh();
@@ -367,8 +370,20 @@ impl App {
     /// Empty the transcript down to the header.
     fn clear(&mut self) {
         let (rank, game, folder) = header_text(&self.data_dir);
-        self.transcript = vec![Item::Header { rank, game, folder }];
+        let logo = self.logo_frame();
+        self.transcript = vec![Item::Header {
+            rank,
+            game,
+            folder,
+            logo,
+        }];
         self.scroll = 0;
+    }
+
+    /// The logo's frame by now: the last one once the launch animation is over.
+    fn logo_frame(&self) -> usize {
+        let f = self.launched.elapsed().as_millis() / TICK.as_millis();
+        (f as usize).min(logo::FRAMES - 1)
     }
 
     /// Re-read what commands may have changed: matches, settings, notices.
@@ -381,7 +396,7 @@ impl App {
             "{n} match{} · /help for commands and keys",
             if n == 1 { "" } else { "es" }
         );
-        if let Some(Item::Header { rank, game, folder }) = self.transcript.first_mut() {
+        if let Some(Item::Header { rank, game, folder, .. }) = self.transcript.first_mut() {
             (*rank, *game, *folder) = header_text(&self.data_dir);
         }
     }
@@ -504,6 +519,13 @@ impl App {
             if self.job.is_none() && self.watch.last_poll.elapsed() >= WATCH_EVERY {
                 self.watch.last_poll = Instant::now();
                 self.poll_replays();
+            }
+            let frame = self.logo_frame();
+            if let Some(Item::Header { logo, .. }) = self.transcript.first_mut()
+                && *logo != frame
+            {
+                *logo = frame;
+                dirty = true;
             }
             if let Some(job) = &self.job {
                 if let Some(who) = job.label.strip_prefix("Asking ")
@@ -885,7 +907,12 @@ fn transcript_rows(items: &[Item], w: usize) -> Vec<Row> {
     let mut rows = Vec::new();
     for item in items {
         match item {
-            Item::Header { rank, game, folder } => {
+            Item::Header {
+                rank,
+                game,
+                folder,
+                logo,
+            } => {
                 rows.push(vec![]);
                 let text: [Row; 3] = [
                     vec![
@@ -901,8 +928,10 @@ fn transcript_rows(items: &[Item], w: usize) -> Vec<Row> {
                     ],
                     vec![(Style::fg(GREY), folder.clone())],
                 ];
-                for (logo, text) in LOGO.iter().zip(text) {
-                    let mut row = vec![(Style::fg(RED), format!(" {logo}")), (Style::default(), "   ".into())];
+                for (logo, text) in logo::rows(*logo).into_iter().zip(text) {
+                    let mut row: Row = vec![(Style::default(), " ".into())];
+                    row.extend(logo);
+                    row.push((Style::default(), "   ".into()));
                     row.extend(text);
                     rows.push(row);
                 }
@@ -1092,7 +1121,7 @@ fn notices(data_dir: &Path, update: bool) -> Vec<(Color, String)> {
 
 /// The agent, map and weapon names from valorant-api.com, saved to `path`.
 fn fetch_catalog(path: &Path) -> Result<()> {
-    valreview_core::catalog::fetch()?.save(path)
+    vantage_core::catalog::fetch()?.save(path)
 }
 
 /// One "what's new" block: heading, bullets, then the release link.
@@ -1303,7 +1332,7 @@ fn execute_line(line: &str, data_dir: &Path) -> Flow {
         "clear" => return Flow::Clear,
         _ => {}
     }
-    let cli = match Cli::try_parse_from(std::iter::once("valreview".to_owned()).chain(words)) {
+    let cli = match Cli::try_parse_from(std::iter::once("vantage".to_owned()).chain(words)) {
         Ok(cli) => cli,
         Err(e) => {
             // Also how `--help` prints.
@@ -1478,17 +1507,19 @@ mod tests {
                 rank: Some("Gold 2".into()),
                 game: "VALORANT v13.08".into(),
                 folder: "C:\\Demos".into(),
+                logo: logo::FRAMES - 1,
             }],
             80,
         );
         assert_eq!(rows.len(), 5);
-        assert!(text(&rows[1]).contains("Val Review v"));
+        assert!(text(&rows[1]).contains("Vantage v"));
         assert!(text(&rows[2]).contains("Gold 2 · VALORANT v13.08"));
         let rows = transcript_rows(
             &[Item::Header {
                 rank: None,
                 game: "VALORANT v13.08".into(),
                 folder: "C:\\Demos".into(),
+                logo: logo::FRAMES - 1,
             }],
             80,
         );

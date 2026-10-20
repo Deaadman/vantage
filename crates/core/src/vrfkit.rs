@@ -7,7 +7,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
-/// The vrfkit release this valreview installs and runs.
+/// The vrfkit release this version of Vantage installs and runs.
 pub struct Pinned {
     pub tag: &'static str,
     pub zip_url: &'static str,
@@ -25,7 +25,7 @@ pub const PINNED: Pinned = Pinned {
     exe_sha256: "1a211eebbaf0a794201baefa2b32162d74c93fec38a8db3a793c0d93429ba0ca",
 };
 
-/// Release binaries valreview has been checked against: (tag, SHA-256 of `vrfkit.exe`).
+/// Release binaries Vantage has been checked against: (tag, SHA-256 of `vrfkit.exe`).
 pub const KNOWN_RELEASES: &[(&str, &str)] = &[(PINNED.tag, PINNED.exe_sha256)];
 
 #[derive(Debug, Clone)]
@@ -45,11 +45,11 @@ impl Vrfkit {
             None => installed_path()
                 .filter(|p| p.is_file())
                 .or_else(find_on_path)
-                .context("vrfkit not found: run `valreview update` to install it")?,
+                .context("vrfkit not found: run `vantage update` to install it")?,
         };
         if !path.is_file() {
             bail!(
-                "vrfkit not found at {}; fix it with `valreview init --vrfkit <path>`",
+                "vrfkit not found at {}; fix it with `vantage init --vrfkit <path>`",
                 path.display()
             );
         }
@@ -60,7 +60,7 @@ impl Vrfkit {
             "custom".to_owned()
         } else {
             bail!(
-                "{} has SHA-256 {sha256}, which is not a vrfkit release valreview knows ({}). \
+                "{} has SHA-256 {sha256}, which is not a vrfkit release Vantage knows ({}). \
                  If you upgraded vrfkit on purpose, set vrfkit_sha256 = \"{sha256}\" in config.toml",
                 path.display(),
                 KNOWN_RELEASES.iter().map(|(t, _)| *t).collect::<Vec<_>>().join(", ")
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn hashes_and_rejects_unknown_binaries() {
-        let dir = std::env::temp_dir().join(format!("valreview-vrfkit-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("vantage-vrfkit-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let fake = dir.join("vrfkit.exe");
         std::fs::write(&fake, b"abc").unwrap();

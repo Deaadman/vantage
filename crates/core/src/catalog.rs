@@ -4,7 +4,7 @@
 //!
 //! Offline use: [`Catalog::load_or_builtin`] falls back to the built-in agent
 //! table when there is no cache, so names still resolve; maps, callouts and
-//! weapons need a `valreview sync`.
+//! weapons need a `vantage sync`.
 
 use std::path::Path;
 
@@ -189,7 +189,7 @@ impl Catalog {
         let v: Version = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         if v.schema_version != CATALOG_SCHEMA_VERSION {
             bail!(
-                "{} is catalog schema {} but this valreview uses {CATALOG_SCHEMA_VERSION}",
+                "{} is catalog schema {} but this version of Vantage uses {CATALOG_SCHEMA_VERSION}",
                 path.display(),
                 v.schema_version
             );
@@ -295,7 +295,7 @@ pub fn fetch() -> Result<Catalog> {
 fn get_json<T: for<'de> Deserialize<'de>>(endpoint: &str) -> Result<T> {
     let url = format!("{API_BASE}/{endpoint}");
     let mut resp = ureq::get(&url)
-        .header("User-Agent", concat!("valreview/", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", concat!("vantage/", env!("CARGO_PKG_VERSION")))
         .call()
         .with_context(|| format!("GET {url}"))?;
     let text = resp

@@ -1,7 +1,7 @@
 //! Updates from GitHub releases. Each release carries `manifest.json`:
 //!
 //! ```json
-//! {"version": "0.2.0", "platforms": {"windows-x64": {"file": "valreview-windows-x64.exe", "sha256": "…"}},
+//! {"version": "0.2.0", "platforms": {"windows-x64": {"file": "vantage-windows-x64.exe", "sha256": "…"}},
 //!  "notes": ["What's new, one line each"],
 //!  "vrfkit": {"tag": "v0.4.0", "notes": ["What's new in the vrfkit it pins"]}}
 //! ```
@@ -10,9 +10,9 @@
 //! saves them so the first launch of the new version can say what's new.
 //!
 //! An update downloads the new exe into `versions\<version>`, checks its hash,
-//! and runs it as `valreview install --update`: the new version installs
+//! and runs it as `vantage install --update`: the new version installs
 //! itself and the vrfkit release it pins (see `install`). The running
-//! valreview is untouched until it exits.
+//! Vantage is untouched until it exits.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -24,13 +24,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::install::{self, Layout};
 
-pub const REPO: &str = "Deaadman/valreview";
+pub const REPO: &str = "Deaadman/vantage";
 pub const PLATFORM: &str = "windows-x64";
-/// Set to `1` to stop the shell's background check; `valreview update` still works.
-pub const DISABLE_ENV: &str = "VALREVIEW_DISABLE_AUTOUPDATER";
+/// Set to `1` to stop the shell's background check; `vantage update` still works.
+pub const DISABLE_ENV: &str = "VANTAGE_DISABLE_AUTOUPDATER";
 /// A base URL serving `manifest.json` and the files it names, in place of
 /// GitHub releases (for testing an update end to end).
-pub const URL_ENV: &str = "VALREVIEW_UPDATE_URL";
+pub const URL_ENV: &str = "VANTAGE_UPDATE_URL";
 
 /// One update at a time per process (the shell's background check and `/update`).
 static BUSY: Mutex<()> = Mutex::new(());
@@ -53,7 +53,7 @@ pub struct VrfkitNotes {
     pub notes: Vec<String>,
 }
 
-pub const RELEASES: &str = "github.com/Deaadman/valreview/releases/tag";
+pub const RELEASES: &str = "github.com/Deaadman/vantage/releases/tag";
 pub const VRFKIT_RELEASES: &str = "github.com/yakisoba0728/vrfkit/releases/tag";
 
 /// What an installed update brings, shown once on its first launch.
@@ -180,13 +180,13 @@ pub fn apply(layout: &Layout, manifest: &Manifest, data_dir: &Path) -> Result<Pa
             .rev()
             .find(|l| !l.trim().is_empty())
             .unwrap_or("no error output");
-        bail!("valreview {} failed to install itself: {last}", manifest.version);
+        bail!("Vantage {} failed to install itself: {last}", manifest.version);
     }
     WhatsNew::save(data_dir, manifest);
     Ok(exe)
 }
 
-/// The last update check, for `valreview status`.
+/// The last update check, for `vantage status`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct State {
     pub checked_at: String,
@@ -224,10 +224,10 @@ mod tests {
     #[test]
     fn parses_a_manifest() {
         let m: Manifest = serde_json::from_str(
-            r#"{"version":"0.2.0","platforms":{"windows-x64":{"file":"valreview-windows-x64.exe","sha256":"ab"}}}"#,
+            r#"{"version":"0.2.0","platforms":{"windows-x64":{"file":"vantage-windows-x64.exe","sha256":"ab"}}}"#,
         )
         .unwrap();
-        assert_eq!(m.asset().unwrap().file, "valreview-windows-x64.exe");
+        assert_eq!(m.asset().unwrap().file, "vantage-windows-x64.exe");
         assert!(file_url(&m, "x.exe").ends_with("/releases/download/v0.2.0/x.exe") || override_base().is_some());
     }
 }

@@ -1,79 +1,78 @@
-# valreview
+# Vantage
 
 ![](https://img.shields.io/badge/Windows-x64-blue?style=flat-square) ![](https://img.shields.io/badge/vrfkit-v0.3.0-blueviolet?style=flat-square) [![](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 
-valreview reads your own Valorant replays and shows you how each match went: your stats against the rest of the lobby, what to work on (with the rounds behind each point), every round and death, and where you died on the map. It tracks trends across matches, and it can export a match as facts for an AI to review. It runs locally, for personal use, and never touches the game or the Riot client.
+Vantage is a VALORANT coach that reads your own replays. After each match it tells you why you died, the three things that cost you the most rounds, and the moments that decided them. Over time it tracks the habits you keep repeating, and it tells you what wins games at your rank. It runs locally, for personal use, and never touches the game or the Riot client.
 
 Replays are decoded by [vrfkit](https://github.com/yakisoba0728/vrfkit), which the installer sets up for you.
 
 ## Get started
 
 > [!NOTE]
-> Windows x64 only. The PowerShell installer is the only supported way to install valreview.
+> Windows x64 only. The PowerShell installer is the only supported way to install Vantage.
 
-1. Install valreview:
+1. Install Vantage:
 
     **Windows (PowerShell):**
     ```powershell
-    irm https://raw.githubusercontent.com/Deaadman/valreview/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/Deaadman/vantage/main/install.ps1 | iex
     ```
 
-    This installs valreview and the vrfkit release it uses to `%LOCALAPPDATA%\valreview`, checks both against their SHA-256, and adds `%LOCALAPPDATA%\valreview\bin` to your PATH.
+    This installs Vantage and the vrfkit release it uses to `%LOCALAPPDATA%\vantage`, checks both against their SHA-256, and adds `%LOCALAPPDATA%\vantage\bin` to your PATH.
 
-2. Download your replays in the Valorant client, open a new terminal and run `valreview`.
+2. Download your replays in the VALORANT client, open a new terminal and run `vantage`.
 
-The interactive shell looks after itself. When it opens, it scans your replay folder, and works out which account is yours. It then keeps watching the folder, so a replay you download while it's open is processed as soon as the download finishes. Agent, map and weapon names are refreshed from valorant-api.com once a day, and valreview updates itself (see below).
+3. Set your rank in `/settings`. Replays don't include it, and `/rank` and `/plan` use it.
 
-Type `/` to see the commands, or `/help` for an overview, every command and the keyboard shortcuts:
+The shell looks after itself. When it opens, it scans your replay folder and works out which account is yours. It then keeps watching the folder, so a replay you download while it's open is processed as soon as the download finishes. Agent, map and weapon names are refreshed from valorant-api.com once a day, and Vantage updates itself (see below).
+
+Type `/` to see the commands, or `/help` for an overview and the keyboard shortcuts:
 
 | Command | Does |
 | --- | --- |
-| `/review` | Opens a match (newest by default): Overview, Work on, Rounds, Deaths and Map tabs |
-| `/summary` | Sums up all your matches on one map (`--map Pearl`, default the newest match's map): what keeps repeating |
-| `/export` | Writes the same match as `export.md`, `deaths.jsonl` and `rounds.jsonl` for an AI to review |
-| `/trends` | Charts your damage, K/D, headshots, KST and first deaths across matches, and the death spots that repeat |
-| `/matches` | Lists stored matches by day, newest first |
-| `/scan` | Processes the replay folder now (`--retry-failed` tries failed replays again) |
-| `/settings` | Shows versions and setup (Status), and changes the replay folder, vrfkit and your account, and turns automatic updates, folder watching and keeping raw exports on or off (Config) |
+| `/review` | The debrief for a match (your newest by default, `--match` for another) |
+| `/plan` | A game plan for one map: where you win, where you lose, and what to do on each side (`--map Lotus`, default the map you play most) |
+| `/habits` | The mistakes you keep making, and which are getting better |
+| `/focus` | Picks one habit to work on (`/focus untraded`). Every new match checks it first |
+| `/rank` | What wins games at your rank, and how you compare with the players in your games |
+| `/matches` | Your matches, newest first (`--all` for more than 10) |
+| `/scan` | Looks for new replays now (`--retry-failed` tries failed replays again) |
+| `/settings` | Versions and setup (Status), and your rank, replay folder, clip folder, focus, AI review and updates (Config) |
 
-Each one also works as a plain command, for example `valreview export --match <id>`. Add `--help` to any of them for its flags. Outside the shell, `valreview review` and `valreview summary` print their Overview and Work on tabs as text. `valreview sync` and `valreview update` also still work by hand, although the shell runs them for you.
+Each one also works as a plain command, for example `vantage review --match <id>`. Add `--help` to any of them for its flags. Outside the shell, `vantage review` and `vantage plan` print as text.
 
 ### Reviewing a match
 
-`/review` compares you with the other nine players, using the stored review of everyone in the match:
+`/review` has eight tabs:
 
-- **Overview** ranks your damage per round, K/D, headshots, KST (kill, survived or traded), first kills and first deaths against the lobby. It also shows the scoreboard, what went well, and your top three things to work on.
-- **Work on** ranks what stood out, each with its evidence. Examples are a spot where you keep dying, an enemy who won most of your fights, deaths with your ult ready, deaths without hitting your killer, weapons or ranges where you lose, and fighting on with a rifle when the round is lost. Enter jumps to the rounds involved.
-- **Rounds** has one line per round (side, result, buy, kills, damage, how you died) and the detail for the selected round.
-- **Deaths** lists every death with the full picture: the fight, your aim, what you held, who was near, whether you were traded.
-- **Map** draws the minimap in the terminal with your deaths, the sites and repeated spots. ↑↓ steps through the deaths.
+- **Debrief**: how the match went in a few lines, and what to keep doing.
+- **Fixes**: the three mistakes that cost you the most rounds, each with the rounds behind it and what to try instead.
+- **Moments**: the fights that decided rounds, won and lost.
+- **Rounds**: one line per round, and the detail for the selected round.
+- **Map**: the minimap in the terminal with your deaths and your best and worst spots.
+- **Clips**: your clips matched to your deaths. Vantage finds the folder of Medal, NVIDIA ShadowPlay, Xbox Game Bar, AMD Adrenalin, Outplayed or SteelSeries Moments, or you can type your own.
+- **Screenshots**: a screenshot of the seconds before each death, taken from its clip. These need ffmpeg (`winget install ffmpeg`) and are saved in `Pictures\Vantage\Clips`.
+- **AI**: optional. An AI looks at the screenshots for what the replay can't show, like where you stood and where your crosshair was. It uses Claude, ChatGPT or Gemini with your own API key, or Ollama running on your PC. Each match is reviewed once, and the answer is saved.
 
-### Summing up a map
+### Habits
 
-`/summary` looks across every match you have on one map, because a mistake that repeats is a habit rather than a bad game. Each finding says in how many of the matches it shows up, for example "You die at A Hut in 4 of 5 matches", and lists the evidence match by match. It uses the same panel as `/review`, with these differences:
-
-- **Overview** totals your rounds won (attack and defense), damage, headshots, first kills and first deaths against the lobbies you played in, and lists every match.
-- **Work on** has the cross-match findings: death spots that repeat across matches, enemy agents that beat you whoever plays them, ult-ready deaths, deaths without hitting your killer, headshots below the lobby, a side or a site that keeps losing (for example retakes on B), and late first fights.
-- **Matches** lists each match. Enter opens its full `/review`, and Esc comes back to the summary.
-- **Deaths** and **Map** show every death on that map across the matches.
-
-Patterns need a few matches to mean anything. With fewer than 3 on a map, the summary says so and points you to `/review`.
-
-Rounds count from 1 here, as in the game. The export counts from 0. Findings describe what the replay measured; the export's caveats (for example a less-verified game build) apply to them too.
+`/habits` counts eight habits in every match: dying where nobody can trade, going in first with no ability, shooting while moving, a crosshair too low, peeking again after a kill, dying with your ult ready, reloading in the open, and fighting rounds that are lost. It shows which are getting better. Pick one with `/focus`, and each new match tells you how you did on it.
 
 ## Updates
 
-valreview updates itself. Each time you open the shell it checks GitHub for a new release, then downloads and installs it in the background, along with the vrfkit version that release needs. The bottom right shows "Updated to … · Restart to apply". The version you're using keeps working, and the next launch starts the new one.
+Vantage updates itself. Each time you open the shell it checks GitHub for a new release, then downloads and installs it in the background, along with the vrfkit version that release needs. The bottom right shows "Update available! Restart to apply". The version you're using keeps working, and the next launch starts the new one. The first launch after an update shows what's new.
 
-Run `valreview update` to update straight away. To turn off the background check, turn off Automatic updates in `/settings` (it saves `auto_update = false` in `config.toml`) or set the environment variable `VALREVIEW_DISABLE_AUTOUPDATER=1`; `valreview update` still works. `valreview settings` shows the result of the last check.
+Run `vantage update` to update straight away. To turn off the background check, turn off Automatic updates in `/settings` (it saves `auto_update = false` in `config.toml`) or set the environment variable `VANTAGE_DISABLE_AUTOUPDATER=1`; `vantage update` still works. `vantage settings` shows the result of the last check.
 
 ## Your data
 
-Everything stays on your machine in `%LOCALAPPDATA%\valreview\data` (`--data-dir` or `VALREVIEW_DATA_DIR` to move it): the config, a SQLite database of match facts, and 4 Hz movement tracks. Raw replay exports are deleted once processed. The only network calls are the valorant-api.com catalog for agent and map names, and downloads of valreview and vrfkit releases from GitHub.
+Everything stays on your machine in `%LOCALAPPDATA%\vantage\data` (`--data-dir` or `VANTAGE_DATA_DIR` to move it): the config, a SQLite database of match facts, and 4 Hz movement tracks. Raw replay exports are deleted once processed, and screenshots are saved in `Pictures\Vantage\Clips`.
+
+The network calls are the valorant-api.com catalog for agent and map names, and downloads of Vantage and vrfkit releases from GitHub. If you turn on AI review with Claude, ChatGPT or Gemini, the match's facts and its screenshots are sent to that provider when you ask for a review. Your API key stays in `config.toml`. Ollama runs on your PC and sends nothing.
 
 ## Reporting bugs
 
-File a [GitHub issue](https://github.com/Deaadman/valreview/issues). Include the output of `valreview settings`.
+File a [GitHub issue](https://github.com/Deaadman/vantage/issues). Include the output of `vantage settings`.
 
 ## Development
 
@@ -84,7 +83,7 @@ cargo build --release
 cargo test
 ```
 
-- `crates/core`: export loader, analysis and `export.md` rendering.
-- `crates/cli`: the `valreview` binary and the interactive shell.
+- `crates/core`: the export loader, the analysis and the coaching (debrief, habits, plans, ranks, clips and AI review).
+- `crates/cli`: the `vantage` binary and the interactive shell.
 
-`crates/core/tests/fixtures.rs` runs the whole pipeline on the public replays in `tests/fixtures/public` and needs vrfkit (`VALREVIEW_VRFKIT=<path>` or on PATH). The oracle test needs a personal export at `VALREVIEW_ORACLE_EXPORT` or `tests/data/oracle_export`. Both skip without their inputs.
+`crates/core/tests/fixtures.rs` runs the whole pipeline on the public replays in `tests/fixtures/public` and needs vrfkit (`VANTAGE_VRFKIT=<path>` or on PATH). The oracle test needs a personal export at `VANTAGE_ORACLE_EXPORT` or `tests/data/oracle_export`. `VANTAGE_SMOKE_DATA=<data folder>` opens every panel on real scanned matches. All three skip without their inputs.

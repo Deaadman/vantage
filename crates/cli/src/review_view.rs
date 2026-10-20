@@ -8,10 +8,10 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::Color;
-use valreview_core::ai::{self, Saved};
-use valreview_core::analysis::Side;
-use valreview_core::coach::{list_and, plural};
-use valreview_core::habits::{self, Check};
+use vantage_core::ai::{self, Saved};
+use vantage_core::analysis::Side;
+use vantage_core::coach::{list_and, plural};
+use vantage_core::habits::{self, Check};
 
 use crate::panel::{
     Item, MapCache, bullet, field, frame, heading, is_close, list_rows, map_rows_h, pad, para, rule_line, scrolled,
@@ -603,7 +603,7 @@ impl ReviewPanel {
             Clips::NotSet(folders) => {
                 b.push(heading("Where do your clips save?", None));
                 b.extend(para(
-                    "Val Review finds the clip of each death by when the clip was saved, and takes screenshots from the seconds before you died. The AI tab uses them to judge where you stood.",
+                    "Vantage finds the clip of each death by when the clip was saved, and takes screenshots from the seconds before you died. The AI tab uses them to judge where you stood.",
                     4,
                     w,
                     Style::fg(GREY),
@@ -630,7 +630,7 @@ impl ReviewPanel {
                 for t in [
                     "Turn on your clip app's instant replay, so it keeps the last 30 seconds.",
                     "Press its clip key right after you die. Clips of 15 to 30 seconds work best.",
-                    "Download the match replay in VALORANT too: it tells Val Review which clip is which death.",
+                    "Download the match replay in VALORANT too: it tells Vantage which clip is which death.",
                 ] {
                     b.extend(bullet("•", ACCENT, t, w));
                 }
@@ -686,7 +686,7 @@ impl ReviewPanel {
                     None => format!(
                         "Round {}: no clip was saved within {:.0} seconds of this death, so it's left out.",
                         x.round,
-                        valreview_core::clips::MATCH_WINDOW_S
+                        vantage_core::clips::MATCH_WINDOW_S
                     ),
                 };
                 b.push(vec![]);
@@ -736,11 +736,11 @@ impl ReviewPanel {
             ]);
             b.push(vec![]);
             let how = match style {
-                valreview_core::clips::ShotStyle::Strip => {
+                vantage_core::clips::ShotStyle::Strip => {
                     "Each screenshot puts three moments side by side: 3 seconds before you died, 1 second before, and the moment you died, so the whole fight is in one image."
                 }
-                valreview_core::clips::ShotStyle::One => "Each screenshot is the moment you died.",
-                valreview_core::clips::ShotStyle::Three => {
+                vantage_core::clips::ShotStyle::One => "Each screenshot is the moment you died.",
+                vantage_core::clips::ShotStyle::Three => {
                     "Each death has three screenshots: 3 seconds before you died, 1 second before, and the moment you died."
                 }
             };
@@ -824,7 +824,7 @@ impl ReviewPanel {
         }
         let mut b = vec![heading("AI review", None)];
         b.extend(para(
-            "An AI looks at the screenshots of your deaths alongside what Val Review already knows about the match, and judges what the replay alone can't show: where you stood, which angles could see you, and where your crosshair was before the fight.",
+            "An AI looks at the screenshots of your deaths alongside what Vantage already knows about the match, and judges what the replay alone can't show: where you stood, which angles could see you, and where your crosshair was before the fight.",
             4,
             w,
             Style::fg(GREY),
@@ -872,7 +872,7 @@ impl ReviewPanel {
                 }
                 b.extend(field(
                     "Answers in",
-                    &format!("the same format every time ({}), so Val Review can read it", ai::SCHEMA),
+                    &format!("the same format every time ({}), so Vantage can read it", ai::SCHEMA),
                     w,
                     Style::default(),
                 ));
@@ -1028,7 +1028,7 @@ pub fn focus_result(c: &Check) -> String {
 }
 
 pub fn result_style(won: usize, lost: usize) -> (&'static str, Color) {
-    match valreview_core::coach::result_word(won, lost) {
+    match vantage_core::coach::result_word(won, lost) {
         "won" => ("won", GREEN),
         "lost" => ("lost", RED),
         _ => ("drew", YELLOW),

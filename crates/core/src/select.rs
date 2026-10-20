@@ -29,7 +29,7 @@ pub fn select_player<'a>(players: &'a [Player], catalog: &Catalog, selector: &st
         [(p, _)] => Ok(p),
         [] => bail!(
             "--me `{selector}` matches no player. Use an account-UUID prefix (4+ chars), a pawn id, or an agent name; \
-             `valreview players <export_dir>` lists them"
+             `vantage players <export_dir>` lists them"
         ),
         many => {
             let list = many

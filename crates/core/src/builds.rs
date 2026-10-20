@@ -49,7 +49,7 @@ pub fn check_game_version(game_version: &str) -> Option<String> {
     let code = major * 100 + minor;
     (code > SUPPORTED.1).then(|| {
         format!(
-            "the game is on {} but vrfkit {VRFKIT_VERSION} decodes up to {}: replays from this patch will fail until you update vrfkit and valreview",
+            "the game is on {} but vrfkit {VRFKIT_VERSION} decodes up to {}: replays from this patch will fail until you update vrfkit and Vantage",
             pretty(code),
             pretty(SUPPORTED.1)
         )

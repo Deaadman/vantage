@@ -1,13 +1,13 @@
-//! The installed copy in `%LOCALAPPDATA%\valreview` (or `$VALREVIEW_HOME`):
+//! The installed copy in `%LOCALAPPDATA%\vantage` (or `$VANTAGE_HOME`):
 //!
-//! - `versions\<version>\valreview.exe`: every installed version.
-//! - `bin\valreview.exe`: a copy of the current one; `bin` is on PATH.
+//! - `versions\<version>\vantage.exe`: every installed version.
+//! - `bin\vantage.exe`: a copy of the current one; `bin` is on PATH.
 //! - `vrfkit\<tag>\vrfkit.exe`: the vrfkit release each version pins.
 //!
-//! A version installs itself (`valreview install`): it copies itself into
+//! A version installs itself (`vantage install`): it copies itself into
 //! `versions`, fetches its vrfkit, and swaps the copy in `bin`. Windows lets a
 //! running exe be renamed but not overwritten, so the old launcher is renamed
-//! aside first and deleted on a later install. A running valreview keeps
+//! aside first and deleted on a later install. A running Vantage keeps
 //! working; the next launch starts the new version.
 
 use std::fs;
@@ -40,9 +40,9 @@ impl Layout {
         self.root.join("bin")
     }
 
-    /// `bin\valreview.exe`, the one on PATH.
+    /// `bin\vantage.exe`, the one on PATH.
     pub fn launcher(&self) -> PathBuf {
-        self.bin().join("valreview.exe")
+        self.bin().join("vantage.exe")
     }
 
     pub fn versions(&self) -> PathBuf {
@@ -50,7 +50,7 @@ impl Layout {
     }
 
     pub fn version_exe(&self, version: &str) -> PathBuf {
-        self.versions().join(version).join("valreview.exe")
+        self.versions().join(version).join("vantage.exe")
     }
 
     pub fn vrfkit_exe(&self, tag: &str) -> PathBuf {
@@ -58,7 +58,7 @@ impl Layout {
     }
 
     /// True when `exe` is the launcher or an installed version, i.e. this
-    /// valreview was installed rather than built or copied somewhere else.
+    /// Vantage was installed rather than built or copied somewhere else.
     pub fn contains(&self, exe: &Path) -> bool {
         let (Ok(exe), Ok(root)) = (fs::canonicalize(exe), fs::canonicalize(&self.root)) else {
             return false;
@@ -109,7 +109,7 @@ pub fn ensure_vrfkit(layout: &Layout) -> Result<bool> {
     result.map(|()| true)
 }
 
-/// Makes `bin\valreview.exe` a copy of `src`. A launcher that is running
+/// Makes `bin\vantage.exe` a copy of `src`. A launcher that is running
 /// cannot be overwritten, so it is renamed aside first.
 fn place_launcher(layout: &Layout, src: &Path) -> Result<()> {
     let launcher = layout.launcher();
@@ -117,10 +117,10 @@ fn place_launcher(layout: &Layout, src: &Path) -> Result<()> {
         return Ok(());
     }
     fs::create_dir_all(layout.bin()).with_context(|| format!("creating {}", layout.bin().display()))?;
-    let staged = layout.bin().join("valreview.exe.new");
+    let staged = layout.bin().join("vantage.exe.new");
     fs::copy(src, &staged).with_context(|| format!("copying {} to {}", src.display(), staged.display()))?;
     if launcher.exists() {
-        let aside = layout.bin().join(format!("valreview.exe.old-{}", unique_suffix()));
+        let aside = layout.bin().join(format!("vantage.exe.old-{}", unique_suffix()));
         fs::rename(&launcher, &aside).with_context(|| format!("moving the old {} aside", launcher.display()))?;
     }
     fs::rename(&staged, &launcher).with_context(|| format!("placing {}", launcher.display()))
@@ -132,7 +132,7 @@ fn place_launcher(layout: &Layout, src: &Path) -> Result<()> {
 pub fn cleanup(layout: &Layout, current: &str) {
     if let Ok(entries) = fs::read_dir(layout.bin()) {
         for e in entries.flatten() {
-            if e.file_name().to_string_lossy().starts_with("valreview.exe.old-") {
+            if e.file_name().to_string_lossy().starts_with("vantage.exe.old-") {
                 let _ = fs::remove_file(e.path());
             }
         }
@@ -203,7 +203,7 @@ pub fn check_sha256(path: &Path, expected: &str, what: &str) -> Result<()> {
 
 pub fn http_get(url: &str) -> Result<ureq::http::Response<ureq::Body>> {
     ureq::get(url)
-        .header("User-Agent", concat!("valreview/", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", concat!("vantage/", env!("CARGO_PKG_VERSION")))
         .config()
         .timeout_global(Some(Duration::from_secs(300)))
         .build()
@@ -259,7 +259,7 @@ mod tests {
     use super::*;
 
     fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("valreview-install-{name}-{}", unique_suffix()));
+        let dir = std::env::temp_dir().join(format!("vantage-install-{name}-{}", unique_suffix()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -290,7 +290,7 @@ mod tests {
             fs::read_dir(l.bin())
                 .unwrap()
                 .flatten()
-                .filter(|e| e.file_name().to_string_lossy().starts_with("valreview.exe.old-"))
+                .filter(|e| e.file_name().to_string_lossy().starts_with("vantage.exe.old-"))
                 .count()
         };
         assert_eq!(aside(&layout), 1);
@@ -308,13 +308,13 @@ mod tests {
         let root = temp("self");
         let layout = Layout { root: root.clone() };
         let src = root.join("built.exe");
-        fs::write(&src, b"valreview").unwrap();
+        fs::write(&src, b"vantage").unwrap();
         // `install` minus ensure_vrfkit, which downloads.
         copy_verified(&src, &layout.version_exe("9.9.9")).unwrap();
         copy_verified(&src, &layout.version_exe("9.9.9")).unwrap();
         place_launcher(&layout, &layout.version_exe("9.9.9")).unwrap();
         place_launcher(&layout, &layout.version_exe("9.9.9")).unwrap();
-        assert_eq!(fs::read(layout.launcher()).unwrap(), b"valreview");
+        assert_eq!(fs::read(layout.launcher()).unwrap(), b"vantage");
         assert!(layout.contains(&layout.launcher()));
         assert!(!layout.contains(&src));
         fs::remove_dir_all(root).unwrap();

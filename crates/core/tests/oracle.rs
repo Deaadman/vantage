@@ -1,20 +1,20 @@
 //! Checks Phase 1 against the hand-verified Lotus replay (plan section 8).
 //!
 //! Needs the vrfkit export of replay `11a38e1c-0cb2-4afd-b0ec-97a5e8f1d221`,
-//! found at `$VALREVIEW_ORACLE_EXPORT` or `tests/data/oracle_export` at the
+//! found at `$VANTAGE_ORACLE_EXPORT` or `tests/data/oracle_export` at the
 //! workspace root. Skips (passes with a note) when neither exists, because the
 //! export is personal data and is not committed.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use valreview_core::deaths::is_traded;
-use valreview_core::select::select_player;
-use valreview_core::{Catalog, Export, Game, MatchReview};
+use vantage_core::deaths::is_traded;
+use vantage_core::select::select_player;
+use vantage_core::{Catalog, Export, Game, MatchReview};
 
 fn oracle_dir() -> Option<PathBuf> {
     let candidates = [
-        std::env::var_os("VALREVIEW_ORACLE_EXPORT").map(PathBuf::from),
+        std::env::var_os("VANTAGE_ORACLE_EXPORT").map(PathBuf::from),
         Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/oracle_export")),
     ];
     candidates
@@ -26,7 +26,7 @@ fn oracle_dir() -> Option<PathBuf> {
 #[test]
 fn lotus_oracle() {
     let Some(dir) = oracle_dir() else {
-        eprintln!("skipping: set VALREVIEW_ORACLE_EXPORT to the oracle export dir");
+        eprintln!("skipping: set VANTAGE_ORACLE_EXPORT to the oracle export dir");
         return;
     };
     let game = Game::new(Export::load(&dir).unwrap());
@@ -124,9 +124,9 @@ fn lotus_oracle() {
 
 #[test]
 fn store_and_detect_me() {
-    use valreview_core::store::{FileState, Store};
+    use vantage_core::store::{FileState, Store};
     let Some(dir) = oracle_dir() else {
-        eprintln!("skipping: set VALREVIEW_ORACLE_EXPORT to the oracle export dir");
+        eprintln!("skipping: set VANTAGE_ORACLE_EXPORT to the oracle export dir");
         return;
     };
     let catalog = Catalog::builtin();
@@ -170,7 +170,7 @@ fn store_and_detect_me() {
 #[test]
 fn fields_extraction() {
     let Some(dir) = oracle_dir() else {
-        eprintln!("skipping: set VALREVIEW_ORACLE_EXPORT to the oracle export dir");
+        eprintln!("skipping: set VANTAGE_ORACLE_EXPORT to the oracle export dir");
         return;
     };
     let export = Export::load(&dir).unwrap();
@@ -198,9 +198,9 @@ fn fields_extraction() {
 
 #[test]
 fn analysis_timelines() {
-    use valreview_core::analysis::Analysis;
+    use vantage_core::analysis::Analysis;
     let Some(dir) = oracle_dir() else {
-        eprintln!("skipping: set VALREVIEW_ORACLE_EXPORT to the oracle export dir");
+        eprintln!("skipping: set VANTAGE_ORACLE_EXPORT to the oracle export dir");
         return;
     };
     let game = Game::new(Export::load(&dir).unwrap());
@@ -231,10 +231,10 @@ fn analysis_timelines() {
 
 #[test]
 fn phase4_facts() {
-    use valreview_core::analysis::Analysis;
-    use valreview_core::facts::round_facts;
+    use vantage_core::analysis::Analysis;
+    use vantage_core::facts::round_facts;
     let Some(dir) = oracle_dir() else {
-        eprintln!("skipping: set VALREVIEW_ORACLE_EXPORT to the oracle export dir");
+        eprintln!("skipping: set VANTAGE_ORACLE_EXPORT to the oracle export dir");
         return;
     };
     let game = Game::new(Export::load(&dir).unwrap());
@@ -271,15 +271,15 @@ fn phase4_facts() {
     assert!((rf[15].damage_dealt - 520.0).abs() < 0.05);
     // Score and sides: 12-14, first half on attack.
     assert_eq!(rf.iter().filter(|r| r.won == Some(true)).count(), 12);
-    assert_eq!(rf[0].side, Some(valreview_core::analysis::Side::Attack));
-    assert_eq!(rf[12].side, Some(valreview_core::analysis::Side::Defense));
+    assert_eq!(rf[0].side, Some(vantage_core::analysis::Side::Attack));
+    assert_eq!(rf[12].side, Some(vantage_core::analysis::Side::Defense));
     // Casts by key, deduplicated: Recon Bolt (E) 22, Owl Drone (C) 12, Shock Bolt (Q) 5, ult 1.
     let casts = |k: &str| rf.iter().filter_map(|r| r.casts.get(k)).sum::<u32>();
     assert_eq!((casts("E"), casts("C"), casts("Q"), casts("X")), (22, 12, 5, 1));
     assert!(rf[0].pistol && rf[12].pistol && !rf[24].pistol);
 
     // Every death has a killing blow with a weapon, and the in-hand weapon is known.
-    let deaths = valreview_core::deaths::death_facts(&a, 1276);
+    let deaths = vantage_core::deaths::death_facts(&a, 1276);
     assert!(
         deaths
             .iter()
@@ -292,7 +292,7 @@ fn phase4_facts() {
 #[test]
 fn reviews_and_trends() {
     let Some(dir) = oracle_dir() else {
-        eprintln!("skipping: set VALREVIEW_ORACLE_EXPORT to the oracle export dir");
+        eprintln!("skipping: set VANTAGE_ORACLE_EXPORT to the oracle export dir");
         return;
     };
     let game = Game::new(Export::load(&dir).unwrap());
@@ -320,7 +320,7 @@ fn reviews_and_trends() {
             r
         })
         .collect();
-    let report = valreview_core::trends::trends(&review.subject, &reviews, 20);
+    let report = vantage_core::trends::trends(&review.subject, &reviews, 20);
     let top = &report.findings[0];
     assert_eq!(
         top.key,
@@ -343,7 +343,7 @@ fn reviews_and_trends() {
     assert!(report.spots.iter().any(|s| s.matches == 40 && s.deaths == 240));
 
     // Below the floor, nothing is ranked.
-    let small = valreview_core::trends::trends(&review.subject, &reviews[..10], 20);
+    let small = vantage_core::trends::trends(&review.subject, &reviews[..10], 20);
     assert!(small.findings.iter().all(|f| !f.comparable));
     assert!(small.markdown().contains("Not enough data"));
 }
