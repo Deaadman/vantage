@@ -68,10 +68,15 @@ valreview init --vrfkit <path to vrfkit.exe>
 
 ### Interactive shell
 
-Run `valreview` with no command. On launch it fetches the valorant-api.com
+Run `valreview` with no command. It takes over the terminal (the alternate
+screen, restored on exit): output fills the top under a header (version, vrfkit,
+game build, replay folder), and the input box stays pinned to the bottom, with
+setup notices above it and your account and match count below. Commands run in
+the background with a spinner while their output streams in. On launch it fetches the valorant-api.com
 catalog if there is none, scans the replay folder, sets your account once it is
 the only one in every match (2+), and lists your recent matches. Then it takes
-`/commands`: typing `/` opens a menu of commands with what each does, and after a
+`/commands`: typing `/` opens a menu above the box with what each command does
+(typed letters in bold), and after a
 command name it suggests that command's flags and, for `/packet`, your stored
 matches.
 
@@ -81,7 +86,8 @@ matches.
 | Tab, or → at the end | Completes the highlighted suggestion |
 | ↑ ↓ | Moves in the menu; with no menu, walks history (`history.txt` in the data dir) |
 | Esc | Hides the menu until the next edit |
-| Ctrl+U, Ctrl+W, Ctrl+L | Clear to start, delete a word, clear the screen |
+| PgUp PgDn | Scroll the output |
+| Ctrl+U, Ctrl+W, Ctrl+L | Clear to start, delete a word, clear the screen (as `/clear`) |
 | Ctrl+C | Clears the line; twice on an empty line quits (so does Ctrl+D or `/exit`) |
 
 Every command below works in the shell as `/name` with the same flags

@@ -1,3 +1,5 @@
+#[macro_use]
+mod out;
 mod editor;
 mod shell;
 
@@ -101,7 +103,7 @@ enum Command {
 
 fn main() {
     if let Err(e) = run(Cli::parse()) {
-        eprintln!("error: {e:#}");
+        errln!("error: {e:#}");
         std::process::exit(1);
     }
 }
@@ -130,9 +132,14 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
         Command::Players { export_dir } => {
             let game = load(&export_dir)?;
             let catalog = load_catalog(&data_dir);
-            println!(
+            outln!(
                 "{:<6} {:<5} {:<10} {:<38} {:>3}/{:<3}",
-                "pawn", "team", "agent", "account", "K", "D"
+                "pawn",
+                "team",
+                "agent",
+                "account",
+                "K",
+                "D"
             );
             for p in game.players() {
                 let (k, d) = game.kd(p.pawn);
@@ -142,9 +149,14 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| "?".into());
                 let agent = catalog.agent_name(p.agent_id.as_deref());
-                println!(
+                outln!(
                     "{:<6} {:<5} {:<10} {:<38} {:>3}/{:<3}",
-                    p.pawn, team, agent, p.subject, k, d
+                    p.pawn,
+                    team,
+                    agent,
+                    p.subject,
+                    k,
+                    d
                 );
             }
         }
@@ -163,7 +175,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
                     let me = select_player(game.players(), &catalog, &sel)?;
                     let review = MatchReview::from_game(&game, &catalog, me);
                     if review.context.map_name.is_none() && !catalog.is_builtin() {
-                        eprintln!(
+                        errln!(
                             "warning: map {} is not in the catalog; try `valreview sync`",
                             review.map_name()
                         );
@@ -186,7 +198,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
             std::fs::write(&md, review.packet_md()).with_context(|| format!("writing {}", md.display()))?;
             std::fs::write(&jsonl, review.deaths_jsonl()).with_context(|| format!("writing {}", jsonl.display()))?;
             std::fs::write(&rounds, review.rounds_jsonl()).with_context(|| format!("writing {}", rounds.display()))?;
-            println!(
+            outln!(
                 "wrote {}, {} and {} ({} deaths, {} rounds)",
                 md.display(),
                 jsonl.display(),
@@ -199,10 +211,10 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
             let store = Store::open(&paths::db_path(&data_dir))?;
             let matches = store.matches()?;
             if matches.is_empty() {
-                println!("no scanned matches; run `valreview scan`");
+                outln!("no scanned matches; run `valreview scan`");
             }
             for (id, played, map) in matches {
-                println!(
+                outln!(
                     "{id}  {}  {}",
                     played.as_deref().unwrap_or("?"),
                     map.as_deref().unwrap_or("?")
@@ -224,7 +236,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
             let path = out.join("trends.md");
             std::fs::write(&path, report.markdown()).with_context(|| format!("writing {}", path.display()))?;
             let compared = report.findings.iter().filter(|f| f.comparable).count();
-            println!(
+            outln!(
                 "wrote {} ({} matches; {compared} of {} metrics have enough data to compare the last {last} with the {last} before)",
                 path.display(),
                 report.matches,
@@ -243,7 +255,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
                 catalog::fetch().context("valorant-api.com sync failed; the existing cache (if any) is unchanged")?;
             cat.save(&path)?;
             let callouts: usize = cat.maps.iter().map(|m| m.callouts.len()).sum();
-            println!(
+            outln!(
                 "synced game version {}: {} agents, {} maps ({} with a minimap projection, {callouts} callouts), {} weapons, {} seasons",
                 cat.game_version.as_deref().unwrap_or("?"),
                 cat.agents.len(),
@@ -252,7 +264,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
                 cat.weapons.len(),
                 cat.seasons.len()
             );
-            println!("saved {}", path.display());
+            outln!("saved {}", path.display());
         }
     }
     Ok(())
@@ -265,10 +277,10 @@ fn init(data_dir: &Path, me: Option<String>, vrfkit: Option<PathBuf>, demos_dir:
     }
     match Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()) {
         Ok(v) => {
-            println!("vrfkit {} at {} (SHA-256 verified)", v.version, v.path.display());
+            outln!("vrfkit {} at {} (SHA-256 verified)", v.version, v.path.display());
             cfg.vrfkit = Some(v.path);
         }
-        Err(e) => eprintln!("warning: {e:#}"),
+        Err(e) => errln!("warning: {e:#}"),
     }
 
     if let Some(d) = demos_dir {
@@ -277,13 +289,13 @@ fn init(data_dir: &Path, me: Option<String>, vrfkit: Option<PathBuf>, demos_dir:
     match cfg.demos_dir() {
         Some(d) if d.is_dir() => {
             let n = valreview_core::scan::find_replays(&d).map(|v| v.len()).unwrap_or(0);
-            println!("replay folder {} ({n} replays)", d.display());
+            outln!("replay folder {} ({n} replays)", d.display());
         }
-        Some(d) => eprintln!(
+        Some(d) => errln!(
             "warning: replay folder {} does not exist yet (download a replay in the client)",
             d.display()
         ),
-        None => eprintln!("warning: no replay folder; pass --demos-dir"),
+        None => errln!("warning: no replay folder; pass --demos-dir"),
     }
 
     let store = Store::open(&paths::db_path(data_dir))?;
@@ -300,20 +312,20 @@ fn init(data_dir: &Path, me: Option<String>, vrfkit: Option<PathBuf>, demos_dir:
             [] => anyhow::bail!("--me `{sel}` is not a full account UUID and matches no scanned player"),
             _ => anyhow::bail!("--me `{sel}` matches several scanned players: {}", known.join(", ")),
         });
-        println!("me = {}", cfg.me.as_deref().unwrap_or_default());
+        outln!("me = {}", cfg.me.as_deref().unwrap_or_default());
     } else if let Some(me) = &cfg.me {
-        println!("me = {me} (already set; pass --me to change)");
+        outln!("me = {me} (already set; pass --me to change)");
     } else {
         match store.subjects_in_every_match()? {
             (n, _) if n < 2 => {
-                println!("me: not set. Scan at least 2 matches, then run init again to detect it, or pass --me")
+                outln!("me: not set. Scan at least 2 matches, then run init again to detect it, or pass --me")
             }
             (n, s) if s.len() == 1 => {
-                println!("me = {} (the only account in all {n} scanned matches)", s[0]);
+                outln!("me = {} (the only account in all {n} scanned matches)", s[0]);
                 cfg.me = Some(s[0].clone());
             }
-            (n, s) if s.is_empty() => println!("me: no account appears in all {n} matches; pass --me"),
-            (n, s) => println!(
+            (n, s) if s.is_empty() => outln!("me: no account appears in all {n} matches; pass --me"),
+            (n, s) => outln!(
                 "me: {} accounts appear in all {n} matches ({}); pass --me",
                 s.len(),
                 s.join(", ")
@@ -322,7 +334,7 @@ fn init(data_dir: &Path, me: Option<String>, vrfkit: Option<PathBuf>, demos_dir:
     }
 
     cfg.save(data_dir)?;
-    println!("saved {}", Config::path(data_dir).display());
+    outln!("saved {}", Config::path(data_dir).display());
     Ok(())
 }
 
@@ -352,7 +364,7 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
         keep_raw,
         retry_failed,
     };
-    println!("scanning {} with vrfkit {}", opts.demos_dir.display(), vrfkit.version);
+    outln!("scanning {} with vrfkit {}", opts.demos_dir.display(), vrfkit.version);
 
     let results = scan(&mut store, &vrfkit, &catalog, &opts, |f| match &f.outcome {
         Outcome::Stored {
@@ -360,14 +372,14 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
             map,
             warnings,
         } => {
-            println!("  stored  {} -> {match_id} ({map})", f.file);
+            outln!("  stored  {} -> {match_id} ({map})", f.file);
             for w in warnings {
-                println!("          warning: {w}");
+                outln!("          warning: {w}");
             }
         }
-        Outcome::Failed { error } => println!("  FAILED  {}: {error}", f.file),
-        Outcome::Unsupported { reason } => println!("  skipped {}: {reason}", f.file),
-        Outcome::Duplicate { match_id } => println!("  dup     {} (same match as stored {match_id})", f.file),
+        Outcome::Failed { error } => outln!("  FAILED  {}: {error}", f.file),
+        Outcome::Unsupported { reason } => outln!("  skipped {}: {reason}", f.file),
+        Outcome::Duplicate { match_id } => outln!("  dup     {} (same match as stored {match_id})", f.file),
         Outcome::AlreadyStored | Outcome::PreviouslyFailed { .. } | Outcome::PreviouslyUnsupported { .. } => {}
     })?;
 
@@ -377,15 +389,15 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
     let seen = count(|o| matches!(o, Outcome::AlreadyStored | Outcome::Duplicate { .. }));
     let old_failed = count(|o| matches!(o, Outcome::PreviouslyFailed { .. }));
     let unsupported = count(|o| matches!(o, Outcome::Unsupported { .. } | Outcome::PreviouslyUnsupported { .. }));
-    println!(
+    outln!(
         "{} replays: {stored} new, {seen} already done, {failed} failed, {unsupported} on a build this vrfkit cannot read",
         results.len()
     );
     if old_failed > 0 {
-        println!("{old_failed} skipped because they failed before (--retry-failed to try again)");
+        outln!("{old_failed} skipped because they failed before (--retry-failed to try again)");
     }
     if unsupported > 0 {
-        println!(
+        outln!(
             "update vrfkit (and set its path with `valreview init --vrfkit`) to read the {unsupported} replay(s) on newer builds; they are retried automatically after an update"
         );
     }
@@ -395,7 +407,7 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
         && n >= 2
         && s.len() == 1
     {
-        println!(
+        outln!(
             "tip: {} is in all {n} matches; `valreview init` will set it as you",
             s[0]
         );
@@ -410,7 +422,7 @@ fn newest_match(data_dir: &Path) -> Result<String> {
         .into_iter()
         .next()
         .context("no scanned matches; run `valreview scan`, or pass an export directory")?;
-    println!(
+    outln!(
         "newest match: {id} ({}, {})",
         played.as_deref().unwrap_or("?"),
         map.as_deref().unwrap_or("?")
@@ -474,11 +486,11 @@ fn load(dir: &Path) -> Result<Game> {
     let export = Export::load(dir)?;
     match check_build(&export.manifest.replay_build) {
         BuildSupport::Supported => {}
-        BuildSupport::Caveat(msg) | BuildSupport::Unsupported(msg) => eprintln!("warning: {msg}"),
+        BuildSupport::Caveat(msg) | BuildSupport::Unsupported(msg) => errln!("warning: {msg}"),
     }
     let game = Game::new(export);
     for w in &game.warnings {
-        eprintln!("warning: {w}");
+        errln!("warning: {w}");
     }
     Ok(game)
 }
@@ -491,32 +503,30 @@ fn startup_check(data_dir: &Path) {
         return;
     };
     if let Some(msg) = cat.game_version.as_deref().and_then(check_game_version) {
-        eprintln!("note: {msg}");
+        errln!("note: {msg}");
     }
     if let Some(days) = cat.age_days(valreview_core::time::now_unix()).filter(|&d| d > 30) {
-        eprintln!(
-            "note: the valorant-api.com catalog is {days} days old; run `valreview sync` for new agents and maps"
-        );
+        errln!("note: the valorant-api.com catalog is {days} days old; run `valreview sync` for new agents and maps");
     }
 }
 
 fn status(data_dir: &Path) -> Result<()> {
-    println!("data dir: {}", data_dir.display());
+    outln!("data dir: {}", data_dir.display());
     let cfg = Config::load(data_dir)?;
-    println!(
+    outln!(
         "me: {}",
         cfg.me
             .as_deref()
             .unwrap_or("not set (run `valreview init` after scanning 2+ matches)")
     );
     match Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()) {
-        Ok(v) => println!(
+        Ok(v) => outln!(
             "vrfkit: {} at {} (SHA-256 verified); decodes builds {}",
             v.version,
             v.path.display(),
             valreview_core::builds::SUPPORTED_RANGE
         ),
-        Err(e) => println!("vrfkit: PROBLEM: {e:#}"),
+        Err(e) => outln!("vrfkit: PROBLEM: {e:#}"),
     }
     match Catalog::load(&paths::catalog_path(data_dir)) {
         Ok(c) => {
@@ -524,7 +534,7 @@ fn status(data_dir: &Path) -> Result<()> {
                 .age_days(valreview_core::time::now_unix())
                 .map(|d| format!("{d} days old"))
                 .unwrap_or_default();
-            println!(
+            outln!(
                 "catalog: game version {}, {} agents, {} maps, {} weapons ({age})",
                 c.game_version.as_deref().unwrap_or("?"),
                 c.agents.len(),
@@ -532,16 +542,16 @@ fn status(data_dir: &Path) -> Result<()> {
                 c.weapons.len()
             );
             if let Some(msg) = c.game_version.as_deref().and_then(check_game_version) {
-                println!("  UPDATE: {msg}");
+                outln!("  UPDATE: {msg}");
             }
         }
-        Err(e) => println!("catalog: none or unreadable ({e:#}); run `valreview sync`"),
+        Err(e) => outln!("catalog: none or unreadable ({e:#}); run `valreview sync`"),
     }
     let db = paths::db_path(data_dir);
     if db.is_file() {
         let store = Store::open(&db)?;
         let c = store.counts()?;
-        println!(
+        outln!(
             "database: schema {}, {} matches, {} deaths, {} replays logged as failed, unsupported or duplicate",
             valreview_core::store::STORE_SCHEMA_VERSION,
             c.matches,
@@ -549,18 +559,18 @@ fn status(data_dir: &Path) -> Result<()> {
             c.logged
         );
     } else {
-        println!("database: none yet (run `valreview scan`)");
+        outln!("database: none yet (run `valreview scan`)");
     }
     match cfg.demos_dir() {
         Some(d) if d.is_dir() => {
             let n = valreview_core::scan::find_replays(&d).map(|v| v.len()).unwrap_or(0);
-            println!("replays: {n} in {}", d.display());
+            outln!("replays: {n} in {}", d.display());
         }
-        Some(d) => println!(
+        Some(d) => outln!(
             "replays: folder {} does not exist (download a replay in the client)",
             d.display()
         ),
-        None => println!("replays: no folder set (`valreview init --demos-dir`)"),
+        None => outln!("replays: no folder set (`valreview init --demos-dir`)"),
     }
     Ok(())
 }
@@ -570,12 +580,12 @@ fn load_catalog(data_dir: &Path) -> Catalog {
     match source {
         CatalogSource::Cache => {}
         CatalogSource::BuiltinNoCache => {
-            eprintln!(
+            errln!(
                 "note: no catalog cache; using built-in agent names only (run `valreview sync` for maps and callouts)"
             )
         }
         CatalogSource::BuiltinBadCache(e) => {
-            eprintln!("warning: ignoring unreadable catalog ({e}); using built-in agent names. Run `valreview sync`")
+            errln!("warning: ignoring unreadable catalog ({e}); using built-in agent names. Run `valreview sync`")
         }
     }
     cat
