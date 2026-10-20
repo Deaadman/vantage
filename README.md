@@ -60,14 +60,42 @@ cargo build --release
 ## Use
 
 Download the vrfkit v0.3.0 Windows release (valreview checks the exe's
-SHA-256), then:
+SHA-256) and point valreview at it once:
+
+```
+valreview init --vrfkit <path to vrfkit.exe>
+```
+
+### Interactive shell
+
+Run `valreview` with no command. On launch it fetches the valorant-api.com
+catalog if there is none, scans the replay folder, sets your account once it is
+the only one in every match (2+), and lists your recent matches. Then it takes
+`/commands`: typing `/` opens a menu of commands with what each does, and after a
+command name it suggests that command's flags and, for `/packet`, your stored
+matches.
+
+| Key | Does |
+| --- | --- |
+| Enter | Runs the highlighted command while typing its name; otherwise runs the line as typed |
+| Tab, or → at the end | Completes the highlighted suggestion |
+| ↑ ↓ | Moves in the menu; with no menu, walks history (`history.txt` in the data dir) |
+| Esc | Hides the menu until the next edit |
+| Ctrl+U, Ctrl+W, Ctrl+L | Clear to start, delete a word, clear the screen |
+| Ctrl+C | Clears the line; twice on an empty line quits (so does Ctrl+D or `/exit`) |
+
+Every command below works in the shell as `/name` with the same flags
+(`/packet --help` for help). `/packet` with no match reviews the newest one.
+Double quotes group a path with spaces; backslashes stay as typed.
+
+### Commands
 
 ```
 valreview init --vrfkit <path to vrfkit.exe>
 valreview sync
 valreview scan
 valreview matches
-valreview packet --match <id prefix> [--me <selector>] [--out <dir>]
+valreview packet [--match <id prefix>] [--me <selector>] [--out <dir>]
 valreview trends [--last 20] [--out <dir>]
 ```
 
@@ -105,7 +133,9 @@ Files live in `%LOCALAPPDATA%\valreview\data` (override with `--data-dir` or
 ## Layout
 
 - `crates/core`: export loader, analysis, packet rendering. No CLI concerns.
-- `crates/cli`: the `valreview` binary (clap commands only).
+- `crates/cli`: the `valreview` binary: clap commands, and the interactive shell
+  (`shell.rs` draws it with crossterm; `editor.rs` holds the line, menu and keys,
+  unit-tested without a terminal).
 
 ## Tests
 

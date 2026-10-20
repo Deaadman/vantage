@@ -1,7 +1,11 @@
+mod editor;
+mod shell;
+
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use valreview_core::builds::{BuildSupport, check_build, check_game_version};
 use valreview_core::catalog::{self, CatalogSource};
 use valreview_core::config::Config;
@@ -16,7 +20,8 @@ use valreview_core::{Catalog, Export, Game, MatchReview};
 #[command(
     name = "valreview",
     version,
-    about = "Facts about your own Valorant replays, for review"
+    about = "Facts about your own Valorant replays, for review",
+    after_help = "Run without a command for the interactive shell: it scans, lists recent matches and takes /commands."
 )]
 struct Cli {
     /// Where catalog.json and later the database live
@@ -24,22 +29,29 @@ struct Cli {
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// List the players in a vrfkit export with their pawn, agent, team and K/D.
-    Players {
-        /// Directory written by `vrfkit export`.
-        export_dir: PathBuf,
+    /// Export and store every replay not processed yet.
+    Scan {
+        /// Replay folder for this run (default: from config).
+        #[arg(long)]
+        demos_dir: Option<PathBuf>,
+        /// Keep each raw vrfkit export (about 45 MB per match) under the data dir.
+        #[arg(long)]
+        keep_raw: bool,
+        /// Try files that failed in an earlier scan again.
+        #[arg(long)]
+        retry_failed: bool,
     },
     /// Write packet.md, deaths.jsonl and rounds.jsonl for one player of one match.
     Packet {
-        /// Directory written by `vrfkit export` (or use --match for a scanned match).
-        #[arg(required_unless_present = "match_id", conflicts_with = "match_id")]
+        /// Directory written by `vrfkit export` (default: the newest scanned match).
+        #[arg(conflicts_with = "match_id")]
         export_dir: Option<PathBuf>,
-        /// A scanned match id (a unique prefix is enough); see `valreview matches`.
+        /// A scanned match id (a unique prefix is enough; default: the newest).
         #[arg(long = "match")]
         match_id: Option<String>,
         /// Account-UUID prefix, pawn id, or agent name (default: `me` from config).
@@ -80,17 +92,10 @@ enum Command {
         #[arg(long)]
         demos_dir: Option<PathBuf>,
     },
-    /// Export and store every replay not processed yet.
-    Scan {
-        /// Replay folder for this run (default: from config).
-        #[arg(long)]
-        demos_dir: Option<PathBuf>,
-        /// Keep each raw vrfkit export (about 45 MB per match) under the data dir.
-        #[arg(long)]
-        keep_raw: bool,
-        /// Try files that failed in an earlier scan again.
-        #[arg(long)]
-        retry_failed: bool,
+    /// List the players in a vrfkit export with their pawn, agent, team and K/D.
+    Players {
+        /// Directory written by `vrfkit export`.
+        export_dir: PathBuf,
     },
 }
 
@@ -103,10 +108,24 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     let data_dir = paths::data_dir(cli.data_dir.as_deref())?;
-    if !matches!(cli.command, Command::Sync | Command::Status) {
-        startup_check(&data_dir);
-    }
     match cli.command {
+        Some(command) => {
+            if !matches!(command, Command::Sync | Command::Status) {
+                startup_check(&data_dir);
+            }
+            run_command(&data_dir, command)
+        }
+        None if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() => shell::run(&data_dir),
+        None => {
+            Cli::command().print_help()?;
+            Ok(())
+        }
+    }
+}
+
+fn run_command(data_dir: &Path, command: Command) -> Result<()> {
+    let data_dir = data_dir.to_path_buf();
+    match command {
         Command::Status => status(&data_dir)?,
         Command::Players { export_dir } => {
             let game = load(&export_dir)?;
@@ -151,10 +170,16 @@ fn run(cli: Cli) -> Result<()> {
                     }
                     review
                 }
-                (None, Some(id)) => stored_review(&data_dir, &id, me.or(cfg.me).as_deref())?,
-                (None, None) => unreachable!("clap requires one"),
+                (None, id) => {
+                    let id = match id {
+                        Some(id) => id,
+                        None => newest_match(&data_dir)?,
+                    };
+                    stored_review(&data_dir, &id, me.or(cfg.me).as_deref())?
+                }
             };
             std::fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
+            let out = std::path::absolute(&out).unwrap_or(out);
             let md = out.join("packet.md");
             let jsonl = out.join("deaths.jsonl");
             let rounds = out.join("rounds.jsonl");
@@ -195,6 +220,7 @@ fn run(cli: Cli) -> Result<()> {
             }
             let report = valreview_core::trends::trends(&subject, &reviews, last);
             std::fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
+            let out = std::path::absolute(&out).unwrap_or(out);
             let path = out.join("trends.md");
             std::fs::write(&path, report.markdown()).with_context(|| format!("writing {}", path.display()))?;
             let compared = report.findings.iter().filter(|f| f.comparable).count();
@@ -210,7 +236,7 @@ fn run(cli: Cli) -> Result<()> {
             demos_dir,
             keep_raw,
             retry_failed,
-        } => scan_cmd(&data_dir, demos_dir, keep_raw, retry_failed)?,
+        } => scan_cmd(&data_dir, demos_dir, keep_raw, retry_failed, true)?,
         Command::Sync => {
             let path = paths::catalog_path(&data_dir);
             let cat =
@@ -311,7 +337,8 @@ fn is_uuid(s: &str) -> bool {
         })
 }
 
-fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_failed: bool) -> Result<()> {
+/// `tip`: suggest `init` when `me` could be detected (the shell sets it itself).
+fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_failed: bool, tip: bool) -> Result<()> {
     let cfg = Config::load(data_dir)?;
     let vrfkit = Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref())?;
     let demos_dir = demos_dir
@@ -362,7 +389,8 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
             "update vrfkit (and set its path with `valreview init --vrfkit`) to read the {unsupported} replay(s) on newer builds; they are retried automatically after an update"
         );
     }
-    if cfg.me.is_none()
+    if tip
+        && cfg.me.is_none()
         && let (n, s) = store.subjects_in_every_match()?
         && n >= 2
         && s.len() == 1
@@ -373,6 +401,21 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
         );
     }
     Ok(())
+}
+
+fn newest_match(data_dir: &Path) -> Result<String> {
+    let store = Store::open(&paths::db_path(data_dir))?;
+    let (id, played, map) = store
+        .matches()?
+        .into_iter()
+        .next()
+        .context("no scanned matches; run `valreview scan`, or pass an export directory")?;
+    println!(
+        "newest match: {id} ({}, {})",
+        played.as_deref().unwrap_or("?"),
+        map.as_deref().unwrap_or("?")
+    );
+    Ok(id)
 }
 
 /// Full account UUID for a selector: a UUID prefix seen in the store.
