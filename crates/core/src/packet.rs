@@ -8,6 +8,7 @@ use serde::Serialize;
 use crate::builds::{BuildSupport, check_build};
 use crate::catalog::{Catalog, MapInfo};
 use crate::clusters::{self, DeathCluster, cluster_deaths};
+use crate::context::MatchContext;
 use crate::deaths::{self, DeathFact, death_facts, is_traded};
 use crate::export::Player;
 use crate::game::Game;
@@ -100,6 +101,7 @@ pub struct Review<'a> {
     /// The match's map in the catalog, if synced and known.
     pub map: Option<&'a MapInfo>,
     pub me: &'a Player,
+    pub context: MatchContext,
     pub facts: Vec<DeathFact>,
     pub clusters: Vec<DeathCluster>,
     pub summary: DeathSummary,
@@ -125,6 +127,7 @@ impl<'a> Review<'a> {
             catalog,
             map,
             me,
+            context: MatchContext::new(game, catalog),
             match_kills_traded: cross.iter().filter(|k| is_traded(game, k)).count(),
             match_kills: cross.len(),
             facts,
@@ -200,18 +203,41 @@ impl<'a> Review<'a> {
         let (k, d) = g.kd(self.me.pawn);
         let _ = writeln!(
             o,
-            "- Map: {map_name} · build `{}` · {} rounds · {:.0} min",
+            "- Map: {map_name} · build `{}` · {} rounds · {:.0} min · played {}",
             m.replay_build,
             g.rounds.len(),
-            m.duration_ms as f64 / 60_000.0
+            m.duration_ms as f64 / 60_000.0,
+            self.context.played_at.as_deref().unwrap_or("unknown")
         );
+        let me_ctx = self.context.player(&self.me.subject);
+        let role = me_ctx
+            .and_then(|p| p.role.as_deref())
+            .map(|r| format!(" ({r})"))
+            .unwrap_or_default();
+        let ping = match me_ctx.map(|p| (p.ping_median, p.ping_p95)) {
+            Some((Some(med), Some(p95))) => format!(", ping median {med} / p95 {p95}"),
+            _ => String::new(),
+        };
+        let reconnects = match me_ctx.map(|p| p.reconnects) {
+            Some(n) if n > 0 => format!(", reconnected {n}×"),
+            _ => String::new(),
+        };
         let _ = writeln!(
             o,
-            "- Reviewed player: {me_agent}, pawn {}, kills/deaths {k}/{d}",
+            "- Reviewed player: {me_agent}{role}, pawn {}, kills/deaths {k}/{d}{ping}{reconnects}",
             self.me.pawn
         );
         let _ = writeln!(o, "- Teammates: {}", self.roster(true));
         let _ = writeln!(o, "- Enemies: {}", self.roster(false));
+        let my_side = g.teams.side(self.me.pawn);
+        for team in &self.context.teams {
+            let label = if team.side == my_side {
+                "Your composition"
+            } else {
+                "Enemy composition"
+            };
+            let _ = writeln!(o, "- {label}: {}", self.context.composition_line(team));
+        }
         let _ = writeln!(
             o,
             "- Match-wide trade rate (all {} cross-team kills, both teams): {} traded within 3 s ({})",
@@ -413,6 +439,7 @@ const CALLOUT_CAVEAT: &str = "Callout is derived: the nearest valorant-api.com c
 const CAVEATS: &[&str] = &[
     "Alive counts come from kill events only; Sage and Clove revives are not modelled.",
     "Crosshair offset is derived: it assumes yaw is 0-360° measured like atan2(dy, dx). A check against velocity heading looked right but is not proven, and it ignores pitch.",
+    "Ping is the replicated scoreboard value (assumed ms). Disconnects are only visible when they gave a new pawn.",
     "Teams are inferred from the kill graph (each kill joins opposite teams); `self` kills are excluded.",
 ];
 

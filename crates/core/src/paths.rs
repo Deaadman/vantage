@@ -22,3 +22,7 @@ pub fn data_dir(explicit: Option<&Path>) -> Result<PathBuf> {
 pub fn catalog_path(data_dir: &Path) -> PathBuf {
     data_dir.join("catalog.json")
 }
+
+pub fn db_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("valreview.db")
+}

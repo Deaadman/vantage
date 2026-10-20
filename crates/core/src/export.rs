@@ -6,7 +6,7 @@ use std::fs::File;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use arrow_array::{Array, ArrayRef, RecordBatch, cast::AsArray, types};
+use arrow_array::{Array, ArrayRef, DictionaryArray, RecordBatch, StringArray, cast::AsArray, types};
 use arrow_schema::DataType;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -99,6 +99,8 @@ pub struct Export {
     pub events: Vec<Event>,
     /// Keyed by pawn.
     pub tracks: HashMap<u32, Track>,
+    /// Replicated `BombPlayerState.Ping` values, keyed by player-state actor.
+    pub pings: HashMap<u32, Vec<u32>>,
 }
 
 impl Export {
@@ -113,10 +115,12 @@ impl Export {
         let events = load_events(&dir.join("events.parquet"))?;
         let pawns: HashSet<u32> = manifest.players.iter().flat_map(|p| p.pawns.iter().copied()).collect();
         let tracks = load_movement(&dir.join("movement.parquet"), &pawns)?;
+        let pings = load_pings(&dir.join("fields.parquet"))?;
         Ok(Export {
             manifest,
             events,
             tracks,
+            pings,
         })
     }
 
@@ -340,4 +344,51 @@ fn load_movement(path: &Path, pawns: &HashSet<u32>) -> Result<HashMap<u32, Track
         track.samples.sort_by_key(|s| s.time_ms);
     }
     Ok(tracks)
+}
+
+// ---------------------------------------------------------------- fields
+
+/// Row indices of `batch` whose dictionary-or-string column `name` satisfies `pred`.
+/// Tests each dictionary value once instead of every row.
+fn matching_rows(batch: &RecordBatch, name: &str, pred: impl Fn(&str) -> bool) -> Result<Vec<usize>> {
+    let col = batch
+        .column_by_name(name)
+        .ok_or_else(|| anyhow!("missing column `{name}`"))?;
+    if let Some(dict) = col.as_any().downcast_ref::<DictionaryArray<types::Int32Type>>() {
+        let values = arrow_cast::cast(dict.values(), &DataType::Utf8)?;
+        let values = values.as_string::<i32>();
+        let hits: Vec<bool> = (0..values.len())
+            .map(|i| values.is_valid(i) && pred(values.value(i)))
+            .collect();
+        let keys = dict.keys();
+        return Ok((0..keys.len())
+            .filter(|&i| keys.is_valid(i) && hits[keys.value(i) as usize])
+            .collect());
+    }
+    let s = arrow_cast::cast(col, &DataType::Utf8)?;
+    let s: &StringArray = s.as_string::<i32>();
+    Ok((0..s.len()).filter(|&i| s.is_valid(i) && pred(s.value(i))).collect())
+}
+
+fn load_pings(path: &Path) -> Result<HashMap<u32, Vec<u32>>> {
+    let mut out: HashMap<u32, Vec<u32>> = HashMap::new();
+    for batch in open_reader(path, &["actor_net_guid", "group_path", "field_name", "value_i64"])? {
+        let batch = batch?;
+        let ping_rows = matching_rows(&batch, "field_name", |f| f == "Ping")?;
+        if ping_rows.is_empty() {
+            continue;
+        }
+        let in_player_state = matching_rows(&batch, "group_path", |g| g.contains("PlayerState"))?;
+        let in_player_state: HashSet<usize> = in_player_state.into_iter().collect();
+        let actor = column(&batch, "actor_net_guid", &DataType::UInt32)?;
+        let actor = actor.as_primitive::<types::UInt32Type>();
+        let value = column(&batch, "value_i64", &DataType::Int64)?;
+        let value = value.as_primitive::<types::Int64Type>();
+        for i in ping_rows.into_iter().filter(|i| in_player_state.contains(i)) {
+            if value.is_valid(i) && (0..=u32::MAX as i64).contains(&value.value(i)) {
+                out.entry(actor.value(i)).or_default().push(value.value(i) as u32);
+            }
+        }
+    }
+    Ok(out)
 }

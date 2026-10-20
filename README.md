@@ -12,6 +12,9 @@ Local and personal use only: it never touches the game or the Riot client.
   weapons and seasons from valorant-api.com. Deaths get `minimap_uv` and
   `nearest_callout`. Everything works offline; without a cache, agent names come
   from a built-in table and map facts are left out.
+- Phase 3: `valreview init` and `valreview scan`. Scan exports each new replay
+  with the pinned vrfkit, stores match context, kills and every player's death
+  facts in SQLite, keeps 4 Hz movement tracks, and deletes the raw export.
 
 ## Build
 
@@ -24,11 +27,25 @@ cargo build --release
 
 ## Use
 
-Export a replay with vrfkit v0.3.0, then:
+Download the vrfkit v0.3.0 Windows release (valreview checks the exe's
+SHA-256), then:
 
 ```
-vrfkit export <file.vrf> --out <export_dir>
+valreview init --vrfkit <path to vrfkit.exe>
 valreview sync
+valreview scan
+```
+
+Run `scan` after each session, once you have downloaded the replays in the
+client. It skips files it has already processed (by file name and size), reports
+corrupt or unsupported replays once and then skips them (`--retry-failed` to try
+again), and deletes each raw export (`--keep-raw` keeps them). After two or more
+matches, `valreview init` detects your account as the one present in every match;
+`--me` sets it explicitly.
+
+Single-export commands, for a directory written by `vrfkit export`:
+
+```
 valreview players <export_dir>
 valreview packet <export_dir> --me <selector> [--out <dir>]
 ```
@@ -37,8 +54,13 @@ valreview packet <export_dir> --me <selector> [--out <dir>]
 name. It errors if the selector matches more than one player.
 
 Files live in `%LOCALAPPDATA%\valreview\data` (override with `--data-dir` or
-`VALREVIEW_DATA_DIR`). `catalog.json` is the valorant-api.com cache; a failed
-sync leaves the old cache in place.
+`VALREVIEW_DATA_DIR`):
+
+- `config.toml`: `me`, `vrfkit`, `demos_dir`, optional `vrfkit_sha256` to accept
+  a deliberately upgraded vrfkit
+- `catalog.json`: the valorant-api.com cache; a failed sync leaves it in place
+- `valreview.db`: SQLite (matches, players, rounds, kills, deaths, scan_log)
+- `tracks/<match>.parquet`: player positions at 4 Hz
 
 ## Layout
 

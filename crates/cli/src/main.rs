@@ -4,8 +4,12 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use valreview_core::builds::{BuildSupport, check_build};
 use valreview_core::catalog::{self, CatalogSource};
+use valreview_core::config::Config;
 use valreview_core::paths;
+use valreview_core::scan::{Outcome, ScanOptions, scan};
 use valreview_core::select::select_player;
+use valreview_core::store::Store;
+use valreview_core::vrfkit::Vrfkit;
 use valreview_core::{Catalog, Export, Game, Review};
 
 #[derive(Parser)]
@@ -43,6 +47,31 @@ enum Command {
     },
     /// Download agents, maps, weapons and seasons from valorant-api.com into the local cache.
     Sync,
+    /// Write config.toml: vrfkit path, replay folder, and which account is you.
+    Init {
+        /// Your account UUID, or a prefix of one seen in scanned matches.
+        /// Without it, init detects you once 2+ matches are scanned.
+        #[arg(long)]
+        me: Option<String>,
+        /// Path to vrfkit.exe (v0.3.0 Windows release).
+        #[arg(long)]
+        vrfkit: Option<PathBuf>,
+        /// Replay folder (default: %LOCALAPPDATA%\VALORANT\Saved\Demos).
+        #[arg(long)]
+        demos_dir: Option<PathBuf>,
+    },
+    /// Export and store every replay not processed yet.
+    Scan {
+        /// Replay folder for this run (default: from config).
+        #[arg(long)]
+        demos_dir: Option<PathBuf>,
+        /// Keep each raw vrfkit export (about 45 MB per match) under the data dir.
+        #[arg(long)]
+        keep_raw: bool,
+        /// Try files that failed in an earlier scan again.
+        #[arg(long)]
+        retry_failed: bool,
+    },
 }
 
 fn main() {
@@ -99,6 +128,12 @@ fn run(cli: Cli) -> Result<()> {
                 review.facts.len()
             );
         }
+        Command::Init { me, vrfkit, demos_dir } => init(&data_dir, me, vrfkit, demos_dir)?,
+        Command::Scan {
+            demos_dir,
+            keep_raw,
+            retry_failed,
+        } => scan_cmd(&data_dir, demos_dir, keep_raw, retry_failed)?,
         Command::Sync => {
             let path = paths::catalog_path(&data_dir);
             let cat =
@@ -116,6 +151,142 @@ fn run(cli: Cli) -> Result<()> {
             );
             println!("saved {}", path.display());
         }
+    }
+    Ok(())
+}
+
+fn init(data_dir: &Path, me: Option<String>, vrfkit: Option<PathBuf>, demos_dir: Option<PathBuf>) -> Result<()> {
+    let mut cfg = Config::load(data_dir)?;
+    if let Some(p) = vrfkit {
+        cfg.vrfkit = Some(std::path::absolute(&p).unwrap_or(p));
+    }
+    match Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()) {
+        Ok(v) => {
+            println!("vrfkit {} at {} (SHA-256 verified)", v.version, v.path.display());
+            cfg.vrfkit = Some(v.path);
+        }
+        Err(e) => eprintln!("warning: {e:#}"),
+    }
+
+    if let Some(d) = demos_dir {
+        cfg.demos_dir = Some(d);
+    }
+    match cfg.demos_dir() {
+        Some(d) if d.is_dir() => {
+            let n = valreview_core::scan::find_replays(&d).map(|v| v.len()).unwrap_or(0);
+            println!("replay folder {} ({n} replays)", d.display());
+        }
+        Some(d) => eprintln!(
+            "warning: replay folder {} does not exist yet (download a replay in the client)",
+            d.display()
+        ),
+        None => eprintln!("warning: no replay folder; pass --demos-dir"),
+    }
+
+    let store = Store::open(&paths::db_path(data_dir))?;
+    if let Some(sel) = me {
+        let sel = sel.trim().to_ascii_lowercase();
+        let known: Vec<String> = store
+            .known_subjects()?
+            .into_iter()
+            .filter(|s| s.starts_with(&sel))
+            .collect();
+        cfg.me = Some(match known.as_slice() {
+            [one] => one.clone(),
+            [] if is_uuid(&sel) => sel,
+            [] => anyhow::bail!("--me `{sel}` is not a full account UUID and matches no scanned player"),
+            _ => anyhow::bail!("--me `{sel}` matches several scanned players: {}", known.join(", ")),
+        });
+        println!("me = {}", cfg.me.as_deref().unwrap_or_default());
+    } else if let Some(me) = &cfg.me {
+        println!("me = {me} (already set; pass --me to change)");
+    } else {
+        match store.subjects_in_every_match()? {
+            (n, _) if n < 2 => {
+                println!("me: not set. Scan at least 2 matches, then run init again to detect it, or pass --me")
+            }
+            (n, s) if s.len() == 1 => {
+                println!("me = {} (the only account in all {n} scanned matches)", s[0]);
+                cfg.me = Some(s[0].clone());
+            }
+            (n, s) if s.is_empty() => println!("me: no account appears in all {n} matches; pass --me"),
+            (n, s) => println!(
+                "me: {} accounts appear in all {n} matches ({}); pass --me",
+                s.len(),
+                s.join(", ")
+            ),
+        }
+    }
+
+    cfg.save(data_dir)?;
+    println!("saved {}", Config::path(data_dir).display());
+    Ok(())
+}
+
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices().all(|(i, c)| {
+            if [8, 13, 18, 23].contains(&i) {
+                c == '-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
+        })
+}
+
+fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_failed: bool) -> Result<()> {
+    let cfg = Config::load(data_dir)?;
+    let vrfkit = Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref())?;
+    let demos_dir = demos_dir
+        .or_else(|| cfg.demos_dir())
+        .context("no replay folder; run `valreview init --demos-dir <dir>`")?;
+    let catalog = load_catalog(data_dir);
+    let mut store = Store::open(&paths::db_path(data_dir))?;
+    let opts = ScanOptions {
+        demos_dir,
+        data_dir: data_dir.to_path_buf(),
+        keep_raw,
+        retry_failed,
+    };
+    println!("scanning {} with vrfkit {}", opts.demos_dir.display(), vrfkit.version);
+
+    let results = scan(&mut store, &vrfkit, &catalog, &opts, |f| match &f.outcome {
+        Outcome::Stored {
+            match_id,
+            map,
+            warnings,
+        } => {
+            println!("  stored  {} -> {match_id} ({map})", f.file);
+            for w in warnings {
+                println!("          warning: {w}");
+            }
+        }
+        Outcome::Failed { error } => println!("  FAILED  {}: {error}", f.file),
+        Outcome::Duplicate { match_id } => println!("  dup     {} (same match as stored {match_id})", f.file),
+        Outcome::AlreadyStored | Outcome::PreviouslyFailed { .. } => {}
+    })?;
+
+    let count = |pred: fn(&Outcome) -> bool| results.iter().filter(|r| pred(&r.outcome)).count();
+    let stored = count(|o| matches!(o, Outcome::Stored { .. }));
+    let failed = count(|o| matches!(o, Outcome::Failed { .. }));
+    let seen = count(|o| matches!(o, Outcome::AlreadyStored | Outcome::Duplicate { .. }));
+    let old_failed = count(|o| matches!(o, Outcome::PreviouslyFailed { .. }));
+    println!(
+        "{} replays: {stored} new, {seen} already done, {failed} failed",
+        results.len()
+    );
+    if old_failed > 0 {
+        println!("{old_failed} skipped because they failed before (--retry-failed to try again)");
+    }
+    if cfg.me.is_none()
+        && let (n, s) = store.subjects_in_every_match()?
+        && n >= 2
+        && s.len() == 1
+    {
+        println!(
+            "tip: {} is in all {n} matches; `valreview init` will set it as you",
+            s[0]
+        );
     }
     Ok(())
 }

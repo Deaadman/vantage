@@ -1,0 +1,176 @@
+//! `scan`: find new replays, export them with vrfkit, store the facts, and
+//! delete the raw export.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+
+use crate::builds::{BuildSupport, check_build};
+use crate::catalog::Catalog;
+use crate::export::Export;
+use crate::game::Game;
+use crate::store::{FileState, Store};
+use crate::tracks::write_tracks;
+use crate::vrfkit::Vrfkit;
+
+pub struct ScanOptions {
+    pub demos_dir: PathBuf,
+    pub data_dir: PathBuf,
+    /// Keep `raw/<replay>/` (about 45 MB per match) instead of deleting it.
+    pub keep_raw: bool,
+    /// Try files that failed before again.
+    pub retry_failed: bool,
+}
+
+#[derive(Debug)]
+pub enum Outcome {
+    Stored {
+        match_id: String,
+        map: String,
+        warnings: Vec<String>,
+    },
+    AlreadyStored,
+    PreviouslyFailed {
+        detail: String,
+    },
+    Duplicate {
+        match_id: String,
+    },
+    Failed {
+        error: String,
+    },
+}
+
+#[derive(Debug)]
+pub struct FileOutcome {
+    pub file: String,
+    pub outcome: Outcome,
+}
+
+pub fn raw_dir(data_dir: &Path, vrf: &Path) -> PathBuf {
+    data_dir.join("raw").join(vrf.file_stem().unwrap_or_default())
+}
+
+pub fn tracks_path(data_dir: &Path, match_id: &str) -> PathBuf {
+    data_dir.join("tracks").join(format!("{match_id}.parquet"))
+}
+
+/// Replays in the demos dir, oldest name first.
+pub fn find_replays(demos_dir: &Path) -> Result<Vec<PathBuf>> {
+    if !demos_dir.is_dir() {
+        bail!(
+            "replay folder {} does not exist. Download a replay in the client first, or set demos_dir with `valreview init --demos-dir`",
+            demos_dir.display()
+        );
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(demos_dir)
+        .with_context(|| format!("listing {}", demos_dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("vrf")))
+        .collect();
+    files.sort();
+    Ok(files)
+}
+
+/// Scans every replay; `on_file` is called after each one so the CLI can
+/// print progress. Only setup errors abort; per-file errors become `Failed`.
+pub fn scan(
+    store: &mut Store,
+    vrfkit: &Vrfkit,
+    catalog: &Catalog,
+    opts: &ScanOptions,
+    mut on_file: impl FnMut(&FileOutcome),
+) -> Result<Vec<FileOutcome>> {
+    let mut out = Vec::new();
+    for vrf in find_replays(&opts.demos_dir)? {
+        let file = vrf.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let outcome = scan_one(store, vrfkit, catalog, opts, &vrf, &file).unwrap_or_else(|e| Outcome::Failed {
+            error: format!("{e:#}"),
+        });
+        let fo = FileOutcome { file, outcome };
+        on_file(&fo);
+        out.push(fo);
+    }
+    Ok(out)
+}
+
+fn scan_one(
+    store: &mut Store,
+    vrfkit: &Vrfkit,
+    catalog: &Catalog,
+    opts: &ScanOptions,
+    vrf: &Path,
+    file: &str,
+) -> Result<Outcome> {
+    let size = std::fs::metadata(vrf)
+        .with_context(|| format!("reading {}", vrf.display()))?
+        .len();
+    match store.file_state(file, size)? {
+        FileState::Stored { .. } => return Ok(Outcome::AlreadyStored),
+        FileState::Logged { status, detail } if !opts.retry_failed => {
+            return Ok(match status.as_str() {
+                // Reported when first found; quiet afterwards.
+                "duplicate" => Outcome::AlreadyStored,
+                _ => Outcome::PreviouslyFailed { detail },
+            });
+        }
+        _ => {}
+    }
+
+    let raw = raw_dir(&opts.data_dir, vrf);
+    let result = export_and_store(store, vrfkit, catalog, opts, vrf, file, size, &raw);
+    if !opts.keep_raw && raw.exists() {
+        // Our own scratch directory under the data dir; nothing else lives there.
+        let _ = std::fs::remove_dir_all(&raw);
+    }
+    match result {
+        Ok(outcome) => Ok(outcome),
+        Err(e) => {
+            let error = format!("{e:#}");
+            store.log_file(file, size, "failed", &error, &vrfkit.version)?;
+            Ok(Outcome::Failed { error })
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn export_and_store(
+    store: &mut Store,
+    vrfkit: &Vrfkit,
+    catalog: &Catalog,
+    opts: &ScanOptions,
+    vrf: &Path,
+    file: &str,
+    size: u64,
+    raw: &Path,
+) -> Result<Outcome> {
+    if raw.exists() {
+        std::fs::remove_dir_all(raw).with_context(|| format!("clearing old export {}", raw.display()))?;
+    }
+    vrfkit.export(vrf, raw)?;
+    let export = Export::load(raw)?;
+
+    let mut warnings = Vec::new();
+    match check_build(&export.manifest.replay_build) {
+        BuildSupport::Supported => {}
+        BuildSupport::Caveat(s) => warnings.push(s),
+        BuildSupport::Unsupported(s) => bail!("{s}"),
+    }
+    if store.has_match(&export.manifest.match_id)? {
+        let match_id = export.manifest.match_id.clone();
+        store.log_file(file, size, "duplicate", &match_id, &vrfkit.version)?;
+        return Ok(Outcome::Duplicate { match_id });
+    }
+
+    let game = Game::new(export);
+    warnings.extend(game.warnings.iter().cloned());
+    let ctx = store.insert_match(&game, catalog, file, size, &vrfkit.version)?;
+    if let Err(e) = write_tracks(&game, &tracks_path(&opts.data_dir, &ctx.match_id)) {
+        warnings.push(format!("tracks not written: {e:#}"));
+    }
+    Ok(Outcome::Stored {
+        map: ctx.map_name.or(ctx.map_url).unwrap_or_else(|| "unknown map".into()),
+        match_id: ctx.match_id,
+        warnings,
+    })
+}

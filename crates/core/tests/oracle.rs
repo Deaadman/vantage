@@ -121,3 +121,48 @@ fn lotus_oracle() {
         assert_eq!(v["schema_version"], 2);
     }
 }
+
+#[test]
+fn store_and_detect_me() {
+    use valreview_core::store::{FileState, Store};
+    let Some(dir) = oracle_dir() else {
+        eprintln!("skipping: set VALREVIEW_ORACLE_EXPORT to the oracle export dir");
+        return;
+    };
+    let catalog = Catalog::builtin();
+    let game = Game::new(Export::load(&dir).unwrap());
+    let mut store = Store::open_in_memory().unwrap();
+    let ctx = store.insert_match(&game, &catalog, "a.vrf", 100, "v0.3.0").unwrap();
+    assert_eq!(ctx.rounds, 26);
+    assert_eq!(ctx.played_at.as_deref(), Some("2026-10-18T00:22:42Z"));
+    let sova = ctx.player("43082880-1822-5e84-a3f2-337d8a51a958").unwrap();
+    assert_eq!(
+        (sova.agent.as_str(), sova.role.as_deref(), sova.ping_median),
+        ("Sova", Some("Initiator"), Some(28))
+    );
+    assert!(ctx.teams.iter().all(|t| t.missing_roles.is_empty()));
+    let counts = store.counts().unwrap();
+    assert_eq!((counts.matches, counts.kills, counts.deaths), (1, 203, 203));
+    assert!(matches!(
+        store.file_state("a.vrf", 100).unwrap(),
+        FileState::Stored { .. }
+    ));
+    // One match is not enough to guess who you are.
+    assert_eq!(store.subjects_in_every_match().unwrap(), (1, vec![]));
+
+    // A second "match" where everyone except Sova is a different account.
+    let mut export = game.export.clone();
+    export.manifest.match_id = "second".into();
+    for p in &mut export.manifest.players {
+        if p.pawn != 1276 {
+            p.subject = format!("ffffffff-{}", &p.subject[9..]);
+        }
+    }
+    store
+        .insert_match(&Game::new(export), &catalog, "b.vrf", 200, "v0.3.0")
+        .unwrap();
+    assert_eq!(
+        store.subjects_in_every_match().unwrap(),
+        (2, vec!["43082880-1822-5e84-a3f2-337d8a51a958".to_owned()])
+    );
+}

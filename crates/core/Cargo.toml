@@ -10,6 +10,9 @@ arrow-cast = "60"
 arrow-schema = "60.0.0"
 directories = "6.0.0"
 parquet = { version = "60.0.0", default-features = false, features = ["arrow", "zstd", "snap"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.11.1"
+toml = "1.1.8"
 ureq = "3.4.2"
