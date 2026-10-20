@@ -98,7 +98,7 @@ impl HelpPanel {
         HelpAction::None
     }
 
-    /// The panel, exactly `h` rows for a `w`-column screen.
+    /// The panel for a `w`-column screen: as tall as its content, at most `h` rows.
     pub fn rows(&mut self, commands: &[CommandInfo], w: usize, h: usize) -> Vec<Row> {
         let mut top: Vec<Row> = vec![vec![(Style::fg(ACCENT), "─".repeat(w.saturating_sub(1)))], vec![]];
         let mut tabs: Row = vec![(Style::fg(ACCENT).bold(), "  Help".into())];
@@ -137,33 +137,24 @@ impl HelpPanel {
                 ),
             )],
         ];
-        let body_h = h.saturating_sub(top.len() + bottom.len()).max(1);
-        let body = if self.tab == 0 {
-            self.general(w, body_h)
+        // As tall as the longer tab needs, so switching tabs keeps the height.
+        let general = general_lines(w);
+        let needed = general.len().max(commands_height(commands.len()));
+        let body_h = needed.min(h.saturating_sub(top.len() + bottom.len())).max(1);
+        let mut body = if self.tab == 0 {
+            self.general(general, body_h)
         } else {
             self.commands(commands, body_h)
         };
+        body.resize(body_h, vec![]);
         let mut rows = top;
         rows.extend(body);
-        rows.resize(h.saturating_sub(bottom.len()), vec![]);
         rows.extend(bottom);
         rows.truncate(h);
         rows
     }
 
-    fn general(&mut self, w: usize, h: usize) -> Vec<Row> {
-        let text_w = w.saturating_sub(6).max(10);
-        let mut lines: Vec<Row> = Vec::new();
-        for (bold, text) in GENERAL {
-            let style = if *bold {
-                Style::default().bold()
-            } else {
-                Style::default()
-            };
-            for piece in wrap(text, text_w) {
-                lines.push(vec![(style, format!("  {piece}"))]);
-            }
-        }
+    fn general(&mut self, lines: Vec<Row>, h: usize) -> Vec<Row> {
         let max = lines.len().saturating_sub(h);
         self.scroll = self.scroll.min(max);
         let mut rows: Vec<Row> = lines.into_iter().skip(self.scroll).take(h).collect();
@@ -180,8 +171,12 @@ impl HelpPanel {
         let n = commands.len();
         self.selected = self.selected.min(n.saturating_sub(1));
         let mut rows: Vec<Row> = vec![vec![(Style::default(), "  Browse commands".into())]];
-        // Room for the list, keeping one row for a "more" line.
-        let fit = (h.saturating_sub(rows.len() + 1) / 2).max(1);
+        // Everything, or as many as fit with a row for each "more" line.
+        let fit = if commands_height(n) <= h {
+            n
+        } else {
+            (h.saturating_sub(3) / 2).max(1)
+        };
         let first = self.selected.saturating_sub(fit - 1).min(n.saturating_sub(fit));
         if first > 0 {
             rows.push(vec![(Style::fg(GREY), format!("    ↑ {first} more"))]);
@@ -203,6 +198,29 @@ impl HelpPanel {
         }
         rows
     }
+}
+
+/// The General tab's text wrapped to the screen.
+fn general_lines(w: usize) -> Vec<Row> {
+    let text_w = w.saturating_sub(6).max(10);
+    let mut lines = Vec::new();
+    for (bold, text) in GENERAL {
+        let style = if *bold {
+            Style::default().bold()
+        } else {
+            Style::default()
+        };
+        for piece in wrap(text, text_w) {
+            lines.push(vec![(style, format!("  {piece}"))]);
+        }
+    }
+    lines
+}
+
+/// Rows the Commands tab needs to list `n` commands: a title, the row above
+/// the list, and two rows per command.
+fn commands_height(n: usize) -> usize {
+    2 + 2 * n
 }
 
 #[cfg(test)]
@@ -235,16 +253,20 @@ mod tests {
     }
 
     #[test]
-    fn always_fills_the_height() {
-        let c = commands(30);
+    fn fits_its_content_and_the_screen() {
+        // Few commands: as tall as the General text needs, on either tab, with no room to spare.
+        let c = commands(3);
         let mut p = HelpPanel::default();
-        for h in [8, 14, 40] {
-            assert_eq!(p.rows(&c, 80, h).len(), h);
-        }
+        let natural = p.rows(&c, 80, 200).len();
+        assert!(natural < 200);
         p.key(key(KeyCode::Right), &c);
+        assert_eq!(p.rows(&c, 80, 200).len(), natural);
+        // Many commands: capped to the screen, never taller.
+        let c = commands(60);
         for h in [8, 14, 40] {
-            assert_eq!(p.rows(&c, 80, h).len(), h);
+            assert!(p.rows(&c, 80, h).len() <= h);
         }
+        assert_eq!(p.rows(&c, 80, 40).len(), 40);
     }
 
     #[test]
