@@ -10,7 +10,7 @@ use valreview_core::catalog::MapInfo;
 use valreview_core::deaths::DeathFact;
 use valreview_core::facts::RoundFact;
 use valreview_core::minimap::Minimap;
-use valreview_core::packet::MatchReview;
+use valreview_core::export::MatchReview;
 use valreview_core::review::{self, Finding, ordinal, percent};
 use valreview_core::summary;
 

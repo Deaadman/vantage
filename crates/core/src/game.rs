@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
-use crate::export::{EventKind, Export, Player};
+use crate::vrfkit_export::{EventKind, Export, Player};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Round {

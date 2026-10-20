@@ -300,10 +300,10 @@ fn reviews_and_trends() {
     let me = game.players().iter().find(|p| p.pawn == 1276).unwrap();
     let review = MatchReview::from_game(&game, &catalog, me);
 
-    // A stored review renders the same packet as the live export.
+    // A stored review renders the same export.md as the live export.
     let json = serde_json::to_string(&review).unwrap();
     let back: MatchReview = serde_json::from_str(&json).unwrap();
-    assert_eq!(back.packet_md(), review.packet_md());
+    assert_eq!(back.export_md(), review.export_md());
     assert_eq!(back.deaths_jsonl(), review.deaths_jsonl());
 
     // 40 synthetic matches: the same match, except the last 20 lose every trade.

@@ -10,7 +10,7 @@ use crate::catalog::Catalog;
 use crate::context::MatchContext;
 use crate::deaths::is_traded;
 use crate::game::Game;
-use crate::packet::MatchReview;
+use crate::export::MatchReview;
 use crate::time::now_rfc3339;
 
 pub const STORE_SCHEMA_VERSION: i64 = 3;
@@ -99,7 +99,7 @@ CREATE TABLE round_facts (
 
 /// Added in schema 3.
 const SCHEMA_V3: &str = "
--- One MatchReview (everything a packet shows) per player per match.
+-- One MatchReview (everything an export shows) per player per match.
 CREATE TABLE reviews (
     match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
     subject TEXT NOT NULL,
@@ -460,11 +460,11 @@ pub struct StoreCounts {
 
 fn parse_review(json: &str) -> Result<MatchReview> {
     let r: MatchReview = serde_json::from_str(json).context("reading a stored review")?;
-    if r.schema_version != crate::packet::REVIEW_SCHEMA_VERSION {
+    if r.schema_version != crate::export::REVIEW_SCHEMA_VERSION {
         bail!(
             "stored review schema {} differs from this valreview's {}",
             r.schema_version,
-            crate::packet::REVIEW_SCHEMA_VERSION
+            crate::export::REVIEW_SCHEMA_VERSION
         );
     }
     Ok(r)

@@ -12,7 +12,7 @@ use arrow_array::{
 };
 use arrow_schema::DataType;
 
-use crate::export::{column, open_reader};
+use crate::vrfkit_export::{column, open_reader};
 
 /// One `MulticastNotifyDamage_{Point,Base}` invocation (one hit or tick).
 #[derive(Debug, Clone, Default)]

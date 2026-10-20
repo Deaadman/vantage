@@ -3,7 +3,7 @@
 use anyhow::{Result, bail};
 
 use crate::catalog::Catalog;
-use crate::export::Player;
+use crate::vrfkit_export::Player;
 
 pub fn select_player<'a>(players: &'a [Player], catalog: &Catalog, selector: &str) -> Result<&'a Player> {
     let sel = selector.trim().to_ascii_lowercase();

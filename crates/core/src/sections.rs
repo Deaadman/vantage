@@ -1,4 +1,4 @@
-//! Packet sections for groups B to F, written from the reviewed player's
+//! Export sections for groups B to F, written from the reviewed player's
 //! death facts and round facts.
 
 use std::collections::BTreeMap;
@@ -6,9 +6,9 @@ use std::fmt::Write as _;
 
 use crate::analysis::{Side, slot_key, slot_name};
 use crate::facts::RoundFact;
-use crate::packet::{Duel, MatchReview};
+use crate::export::{Duel, MatchReview};
 
-/// Caveats for the derived (D) facts in these sections, stated once in the packet.
+/// Caveats for the derived (D) facts in these sections, stated once in the export.
 pub const PHASE4_CAVEATS: &[&str] = &[
     "Shots are counted from magazine decrements; replication can batch shots, and shotguns are left out of accuracy because one shot hits many pellets.",
     "A shot is \"moving\" above 1.5 m/s horizontal speed at the time of the shot.",

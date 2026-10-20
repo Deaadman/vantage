@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::analysis::Side;
 use crate::facts::RoundFact;
-use crate::packet::MatchReview;
+use crate::export::MatchReview;
 use crate::review::{self, Finding, PlayerLine, Stat, head_hits, median, percent, ratio, tally, trade_rate};
 use crate::trends::{SpotAcrossMatches, spots_across_matches};
 

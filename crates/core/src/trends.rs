@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::analysis::Side;
 use crate::clusters::{self, centroid, leader_clusters};
-use crate::packet::MatchReview;
+use crate::export::MatchReview;
 
 pub const TRENDS_SCHEMA_VERSION: u32 = 1;
 
@@ -720,7 +720,7 @@ impl TrendReport {
         let _ = writeln!(
             o,
             "trends_schema: {TRENDS_SCHEMA_VERSION} · review_schema: {}",
-            crate::packet::REVIEW_SCHEMA_VERSION
+            crate::export::REVIEW_SCHEMA_VERSION
         );
         let _ = writeln!(o);
         let _ = writeln!(
@@ -737,14 +737,14 @@ impl TrendReport {
         let _ = writeln!(o);
         let _ = writeln!(
             o,
-            "Facts from per-match packets, aggregated. Each metric is a count of events out of\n\
+            "Facts from per-match exports, aggregated. Each metric is a count of events out of\n\
              opportunities (rates) or an amount per round. A change is listed only when both\n\
              windows have at least {MIN_MATCHES} matches and {MIN_EVENTS:.0} events; anything smaller is\n\
              \"not enough data\", not a pattern. `score` is a two-proportion z (rates) or\n\
              Welch's t over per-match values (per round); `consistency` is the share of the\n\
              recent matches on the same side of the previous value as the change. Evidence\n\
              is match ids (first 8 characters) and round numbers; `valreview export --match`\n\
-             shows any of them. The caveats in each packet apply here too. What a change\n\
+             shows any of them. The caveats in each export apply here too. What a change\n\
              means is for you to judge."
         );
         let _ = writeln!(o);

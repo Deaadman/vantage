@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::builds::{BuildSupport, check_build};
 use crate::catalog::Catalog;
-use crate::export::Export;
+use crate::vrfkit_export::Export;
 use crate::game::Game;
 use crate::store::{FileState, Store};
 use crate::tracks::write_tracks;

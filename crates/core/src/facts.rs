@@ -1,7 +1,7 @@
 //! Groups B to F: per-death context and per-round facts for one player.
 //!
 //! Tags in the doc comments: R = read from the replay, D = derived with a
-//! caveat (the packet states each caveat once).
+//! caveat (the export states each caveat once).
 
 use std::collections::BTreeMap;
 
@@ -369,7 +369,7 @@ pub fn round_facts(a: &Analysis, pawn: u32) -> Vec<RoundFact> {
         .export
         .events
         .iter()
-        .filter(|e| e.kind == crate::export::EventKind::SwitchTeams)
+        .filter(|e| e.kind == crate::vrfkit_export::EventKind::SwitchTeams)
         .map(|e| e.time_ms)
         .collect();
     let first_half_end = switches.first().copied();

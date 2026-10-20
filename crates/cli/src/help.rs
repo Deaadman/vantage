@@ -42,7 +42,7 @@ const GENERAL: &[(bool, &str)] = &[
     ),
     (
         false,
-        "  /export writes the same match as packet.md, deaths.jsonl and rounds.jsonl to give to an AI.",
+        "  /export writes the same match as export.md, deaths.jsonl and rounds.jsonl to give to an AI.",
     ),
     (
         false,

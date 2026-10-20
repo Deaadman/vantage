@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::{Catalog, MapInfo};
-use crate::export::EventKind;
+use crate::vrfkit_export::EventKind;
 use crate::fields::Change;
 use crate::game::Game;
 use crate::items::{Item, ItemKind, identify};

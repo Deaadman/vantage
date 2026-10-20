@@ -3,5 +3,5 @@
 /out/
 *.vrf
 !/tests/fixtures/public/*.vrf
-packet.md
+export.md
 deaths.jsonl

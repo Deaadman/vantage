@@ -1,5 +1,5 @@
 //! Full pipeline on the committed public fixtures (tests/fixtures/public):
-//! scan with the real vrfkit, store, rescan, detect `me`, render packets and
+//! scan with the real vrfkit, store, rescan, detect `me`, render exports and
 //! trends, and report a corrupt file.
 //!
 //! Needs vrfkit v0.3.0: `$VALREVIEW_VRFKIT`, else `vrfkit.exe` on PATH. Skips
@@ -103,7 +103,7 @@ fn scan_public_fixtures() {
     let reviews = store.reviews_of(me).unwrap();
     assert_eq!(reviews.len(), 3);
     for r in &reviews {
-        let md = r.packet_md();
+        let md = r.export_md();
         assert!(md.starts_with("# Death review: "));
         assert!(md.contains("## Rounds table"));
         assert!(!r.round_facts.is_empty());

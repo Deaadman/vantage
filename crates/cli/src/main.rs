@@ -57,7 +57,7 @@ enum Command {
         #[arg(long)]
         retry_failed: bool,
     },
-    /// Write packet.md, deaths.jsonl and rounds.jsonl for one player of one match.
+    /// Write export.md, deaths.jsonl and rounds.jsonl for one player of one match.
     Export {
         /// Directory written by `vrfkit export` (default: the newest scanned match).
         #[arg(conflicts_with = "match_id")]
@@ -237,10 +237,10 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
             };
             std::fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
             let out = std::path::absolute(&out).unwrap_or(out);
-            let md = out.join("packet.md");
+            let md = out.join("export.md");
             let jsonl = out.join("deaths.jsonl");
             let rounds = out.join("rounds.jsonl");
-            std::fs::write(&md, review.packet_md()).with_context(|| format!("writing {}", md.display()))?;
+            std::fs::write(&md, review.export_md()).with_context(|| format!("writing {}", md.display()))?;
             std::fs::write(&jsonl, review.deaths_jsonl()).with_context(|| format!("writing {}", jsonl.display()))?;
             std::fs::write(&rounds, review.rounds_jsonl()).with_context(|| format!("writing {}", rounds.display()))?;
             outln!(
@@ -524,7 +524,7 @@ fn stored_review(data_dir: &Path, match_prefix: &str, me: Option<&str>) -> Resul
     };
     store.review(&id, &subject)?.with_context(|| {
         format!(
-            "match {id} was stored by an older valreview without reviews; its raw export is gone, so it has no packet"
+            "match {id} was stored by an older valreview without reviews; its raw export is gone, so it can't be exported"
         )
     })
 }

@@ -30,7 +30,7 @@ Type `/` to see the commands, or `/help` for an overview, every command and the 
 | --- | --- |
 | `/review` | Opens a match (newest by default): Overview, Work on, Rounds, Deaths and Map tabs |
 | `/summary` | Sums up all your matches on one map (`--map Pearl`, default the newest match's map): what keeps repeating |
-| `/export` | Writes the same match as `packet.md`, `deaths.jsonl` and `rounds.jsonl` for an AI to review |
+| `/export` | Writes the same match as `export.md`, `deaths.jsonl` and `rounds.jsonl` for an AI to review |
 | `/trends` | Compares your last 20 matches with the 20 before and lists repeated death spots |
 | `/matches` | Lists stored matches |
 | `/scan` | Processes the replay folder now (`--retry-failed` tries failed replays again) |
@@ -59,7 +59,7 @@ Each one also works as a plain command, for example `valreview export --match <i
 
 Patterns need a few matches to mean anything. With fewer than 3 on a map, the summary says so and points you to `/review`.
 
-Rounds count from 1 here, as in the game. The packet counts from 0. Findings describe what the replay measured; the packet's caveats (for example a less-verified game build) apply to them too.
+Rounds count from 1 here, as in the game. The export counts from 0. Findings describe what the replay measured; the export's caveats (for example a less-verified game build) apply to them too.
 
 ## Updates
 
@@ -84,7 +84,7 @@ cargo build --release
 cargo test
 ```
 
-- `crates/core`: export loader, analysis and packet rendering.
+- `crates/core`: export loader, analysis and `export.md` rendering.
 - `crates/cli`: the `valreview` binary and the interactive shell.
 
 `crates/core/tests/fixtures.rs` runs the whole pipeline on the public replays in `tests/fixtures/public` and needs vrfkit (`VALREVIEW_VRFKIT=<path>` or on PATH). The oracle test needs a personal export at `VALREVIEW_ORACLE_EXPORT` or `tests/data/oracle_export`. Both skip without their inputs.

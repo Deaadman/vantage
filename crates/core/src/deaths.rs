@@ -52,7 +52,7 @@ pub struct DeathFact {
     pub minimap_uv: Option<[f64; 2]>,
     /// Nearest valorant-api.com callout point on the plane, e.g. `A Site`.
     pub nearest_callout: Option<String>,
-    /// Index into the packet's repeated-death-spot list, if this death is in one.
+    /// Index into the export's repeated-death-spot list, if this death is in one.
     pub cluster_id: Option<usize>,
     #[serde(flatten)]
     pub context: DeathContext,

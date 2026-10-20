@@ -4,13 +4,13 @@
 //! threshold. Every finding names the rounds behind it; none of it is advice
 //! the replay cannot show.
 //!
-//! Rounds are shown counting from 1, as the game does (the packet counts from 0).
+//! Rounds are shown counting from 1, as the game does (the export counts from 0).
 
 use std::collections::BTreeMap;
 
 use crate::analysis::Side;
 use crate::facts::RoundFact;
-use crate::packet::MatchReview;
+use crate::export::MatchReview;
 
 /// One player's line in the scoreboard, from their own stored review.
 #[derive(Debug, Clone)]
