@@ -5,12 +5,14 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 
+use crate::analysis::Analysis;
 use crate::builds::{BuildSupport, check_build};
 use crate::catalog::{Catalog, MapInfo};
 use crate::clusters::{self, DeathCluster, cluster_deaths};
 use crate::context::MatchContext;
 use crate::deaths::{self, DeathFact, death_facts, is_traded};
 use crate::export::Player;
+use crate::facts::{RoundFact, round_facts};
 use crate::game::Game;
 
 pub const PACKET_SCHEMA_VERSION: u32 = 1;
@@ -102,6 +104,8 @@ pub struct Review<'a> {
     pub map: Option<&'a MapInfo>,
     pub me: &'a Player,
     pub context: MatchContext,
+    pub analysis: Analysis<'a>,
+    pub round_facts: Vec<RoundFact>,
     pub facts: Vec<DeathFact>,
     pub clusters: Vec<DeathCluster>,
     pub summary: DeathSummary,
@@ -118,7 +122,9 @@ impl<'a> Review<'a> {
             .map_path
             .as_deref()
             .and_then(|p| catalog.map_by_url(p));
-        let mut facts = death_facts(game, catalog, me.pawn);
+        let analysis = Analysis::new(game, catalog);
+        let mut facts = death_facts(&analysis, me.pawn);
+        let round_facts = round_facts(&analysis, me.pawn);
         let clusters = cluster_deaths(&mut facts, map);
         let summary = DeathSummary::from_facts(&facts);
         let cross: Vec<_> = game.kills.iter().filter(|k| !k.is_self_kill()).collect();
@@ -128,6 +134,8 @@ impl<'a> Review<'a> {
             map,
             me,
             context: MatchContext::new(game, catalog),
+            analysis,
+            round_facts,
             match_kills_traded: cross.iter().filter(|k| is_traded(game, k)).count(),
             match_kills: cross.len(),
             facts,
@@ -140,6 +148,15 @@ impl<'a> Review<'a> {
         let mut out = String::new();
         for f in &self.facts {
             out.push_str(&serde_json::to_string(f).expect("death facts serialise"));
+            out.push('\n');
+        }
+        out
+    }
+
+    pub fn rounds_jsonl(&self) -> String {
+        let mut out = String::new();
+        for f in &self.round_facts {
+            out.push_str(&serde_json::to_string(f).expect("round facts serialise"));
             out.push('\n');
         }
         out
@@ -172,7 +189,7 @@ impl<'a> Review<'a> {
                 let _ = writeln!(o, "- Replay build: {c}.");
             }
         }
-        for c in CAVEATS {
+        for c in CAVEATS.iter().chain(crate::sections::PHASE4_CAVEATS) {
             let _ = writeln!(o, "- {c}");
         }
         match self.map {
@@ -338,13 +355,15 @@ impl<'a> Review<'a> {
         }
         let _ = writeln!(o);
 
+        crate::sections::render(self, &mut o);
+
         let _ = writeln!(o, "## Deaths");
         let _ = writeln!(o);
         let _ = writeln!(
             o,
-            "| rnd | t s | killer | 1st | tm/en alive | nearest teammates m | killer m | xhair ° | speed m/s | traded | spot | callout | pos cm |"
+            "| rnd | t s | killer | killed with | in hand | 1st | tm/en alive | nearest teammates m | killer m | xhair ° | speed m/s | traded | spot | callout | pos cm |"
         );
-        let _ = writeln!(o, "|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+        let _ = writeln!(o, "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
         for f in &self.facts {
             let near = if f.nearest_teammates.is_empty() {
                 "-".to_owned()
@@ -362,10 +381,12 @@ impl<'a> Review<'a> {
             };
             let _ = writeln!(
                 o,
-                "| {} | {} | {} | {} | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} |",
                 opt(f.round),
                 opt(f.since_round_start_s),
                 killer,
+                f.context.killer_weapon.as_deref().unwrap_or("-"),
+                f.context.weapon_in_hand.as_deref().unwrap_or("-"),
                 yes(f.first_death_of_round),
                 f.teammates_alive,
                 f.enemies_alive,
@@ -381,6 +402,8 @@ impl<'a> Review<'a> {
                     .unwrap_or_else(|| "-".into()),
             );
         }
+        let _ = writeln!(o);
+        crate::sections::rounds_table(self, &mut o);
         o
     }
 
@@ -430,6 +453,11 @@ replay. There is no video and no judgement here; interpret the numbers.
 - `traded`: a teammate killed the killer within 3 s in the same round.
 - `spot`: the repeated-death-spot id from the list above.
 - `callout`: the nearest named map location (valorant-api.com), e.g. `A Site`.
+- `killed with` / `in hand`: the killer's weapon or ability, and what I was holding.
+- Sections Gunfights to Rounds summarise the whole match for me; the rounds table
+  has one row per round (`buy` = buy type and best gun, `loadout` = credits of guns
+  and armour owned, `head/hits` = headshot hits of all hits on players, `first` =
+  FK first kill / FD first death of the round, `casts` by key C/Q/E/X).
 - Pawn ids identify players; the replay has no display names.
 
 ";

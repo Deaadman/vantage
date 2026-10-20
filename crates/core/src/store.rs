@@ -5,14 +5,16 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::analysis::Analysis;
 use crate::catalog::Catalog;
 use crate::clusters::cluster_deaths;
 use crate::context::MatchContext;
 use crate::deaths::{death_facts, is_traded};
+use crate::facts::round_facts;
 use crate::game::Game;
 use crate::time::now_rfc3339;
 
-pub const STORE_SCHEMA_VERSION: i64 = 1;
+pub const STORE_SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = "
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -84,6 +86,18 @@ CREATE TABLE scan_log (
 );
 ";
 
+/// Added in schema 2.
+const SCHEMA_V2: &str = "
+-- One row per player per round; fact_json is a rounds.jsonl line.
+CREATE TABLE round_facts (
+    match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
+    subject TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    fact_json TEXT NOT NULL,
+    PRIMARY KEY (match_id, subject, round)
+);
+";
+
 pub struct Store {
     conn: Connection,
 }
@@ -130,6 +144,7 @@ impl Store {
             .is_some();
         if !has_meta {
             self.conn.execute_batch(SCHEMA)?;
+            self.conn.execute_batch(SCHEMA_V2)?;
             self.conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
                 [STORE_SCHEMA_VERSION.to_string()],
@@ -146,7 +161,15 @@ impl Store {
         if version > STORE_SCHEMA_VERSION {
             bail!("database schema {version} is newer than this valreview ({STORE_SCHEMA_VERSION}); update valreview");
         }
-        // Future migrations from `version` up to STORE_SCHEMA_VERSION go here.
+        if version < 2 {
+            // v2 adds per-player round facts. Matches stored by v1 have none;
+            // their raw exports are gone, so they stay without until rescanned.
+            self.conn.execute_batch(SCHEMA_V2)?;
+        }
+        self.conn.execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+            [STORE_SCHEMA_VERSION.to_string()],
+        )?;
         Ok(())
     }
 
@@ -281,19 +304,20 @@ impl Store {
                 ],
             )?;
         }
-        let map = game
-            .export
-            .manifest
-            .map_path
-            .as_deref()
-            .and_then(|p| catalog.map_by_url(p));
+        let analysis = Analysis::new(game, catalog);
         for p in game.players() {
-            let mut facts = death_facts(game, catalog, p.pawn);
-            cluster_deaths(&mut facts, map);
+            let mut facts = death_facts(&analysis, p.pawn);
+            cluster_deaths(&mut facts, analysis.map);
             for f in &facts {
                 tx.execute(
                     "INSERT INTO deaths (match_id, time_ms, victim_subject, round, fact_json) VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![ctx.match_id, f.time_ms, p.subject, f.round, serde_json::to_string(f)?],
+                )?;
+            }
+            for f in round_facts(&analysis, p.pawn) {
+                tx.execute(
+                    "INSERT INTO round_facts (match_id, subject, round, fact_json) VALUES (?1, ?2, ?3, ?4)",
+                    params![ctx.match_id, p.subject, f.round, serde_json::to_string(&f)?],
                 )?;
             }
         }

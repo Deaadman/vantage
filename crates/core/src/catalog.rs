@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::BUILTIN_AGENTS;
 
-pub const CATALOG_SCHEMA_VERSION: u32 = 1;
+pub const CATALOG_SCHEMA_VERSION: u32 = 2;
 const API_BASE: &str = "https://valorant-api.com/v1";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -26,6 +26,7 @@ pub struct Catalog {
     pub agents: Vec<Agent>,
     pub maps: Vec<MapInfo>,
     pub weapons: Vec<Weapon>,
+    pub gear: Vec<Gear>,
     pub seasons: Vec<Season>,
 }
 
@@ -104,6 +105,8 @@ pub struct Weapon {
     pub name: String,
     /// e.g. `EEquippableCategory::Rifle`.
     pub category: String,
+    /// Asset folder under `/Game`, e.g. `Equippables/Guns/Rifles/AK`; matches replay class paths.
+    pub asset_folder: Option<String>,
     pub cost: Option<u32>,
     pub magazine_size: Option<u32>,
     pub fire_rate: Option<f64>,
@@ -117,6 +120,16 @@ pub struct DamageRange {
     pub head: f64,
     pub body: f64,
     pub leg: f64,
+}
+
+/// Armour and other shop gear.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Gear {
+    pub uuid: String,
+    pub name: String,
+    pub cost: Option<u32>,
+    /// Prefix of the replay's class leaf, e.g. `HeavyArmor` for `HeavyArmorItem_C`.
+    pub class_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,15 +175,20 @@ impl Catalog {
 
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let cat: Catalog = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-        if cat.schema_version != CATALOG_SCHEMA_VERSION {
+        // Check the version before the shape, so an old cache gets a clear message.
+        #[derive(Deserialize)]
+        struct Version {
+            schema_version: u32,
+        }
+        let v: Version = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        if v.schema_version != CATALOG_SCHEMA_VERSION {
             bail!(
-                "{} has schema {} (expected {CATALOG_SCHEMA_VERSION})",
+                "{} is catalog schema {} but this valreview uses {CATALOG_SCHEMA_VERSION}",
                 path.display(),
-                cat.schema_version
+                v.schema_version
             );
         }
-        Ok(cat)
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
     }
 
     /// Never fails: a missing or unreadable cache gives the built-in table.
@@ -255,6 +273,7 @@ pub fn fetch() -> Result<Catalog> {
     let agents: Envelope<Vec<RawAgent>> = get_json("agents")?;
     let maps: Envelope<Vec<RawMap>> = get_json("maps")?;
     let weapons: Envelope<Vec<RawWeapon>> = get_json("weapons")?;
+    let gear: Envelope<Vec<RawGear>> = get_json("gear")?;
     let seasons: Envelope<Vec<RawSeason>> = get_json("seasons")?;
     Ok(Catalog::from_raw(
         Some(crate::time::now_rfc3339()),
@@ -262,6 +281,7 @@ pub fn fetch() -> Result<Catalog> {
         agents.data,
         maps.data,
         weapons.data,
+        gear.data,
         seasons.data,
     ))
 }
@@ -371,7 +391,17 @@ struct RawWeapon {
     display_name: String,
     #[serde(default, deserialize_with = "null_default")]
     category: String,
+    asset_path: Option<String>,
     weapon_stats: Option<RawWeaponStats>,
+    shop_data: Option<RawShop>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawGear {
+    uuid: String,
+    display_name: String,
+    asset_path: Option<String>,
     shop_data: Option<RawShop>,
 }
 
@@ -418,6 +448,7 @@ impl Catalog {
         agents: Vec<RawAgent>,
         maps: Vec<RawMap>,
         weapons: Vec<RawWeapon>,
+        gear: Vec<RawGear>,
         seasons: Vec<RawSeason>,
     ) -> Self {
         Catalog {
@@ -478,6 +509,7 @@ impl Catalog {
                         uuid: w.uuid.to_ascii_lowercase(),
                         name: w.display_name,
                         category: w.category,
+                        asset_folder: w.asset_path.as_deref().map(asset_folder),
                         cost: w.shop_data.and_then(|s| s.cost),
                         magazine_size: stats.as_ref().and_then(|s| s.magazine_size),
                         fire_rate: stats.as_ref().and_then(|s| s.fire_rate),
@@ -496,6 +528,15 @@ impl Catalog {
                     }
                 })
                 .collect(),
+            gear: gear
+                .into_iter()
+                .map(|g| Gear {
+                    uuid: g.uuid.to_ascii_lowercase(),
+                    name: g.display_name,
+                    cost: g.shop_data.and_then(|s| s.cost),
+                    class_prefix: g.asset_path.as_deref().map(gear_prefix),
+                })
+                .collect(),
             seasons: seasons
                 .into_iter()
                 .map(|s| Season {
@@ -509,6 +550,18 @@ impl Catalog {
                 .collect(),
         }
     }
+}
+
+/// `ShooterGame/Content/Equippables/Guns/Rifles/AK/AKPrimaryAsset` -> `Equippables/Guns/Rifles/AK`.
+fn asset_folder(asset_path: &str) -> String {
+    let p = asset_path.strip_prefix("ShooterGame/Content/").unwrap_or(asset_path);
+    p.rsplit_once('/').map(|(f, _)| f).unwrap_or("").to_owned()
+}
+
+/// `ShooterGame/Content/Gear/HeavyArmor_PrimaryAsset` -> `HeavyArmor`.
+fn gear_prefix(asset_path: &str) -> String {
+    let stem = asset_path.rsplit('/').next().unwrap_or(asset_path);
+    stem.trim_end_matches("PrimaryAsset").trim_end_matches('_').to_owned()
 }
 
 #[cfg(test)]
@@ -536,10 +589,13 @@ mod tests {
          "xMultiplier":0,"yMultiplier":0,"xScalarToAdd":0,"yScalarToAdd":0,"callouts":null}]}"#;
     const WEAPONS: &str = r#"{"status":200,"data":[
         {"uuid":"9c82e19d-4575-0200-1a81-3eacf00cf872","displayName":"Vandal","category":"EEquippableCategory::Rifle",
+         "assetPath":"ShooterGame/Content/Equippables/Guns/Rifles/AK/AKPrimaryAsset",
          "weaponStats":{"fireRate":9.75,"magazineSize":25,"damageRanges":[{"rangeStartMeters":0,"rangeEndMeters":50,
          "headDamage":160,"bodyDamage":40,"legDamage":34}]},"shopData":{"cost":2900,"category":"Rifles"},"skins":[]},
         {"uuid":"2f59173c-4bed-b6c3-2191-dea9b58be9c7","displayName":"Melee","category":"EEquippableCategory::Melee",
          "weaponStats":null,"shopData":null,"skins":[]}]}"#;
+    const GEAR: &str = r#"{"status":200,"data":[{"uuid":"822bcab2-40a2-324e-c137-e09195ad7692","displayName":"Heavy Armor",
+        "assetPath":"ShooterGame/Content/Gear/HeavyArmor_PrimaryAsset","shopData":{"cost":1000}}]}"#;
     const SEASONS: &str = r#"{"status":200,"data":[{"uuid":"3737c391-497a-6e82-aeb5-cc9f701f72e2","displayName":"V26",
         "title":null,"type":null,"startTime":"2026-06-24T00:00:00Z","endTime":"2027-01-06T00:00:00Z","parentUuid":null,"assetPath":""}]}"#;
     const VERSION: &str =
@@ -557,6 +613,7 @@ mod tests {
             serde_json::from_value::<Envelope<Vec<RawWeapon>>>(p(WEAPONS))
                 .unwrap()
                 .data,
+            serde_json::from_value::<Envelope<Vec<RawGear>>>(p(GEAR)).unwrap().data,
             serde_json::from_value::<Envelope<Vec<RawSeason>>>(p(SEASONS))
                 .unwrap()
                 .data,
@@ -593,6 +650,10 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(c.seasons[0].name, "V26");
+        assert_eq!(vandal.asset_folder.as_deref(), Some("Equippables/Guns/Rifles/AK"));
+        assert_eq!(c.gear[0].class_prefix.as_deref(), Some("HeavyArmor"));
+        let item = crate::items::identify("/Game/Equippables/Guns/Rifles/AK/AssaultRifle_AK.AssaultRifle_AK_C", &c);
+        assert_eq!((item.name.as_str(), item.cost), ("Vandal", Some(2900)));
         // Round trip through the cache format.
         let back: Catalog = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.maps.len(), 2);

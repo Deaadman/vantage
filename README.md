@@ -15,6 +15,23 @@ Local and personal use only: it never touches the game or the Riot client.
 - Phase 3: `valreview init` and `valreview scan`. Scan exports each new replay
   with the pinned vrfkit, stores match context, kills and every player's death
   facts in SQLite, keeps 4 Hz movement tracks, and deletes the raw export.
+- Phase 4: groups B to F. Gunfights (damage, hit regions, wallbangs, weapons,
+  magazine at death, duels, accuracy and moving shots from magazine counts),
+  positioning (trades, forward rank at first contact, area time, rotations),
+  utility (casts per slot, ultimates, casts before contact or death), economy
+  (credits, loadout, buy types, team alignment, force/bonus/anti-eco results)
+  and rounds (sides, results, first kills, man advantage, plants, retakes,
+  clutches). `packet` also writes `rounds.jsonl`; the database keeps every
+  player's round facts.
+
+  Not built, because the replay does not support it on 13.08: abilities left
+  unused at death (charge state is not decoded) and reload state at death (the
+  magazine count is reported instead). Derived facts state their caveats in
+  `packet.md`.
+
+  Checked against the game's own numbers on the oracle replay: every player's
+  `AggregateKills`/`AggregateDeaths` match the kill events, and damage dealt and
+  taken match the CombatReport exactly.
 
 ## Build
 
@@ -50,6 +67,9 @@ valreview players <export_dir>
 valreview packet <export_dir> --me <selector> [--out <dir>]
 ```
 
+`packet` writes `packet.md` (for an AI reviewer), `deaths.jsonl` (one line per
+death, schema 3) and `rounds.jsonl` (one line per round).
+
 `--me` takes an account-UUID prefix (4+ characters), a pawn id, or an agent
 name. It errors if the selector matches more than one player.
 
@@ -59,7 +79,7 @@ Files live in `%LOCALAPPDATA%\valreview\data` (override with `--data-dir` or
 - `config.toml`: `me`, `vrfkit`, `demos_dir`, optional `vrfkit_sha256` to accept
   a deliberately upgraded vrfkit
 - `catalog.json`: the valorant-api.com cache; a failed sync leaves it in place
-- `valreview.db`: SQLite (matches, players, rounds, kills, deaths, scan_log)
+- `valreview.db`: SQLite schema 2 (matches, players, rounds, kills, deaths, round_facts, scan_log)
 - `tracks/<match>.parquet`: player positions at 4 Hz
 
 ## Layout

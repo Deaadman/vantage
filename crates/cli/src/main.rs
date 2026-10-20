@@ -119,13 +119,17 @@ fn run(cli: Cli) -> Result<()> {
             std::fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
             let md = out.join("packet.md");
             let jsonl = out.join("deaths.jsonl");
+            let rounds = out.join("rounds.jsonl");
             std::fs::write(&md, review.packet_md()).with_context(|| format!("writing {}", md.display()))?;
             std::fs::write(&jsonl, review.deaths_jsonl()).with_context(|| format!("writing {}", jsonl.display()))?;
+            std::fs::write(&rounds, review.rounds_jsonl()).with_context(|| format!("writing {}", rounds.display()))?;
             println!(
-                "wrote {} and {} ({} deaths)",
+                "wrote {}, {} and {} ({} deaths, {} rounds)",
                 md.display(),
                 jsonl.display(),
-                review.facts.len()
+                rounds.display(),
+                review.facts.len(),
+                review.round_facts.len()
             );
         }
         Command::Init { me, vrfkit, demos_dir } => init(&data_dir, me, vrfkit, demos_dir)?,

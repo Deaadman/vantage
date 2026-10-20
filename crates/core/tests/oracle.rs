@@ -118,7 +118,7 @@ fn lotus_oracle() {
     // Every jsonl line parses and carries the schema version.
     for line in r.deaths_jsonl().lines() {
         let v: serde_json::Value = serde_json::from_str(line).unwrap();
-        assert_eq!(v["schema_version"], 2);
+        assert_eq!(v["schema_version"], 3);
     }
 }
 
@@ -165,4 +165,126 @@ fn store_and_detect_me() {
         store.subjects_in_every_match().unwrap(),
         (2, vec!["43082880-1822-5e84-a3f2-337d8a51a958".to_owned()])
     );
+}
+
+#[test]
+fn fields_extraction() {
+    let Some(dir) = oracle_dir() else {
+        eprintln!("skipping: set VALREVIEW_ORACLE_EXPORT to the oracle export dir");
+        return;
+    };
+    let export = Export::load(&dir).unwrap();
+    let f = &export.fields;
+    let pawns: Vec<u32> = export.manifest.players.iter().map(|p| p.pawn).collect();
+    // Same counts as the pandas prototype and vrfkit's damage-events view.
+    assert_eq!(f.damage.len(), 1112);
+    assert_eq!(
+        f.damage
+            .iter()
+            .filter(|d| d.killed && pawns.contains(&d.victim))
+            .count(),
+        203
+    );
+    assert_eq!(f.casts.len(), 539);
+    assert_eq!(f.casts.iter().filter(|c| c.slot == 9).count(), 27);
+    assert_eq!(f.round_results.len(), 26);
+    assert_eq!(f.planted_at_site.len(), 5);
+    // The game's own cumulative counters agree with the kill events.
+    assert_eq!(f.aggregate_kills.values().sum::<i64>(), 202);
+    assert_eq!(f.aggregate_deaths.values().sum::<i64>(), 203);
+    assert!(f.phases.iter().any(|p| p.value == 4));
+    assert!(!f.ammo.is_empty() && !f.in_hand.is_empty() && !f.owners.is_empty());
+}
+
+#[test]
+fn analysis_timelines() {
+    use valreview_core::analysis::Analysis;
+    let Some(dir) = oracle_dir() else {
+        eprintln!("skipping: set VALREVIEW_ORACLE_EXPORT to the oracle export dir");
+        return;
+    };
+    let game = Game::new(Export::load(&dir).unwrap());
+    let catalog = Catalog::builtin();
+    let a = Analysis::new(&game, &catalog);
+    // CastTime is measured from the barrier drop: buy_end_ms + CastTime lands
+    // on the replay time the cast was first seen.
+    let mut residual: Vec<i64> = a
+        .casts
+        .iter()
+        .zip(game.export.fields.casts.iter())
+        .filter_map(|(c, raw)| c.time_ms.map(|t| raw.seen_ms as i64 - t as i64))
+        .collect();
+    residual.sort_unstable();
+    let median = residual[residual.len() / 2];
+    eprintln!("cast residual median {median} ms over {}", residual.len());
+    assert!(median.abs() < 1000, "median cast residual {median} ms");
+    // Every round has a barrier drop and a side.
+    assert!(
+        a.rounds
+            .iter()
+            .all(|r| r.buy_end_ms.is_some() && r.attacker_side.is_some())
+    );
+    // Wins per side add up to the rounds played.
+    let wins: usize = a.rounds.iter().filter(|r| r.winner_side.is_some()).count();
+    assert_eq!(wins, 26);
+}
+
+#[test]
+fn phase4_facts() {
+    use valreview_core::analysis::Analysis;
+    use valreview_core::facts::round_facts;
+    let Some(dir) = oracle_dir() else {
+        eprintln!("skipping: set VALREVIEW_ORACLE_EXPORT to the oracle export dir");
+        return;
+    };
+    let game = Game::new(Export::load(&dir).unwrap());
+    let catalog = Catalog::builtin();
+    let a = Analysis::new(&game, &catalog);
+    let f = &game.export.fields;
+
+    // The game's own per-player counters (BasicCombatStatsComponent on the
+    // player state) agree with the kill events for every player.
+    for p in game.players() {
+        let (k, d) = game.kd(p.pawn);
+        assert_eq!(
+            f.aggregate_kills.get(&p.actor_net_guid),
+            Some(&(k as i64)),
+            "kills of {}",
+            p.pawn
+        );
+        assert_eq!(
+            f.aggregate_deaths.get(&p.actor_net_guid),
+            Some(&(d as i64)),
+            "deaths of {}",
+            p.pawn
+        );
+    }
+
+    let rf = round_facts(&a, 1276);
+    assert_eq!(rf.len(), 26);
+    assert_eq!(rf.iter().map(|r| r.kills).sum::<u32>(), 18);
+    assert_eq!(rf.iter().filter(|r| r.died).count(), 21);
+    // Damage dealt equals Sova's CombatReport (OwnerExclusivePlayerInfo 102): 3846.60 in total.
+    let dealt: f64 = rf.iter().map(|r| r.damage_dealt).sum();
+    assert!((dealt - 3846.6).abs() < 0.5, "damage dealt {dealt}");
+    // Round 15 alone: CombatReport says 520.
+    assert!((rf[15].damage_dealt - 520.0).abs() < 0.05);
+    // Score and sides: 12-14, first half on attack.
+    assert_eq!(rf.iter().filter(|r| r.won == Some(true)).count(), 12);
+    assert_eq!(rf[0].side, Some(valreview_core::analysis::Side::Attack));
+    assert_eq!(rf[12].side, Some(valreview_core::analysis::Side::Defense));
+    // Casts by key, deduplicated: Recon Bolt (E) 22, Owl Drone (C) 12, Shock Bolt (Q) 5, ult 1.
+    let casts = |k: &str| rf.iter().filter_map(|r| r.casts.get(k)).sum::<u32>();
+    assert_eq!((casts("E"), casts("C"), casts("Q"), casts("X")), (22, 12, 5, 1));
+    assert!(rf[0].pistol && rf[12].pistol && !rf[24].pistol);
+
+    // Every death has a killing blow with a weapon, and the in-hand weapon is known.
+    let deaths = valreview_core::deaths::death_facts(&a, 1276);
+    assert!(
+        deaths
+            .iter()
+            .all(|d| d.context.killer_weapon.is_some() && d.context.weapon_in_hand.is_some())
+    );
+    assert_eq!(deaths[0].context.weapon_in_hand.as_deref(), Some("Bandit"));
+    assert_eq!(deaths[0].context.magazine_ammo, Some(3));
 }

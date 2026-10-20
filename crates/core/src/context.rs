@@ -72,7 +72,13 @@ impl MatchContext {
                     .filter(|p| game.teams.side(p.pawn) == side)
                     .map(|p| {
                         let (kills, deaths) = game.kd(p.pawn);
-                        let mut pings = game.export.pings.get(&p.actor_net_guid).cloned().unwrap_or_default();
+                        let mut pings = game
+                            .export
+                            .fields
+                            .pings
+                            .get(&p.actor_net_guid)
+                            .cloned()
+                            .unwrap_or_default();
                         pings.sort_unstable();
                         let pct = |q: f64| {
                             (!pings.is_empty()).then(|| pings[((pings.len() - 1) as f64 * q).round() as usize])

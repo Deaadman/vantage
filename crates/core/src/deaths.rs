@@ -1,8 +1,10 @@
-//! Group A: per-death facts for one player.
+//! Group A: per-death facts for one player (groups B to F add `facts::DeathContext`).
 
 use serde::Serialize;
 
+use crate::analysis::Analysis;
 use crate::catalog::{Catalog, MapInfo};
+use crate::facts::{DeathContext, death_context};
 use crate::game::{Game, Kill};
 
 /// Positions are sampled this long before the death event.
@@ -12,7 +14,7 @@ pub const MAX_SAMPLE_AGE_MS: u32 = 1500;
 /// A teammate kills the killer within this window, in the same round.
 pub const TRADE_WINDOW_MS: u32 = 3000;
 
-pub const DEATHS_SCHEMA_VERSION: u32 = 2;
+pub const DEATHS_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NearTeammate {
@@ -52,6 +54,8 @@ pub struct DeathFact {
     pub nearest_callout: Option<String>,
     /// Index into the packet's repeated-death-spot list, if this death is in one.
     pub cluster_id: Option<usize>,
+    #[serde(flatten)]
+    pub context: DeathContext,
 }
 
 impl DeathFact {
@@ -75,17 +79,16 @@ pub fn is_traded(game: &Game, kill: &Kill) -> bool {
     })
 }
 
-pub fn death_facts(game: &Game, catalog: &Catalog, pawn: u32) -> Vec<DeathFact> {
-    let map = game
-        .export
-        .manifest
-        .map_path
-        .as_deref()
-        .and_then(|p| catalog.map_by_url(p));
-    game.kills
+pub fn death_facts(a: &Analysis, pawn: u32) -> Vec<DeathFact> {
+    a.game
+        .kills
         .iter()
         .filter(|k| k.victim == pawn)
-        .map(|k| death_fact(game, catalog, map, k))
+        .map(|k| {
+            let mut f = death_fact(a.game, a.catalog, a.map, k);
+            f.context = death_context(a, k);
+            f
+        })
         .collect()
 }
 
@@ -186,6 +189,7 @@ fn death_fact(game: &Game, catalog: &Catalog, map: Option<&MapInfo>, kill: &Kill
         minimap_uv,
         nearest_callout,
         cluster_id: None,
+        context: DeathContext::default(),
     }
 }
 

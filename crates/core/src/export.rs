@@ -6,11 +6,13 @@ use std::fs::File;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use arrow_array::{Array, ArrayRef, DictionaryArray, RecordBatch, StringArray, cast::AsArray, types};
+use arrow_array::{Array, ArrayRef, RecordBatch, cast::AsArray, types};
 use arrow_schema::DataType;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::Deserialize;
+
+use crate::fields::{Fields, load_fields};
 
 /// Positions at or below this on both x and z are vrfkit's "hidden actor" parking spot.
 const HIDDEN_BELOW_CM: f32 = -40_000.0;
@@ -99,8 +101,27 @@ pub struct Export {
     pub events: Vec<Event>,
     /// Keyed by pawn.
     pub tracks: HashMap<u32, Track>,
-    /// Replicated `BombPlayerState.Ping` values, keyed by player-state actor.
-    pub pings: HashMap<u32, Vec<u32>>,
+    /// Typed rows from `fields.parquet` (damage, economy, abilities, rounds, ...).
+    pub fields: Fields,
+    pub actors: Actors,
+}
+
+/// From `actors.parquet`: what class each actor is, and where some spawned.
+#[derive(Debug, Clone, Default)]
+pub struct Actors {
+    /// Actor GUID -> class path (first channel open that names one).
+    pub class: HashMap<u32, String>,
+    /// Channel opens with a spawn position: (time_ms, actor, class, pos cm).
+    pub spawns: Vec<(u32, u32, String, [f64; 3])>,
+    /// Last channel close per actor: the actor is gone after it (dormancy is not a close).
+    pub closed_at: HashMap<u32, u32>,
+}
+
+impl Actors {
+    /// Last path segment of the actor's class, e.g. `AssaultRifle_AK.AssaultRifle_AK_C`.
+    pub fn class_leaf(&self, guid: u32) -> Option<&str> {
+        self.class.get(&guid).map(|c| c.rsplit('/').next().unwrap_or(c))
+    }
 }
 
 impl Export {
@@ -115,12 +136,14 @@ impl Export {
         let events = load_events(&dir.join("events.parquet"))?;
         let pawns: HashSet<u32> = manifest.players.iter().flat_map(|p| p.pawns.iter().copied()).collect();
         let tracks = load_movement(&dir.join("movement.parquet"), &pawns)?;
-        let pings = load_pings(&dir.join("fields.parquet"))?;
+        let fields = load_fields(&dir.join("fields.parquet"))?;
+        let actors = load_actors(&dir.join("actors.parquet"))?;
         Ok(Export {
             manifest,
             events,
             tracks,
-            pings,
+            fields,
+            actors,
         })
     }
 
@@ -231,7 +254,10 @@ fn load_manifest(path: &Path) -> Result<Manifest> {
 
 // ---------------------------------------------------------------- parquet helpers
 
-fn open_reader(path: &Path, columns: &[&str]) -> Result<parquet::arrow::arrow_reader::ParquetRecordBatchReader> {
+pub(crate) fn open_reader(
+    path: &Path,
+    columns: &[&str],
+) -> Result<parquet::arrow::arrow_reader::ParquetRecordBatchReader> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
         .with_context(|| format!("reading parquet {}", path.display()))?;
@@ -252,7 +278,7 @@ fn open_reader(path: &Path, columns: &[&str]) -> Result<parquet::arrow::arrow_re
     Ok(builder.with_projection(mask).with_batch_size(65_536).build()?)
 }
 
-fn column(batch: &RecordBatch, name: &str, ty: &DataType) -> Result<ArrayRef> {
+pub(crate) fn column(batch: &RecordBatch, name: &str, ty: &DataType) -> Result<ArrayRef> {
     let col = batch
         .column_by_name(name)
         .ok_or_else(|| anyhow!("missing column `{name}`"))?;
@@ -346,47 +372,52 @@ fn load_movement(path: &Path, pawns: &HashSet<u32>) -> Result<HashMap<u32, Track
     Ok(tracks)
 }
 
-// ---------------------------------------------------------------- fields
+// ---------------------------------------------------------------- actors
 
-/// Row indices of `batch` whose dictionary-or-string column `name` satisfies `pred`.
-/// Tests each dictionary value once instead of every row.
-fn matching_rows(batch: &RecordBatch, name: &str, pred: impl Fn(&str) -> bool) -> Result<Vec<usize>> {
-    let col = batch
-        .column_by_name(name)
-        .ok_or_else(|| anyhow!("missing column `{name}`"))?;
-    if let Some(dict) = col.as_any().downcast_ref::<DictionaryArray<types::Int32Type>>() {
-        let values = arrow_cast::cast(dict.values(), &DataType::Utf8)?;
-        let values = values.as_string::<i32>();
-        let hits: Vec<bool> = (0..values.len())
-            .map(|i| values.is_valid(i) && pred(values.value(i)))
-            .collect();
-        let keys = dict.keys();
-        return Ok((0..keys.len())
-            .filter(|&i| keys.is_valid(i) && hits[keys.value(i) as usize])
-            .collect());
-    }
-    let s = arrow_cast::cast(col, &DataType::Utf8)?;
-    let s: &StringArray = s.as_string::<i32>();
-    Ok((0..s.len()).filter(|&i| s.is_valid(i) && pred(s.value(i))).collect())
-}
-
-fn load_pings(path: &Path) -> Result<HashMap<u32, Vec<u32>>> {
-    let mut out: HashMap<u32, Vec<u32>> = HashMap::new();
-    for batch in open_reader(path, &["actor_net_guid", "group_path", "field_name", "value_i64"])? {
+fn load_actors(path: &Path) -> Result<Actors> {
+    let mut out = Actors::default();
+    for batch in open_reader(
+        path,
+        &[
+            "time_ms",
+            "actor_net_guid",
+            "event",
+            "class_path",
+            "spawn_x",
+            "spawn_y",
+            "spawn_z",
+        ],
+    )? {
         let batch = batch?;
-        let ping_rows = matching_rows(&batch, "field_name", |f| f == "Ping")?;
-        if ping_rows.is_empty() {
-            continue;
-        }
-        let in_player_state = matching_rows(&batch, "group_path", |g| g.contains("PlayerState"))?;
-        let in_player_state: HashSet<usize> = in_player_state.into_iter().collect();
-        let actor = column(&batch, "actor_net_guid", &DataType::UInt32)?;
-        let actor = actor.as_primitive::<types::UInt32Type>();
-        let value = column(&batch, "value_i64", &DataType::Int64)?;
-        let value = value.as_primitive::<types::Int64Type>();
-        for i in ping_rows.into_iter().filter(|i| in_player_state.contains(i)) {
-            if value.is_valid(i) && (0..=u32::MAX as i64).contains(&value.value(i)) {
-                out.entry(actor.value(i)).or_default().push(value.value(i) as u32);
+        let t = column(&batch, "time_ms", &DataType::UInt32)?;
+        let t = t.as_primitive::<types::UInt32Type>();
+        let g = column(&batch, "actor_net_guid", &DataType::UInt32)?;
+        let g = g.as_primitive::<types::UInt32Type>();
+        let class = column(&batch, "class_path", &DataType::Utf8)?;
+        let class = class.as_string::<i32>();
+        let event = column(&batch, "event", &DataType::Utf8)?;
+        let event = event.as_string::<i32>();
+        let xyz: Vec<ArrayRef> = ["spawn_x", "spawn_y", "spawn_z"]
+            .iter()
+            .map(|c| column(&batch, c, &DataType::Float64))
+            .collect::<Result<_>>()?;
+        let xyz: Vec<&arrow_array::Float64Array> = xyz.iter().map(|a| a.as_primitive::<types::Float64Type>()).collect();
+        for i in 0..batch.num_rows() {
+            if event.is_valid(i) && event.value(i) == "close" {
+                out.closed_at.insert(g.value(i), t.value(i));
+            }
+            if class.is_null(i) {
+                continue;
+            }
+            let c = class.value(i);
+            out.class.entry(g.value(i)).or_insert_with(|| c.to_owned());
+            if xyz.iter().all(|a| a.is_valid(i)) {
+                out.spawns.push((
+                    t.value(i),
+                    g.value(i),
+                    c.to_owned(),
+                    [xyz[0].value(i), xyz[1].value(i), xyz[2].value(i)],
+                ));
             }
         }
     }
