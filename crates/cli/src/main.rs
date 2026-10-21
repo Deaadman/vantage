@@ -4,6 +4,7 @@ mod out;
 mod bench_tests;
 mod coach_views;
 mod logo;
+mod mcp;
 mod panel;
 #[cfg(test)]
 mod render_tests;
@@ -117,6 +118,10 @@ enum Command {
         #[arg(long)]
         update: bool,
     },
+    /// Serve your matches to your AI app (Claude Desktop, Claude Code and others) for the AI review,
+    /// without an API key. The app starts this itself: add it as a local MCP server with the
+    /// command `vantage mcp`.
+    Mcp,
     /// Remove Vantage, vrfkit and your data from this PC
     Uninstall {
         /// Keep your settings, matches and logs
@@ -152,6 +157,7 @@ fn run(cli: Cli) -> Result<()> {
                     | Command::Update
                     | Command::Install { .. }
                     | Command::Uninstall { .. }
+                    | Command::Mcp
             ) {
                 startup_check(&data_dir);
             }
@@ -182,6 +188,7 @@ impl Command {
             Command::Update => "update",
             Command::Install { .. } => "install",
             Command::Uninstall { .. } => "uninstall",
+            Command::Mcp => "mcp",
         }
     }
 }
@@ -199,6 +206,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
         Command::Update => update_cmd(&data_dir)?,
         Command::Install { update } => install_cmd(&data_dir, update)?,
         Command::Uninstall { keep_data, yes } => uninstall_cmd(&data_dir, keep_data, yes)?,
+        Command::Mcp => mcp::serve(&data_dir)?,
         Command::Review { match_id } => print_review(&load_review(&data_dir, match_id)?),
         Command::Plan { map } => print_plan(&load_plan(&data_dir, map)?),
         Command::Habits => {
@@ -484,6 +492,8 @@ pub struct ReviewData {
     pub clips: Clips,
     pub ai: Option<ai::Saved>,
     pub ai_provider: Option<&'static ai::Provider>,
+    /// The AI app that reviews through MCP, when that's the AI picked.
+    pub ai_app: Option<&'static ai::App>,
 }
 
 impl ReviewData {
@@ -538,6 +548,7 @@ pub(crate) fn load_review(data_dir: &Path, match_id: Option<String>) -> Result<R
     Ok(ReviewData {
         ai: ai::load(data_dir, &id),
         ai_provider: cfg.ai.as_deref().and_then(ai::provider),
+        ai_app: (cfg.ai.as_deref() == Some(ai::APP)).then(|| ai::app(cfg.ai_app.as_deref())),
         debrief,
         focus,
         focus_trend,

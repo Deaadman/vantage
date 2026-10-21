@@ -52,3 +52,5 @@ vantage matches swiftplay
 ```
 
 `vantage review` and `vantage plan` print as text, so you can save or share them.
+
+`vantage mcp` is for your AI app, not for typing: the app runs it to review your matches. See [With your AI app](review.md#with-your-ai-app).

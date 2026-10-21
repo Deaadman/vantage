@@ -33,8 +33,11 @@ pub struct Config {
     pub clips_dir: Option<PathBuf>,
     /// Screenshots per death: `strip` (3 moments in one image, the default), `one` or `three`.
     pub shots: Option<String>,
-    /// The AI review's provider: `anthropic`, `openai`, `gemini` or `ollama`; unset is off.
+    /// The AI review's provider: `anthropic`, `openai`, `gemini`, `ollama`, or
+    /// `app` for an AI app that runs `vantage mcp`; unset is off.
     pub ai: Option<String>,
+    /// With `ai = "app"`: `claude-desktop`, `claude-code` or `other`.
+    pub ai_app: Option<String>,
     /// That provider's API key (Ollama needs none). Stays in this file, on this computer.
     pub ai_key: Option<String>,
     /// A model other than the provider's default.

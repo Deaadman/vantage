@@ -3,10 +3,11 @@
 //! notices, panels, settings and colours; Abalone draws the screen, edits
 //! the line and runs commands on a worker thread.
 //!
-//! Alongside commands it watches the replay folder for new downloads, and
-//! checks for a newer Vantage and vrfkit now and then.
+//! Alongside commands it watches the replay folder for new downloads,
+//! follows AI reviews an AI app does through `vantage mcp`, and checks for
+//! a newer Vantage and vrfkit now and then.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,6 +44,8 @@ use crate::{APP_NAME, Cli, ReviewData, VERSION};
 const TICK: Duration = Duration::from_millis(80);
 /// How often the replay folder is checked for new downloads.
 const WATCH_EVERY: Duration = Duration::from_secs(3);
+/// How often the AI app's reviews are checked on.
+const AI_EVERY: Duration = Duration::from_secs(1);
 /// A catalog this many days old is refreshed in the background on launch.
 const SYNC_AFTER_DAYS: i64 = 1;
 /// How often an open shell checks for updates again after launch.
@@ -219,6 +222,10 @@ impl abalone::Panel for Panel {
             Panel::Rank(p) => p.rows(w, h),
         }
     }
+
+    fn busy(&mut self) -> bool {
+        matches!(self, Panel::Review(p) if p.waiting())
+    }
 }
 
 /// A stored match, for completing `--match`.
@@ -380,6 +387,16 @@ pub(crate) struct Vantage {
     new_vrfkit: Option<Pin>,
     /// A review's request made while a job ran, started when it ends.
     queued: Option<(String, ReviewAction)>,
+    ai: AiWatch,
+}
+
+/// The AI reviews an AI app does through `vantage mcp`, which runs apart
+/// from the shell: what it's reviewing now, and the reviews already seen.
+struct AiWatch {
+    last_poll: Instant,
+    /// (match id, app, since when).
+    reviewing: Vec<(String, String, Instant)>,
+    saved: HashSet<String>,
 }
 
 impl Vantage {
@@ -401,6 +418,11 @@ impl Vantage {
             pin_rx,
             new_vrfkit: None,
             queued: None,
+            ai: AiWatch {
+                last_poll: Instant::now(),
+                reviewing: vec![],
+                saved: ai::saved_ids(data_dir).into_iter().collect(),
+            },
         };
         app.refresh();
         app
@@ -480,6 +502,67 @@ impl Vantage {
         });
     }
 
+    /// What the AI app is reviewing, and the reviews it saved since the last
+    /// look: each is said in the transcript, and shown if its review is open.
+    fn poll_ai(&mut self, ctx: &mut Ctx<Self>) {
+        let now: Vec<(String, String, Instant)> = ai::reviewing(&self.data_dir)
+            .into_iter()
+            .map(|(id, app, since)| {
+                let ago = since.elapsed().unwrap_or_default();
+                (id, app, Instant::now().checked_sub(ago).unwrap_or_else(Instant::now))
+            })
+            .collect();
+        let same = |a: &[(String, String, Instant)], b: &[(String, String, Instant)]| {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.0 == y.0 && x.1 == y.1)
+        };
+        if !same(&now, &self.ai.reviewing) {
+            // Keep the start time of a review already shown, so its spinner doesn't restart.
+            self.ai.reviewing = now
+                .into_iter()
+                .map(|n| match self.ai.reviewing.iter().find(|o| o.0 == n.0) {
+                    Some(o) => (n.0, n.1, o.2),
+                    None => n,
+                })
+                .collect();
+            ctx.refresh();
+        }
+        for id in ai::saved_ids(&self.data_dir) {
+            if !self.ai.saved.insert(id.clone()) {
+                continue;
+            }
+            let Some(saved) = ai::load(&self.data_dir, &id) else {
+                continue;
+            };
+            // A review the shell ran itself is said when its job ends.
+            let Some(app) = saved.meta.app.clone() else { continue };
+            let name = self.match_name(&id);
+            if let Some(Panel::Review(p)) = ctx.panel()
+                && p.match_id() == id
+            {
+                p.ai_done(Ok(saved));
+            }
+            outln!();
+            out::row(vec![
+                (Kind::Paint(crate::review_view::GREEN, true), "✓ ".into()),
+                (Kind::Out, "AI review saved: ".into()),
+                (Kind::Bold, name),
+                (Kind::Dim, format!(" · from {app}")),
+            ]);
+            out::emit(Kind::Dim, "  /review, then the AI tab, to read it".into());
+        }
+    }
+
+    /// `Sova on Lotus`, or the start of the match's id.
+    fn match_name(&self, id: &str) -> String {
+        self.completions.matches.iter().find(|m| m.id == id).map_or_else(
+            || format!("match {}", id.chars().take(8).collect::<String>()),
+            |m| match m.about.split(" · ").next() {
+                Some(agent) if !agent.is_empty() => format!("{agent} on {}", m.map),
+                _ => m.map.clone(),
+            },
+        )
+    }
+
     /// What a review asks for: a clip folder, or the AI review.
     fn review_action(&mut self, a: ReviewAction, ctx: &mut Ctx<Self>) {
         let busy = ctx.busy();
@@ -540,7 +623,7 @@ impl App for Vantage {
     /// and exit), less `uninstall`, which can't remove the running shell.
     fn commands(&self) -> Vec<CommandInfo> {
         let mut cmds = CommandInfo::from_clap(&Cli::command());
-        cmds.retain(|c| c.name != "uninstall");
+        cmds.retain(|c| c.name != "uninstall" && c.name != "mcp");
         cmds
     }
 
@@ -692,8 +775,14 @@ impl App for Vantage {
         let asking = ctx
             .job()
             .and_then(|(label, started)| label.strip_prefix("Asking ").map(|who| (who.to_owned(), started)));
+        if self.ai.last_poll.elapsed() >= AI_EVERY {
+            self.ai.last_poll = Instant::now();
+            self.poll_ai(ctx);
+        }
         if let Some(Panel::Review(p)) = ctx.panel() {
             p.asking(asking);
+            let id = p.match_id().to_owned();
+            p.reviewing(self.ai.reviewing.iter().find(|r| r.0 == id).map(|r| (r.1.clone(), r.2)));
         }
     }
 
@@ -714,7 +803,14 @@ impl App for Vantage {
     }
 
     fn notices(&self) -> Vec<Notice> {
-        self.notices.clone()
+        let mut out: Vec<Notice> = self
+            .ai
+            .reviewing
+            .iter()
+            .map(|(id, app, _)| Notice::info(format!("{app} is reviewing {}", self.match_name(id))))
+            .collect();
+        out.extend(self.notices.iter().cloned());
+        out
     }
 
     fn footer(&self) -> String {

@@ -22,6 +22,7 @@ See docs/development.md, "Releasing". CI checks this file's format.
 
 ### Added
 
+- No API key? Your AI app, like Claude Desktop or Claude Code, can do the AI review on the plan you already pay for. Pick Your AI app in /settings, then ask the app to review a match.
 - /matches shows each match's mode, such as Comp/Unrated/Premier, Swiftplay or Spike Rush, and /matches comp or /matches swiftplay lists just one mode. Matches stored before this update show no mode.
 
 ### Changed

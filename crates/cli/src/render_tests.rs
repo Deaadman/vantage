@@ -63,6 +63,7 @@ pub(crate) fn review_data(clips: Clips, ai: Option<ai::Saved>) -> ReviewData {
         clips,
         ai,
         ai_provider: ai::provider("anthropic"),
+        ai_app: None,
     }
 }
 
@@ -92,6 +93,7 @@ pub(crate) fn saved() -> ai::Saved {
             model: "claude-sonnet-5-5".into(),
             saved_at: "2026-10-19T21:52:00Z".into(),
             format: ai::FORMAT_VERSION,
+            app: None,
         },
     }
 }

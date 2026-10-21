@@ -209,6 +209,7 @@ fn saved() -> ai::Saved {
             model: "claude-sonnet-5-5".into(),
             saved_at: "2026-10-19T21:52:00Z".into(),
             format: ai::FORMAT_VERSION,
+            app: None,
         },
     }
 }
@@ -486,6 +487,7 @@ fn redraw_docs_images() {
         clips: clips(),
         ai,
         ai_provider: ai::provider("anthropic"),
+        ai_app: None,
     };
     for (name, tab, ai) in [
         ("review-debrief", '1', None),
