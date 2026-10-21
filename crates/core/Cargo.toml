@@ -7,7 +7,6 @@ license.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 arrow-array = "60.0.0"
-arrow-cast = "60"
 arrow-schema = "60.0.0"
 directories = "6.0.0"
 parquet = { version = "60.0.0", default-features = false, features = ["arrow", "zstd", "snap"] }

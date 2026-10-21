@@ -12,7 +12,7 @@ use arrow_array::{
 };
 use arrow_schema::DataType;
 
-use crate::vrfkit_export::{column, open_reader};
+use crate::vrfkit_export::{column, convert, open_reader};
 
 /// One `MulticastNotifyDamage_{Point,Base}` invocation (one hit or tick).
 #[derive(Debug, Clone, Default)]
@@ -271,14 +271,14 @@ enum Strs<'a> {
 impl<'a> Strs<'a> {
     fn new(col: &'a ArrayRef) -> Result<Self> {
         if let Some(dict) = col.as_any().downcast_ref::<DictionaryArray<types::Int32Type>>() {
-            let values = arrow_cast::cast(dict.values(), &DataType::Utf8)?;
+            let values = convert(dict.values(), &DataType::Utf8)?;
             let values = values.as_string::<i32>();
             let decoded = (0..values.len())
                 .map(|i| values.is_valid(i).then(|| values.value(i).to_owned()))
                 .collect();
             return Ok(Strs::Dict(dict, decoded));
         }
-        Ok(Strs::Plain(arrow_cast::cast(col, &DataType::Utf8)?))
+        Ok(Strs::Plain(convert(col, &DataType::Utf8)?))
     }
 
     /// Dictionary key for row `i`, or the row itself for plain columns; used to memoise per value.

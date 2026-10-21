@@ -1,12 +1,17 @@
 //! Reads a `vrfkit export` directory: `manifest.json`, `events.parquet`, and
 //! the player-pawn rows of `movement.parquet`.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
-use arrow_array::{Array, ArrayRef, RecordBatch, cast::AsArray, types};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int64Array, RecordBatch, StringArray, UInt32Array,
+    cast::AsArray, types,
+};
 use arrow_schema::DataType;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -282,11 +287,126 @@ pub(crate) fn column(batch: &RecordBatch, name: &str, ty: &DataType) -> Result<A
     let col = batch
         .column_by_name(name)
         .ok_or_else(|| anyhow!("missing column `{name}`"))?;
+    convert(col, ty).with_context(|| format!("column `{name}` ({}) is not convertible to {ty}", col.data_type()))
+}
+
+/// `col` as `ty`, for the types Vantage reads: strings, `UInt32`, `Int64`,
+/// `Float32`, `Float64` and `Boolean`, from any integer, float, boolean,
+/// string or dictionary column. Like arrow's safe cast, a value that doesn't
+/// fit (out of range, unparsable) becomes null. Doing only these keeps
+/// `arrow-cast` and its whole cast matrix out of the exe.
+pub(crate) fn convert(col: &ArrayRef, ty: &DataType) -> Result<ArrayRef> {
     if col.data_type() == ty {
         return Ok(col.clone());
     }
-    arrow_cast::cast(col, ty)
-        .with_context(|| format!("column `{name}` ({}) is not convertible to {ty}", col.data_type()))
+    if let Some(dict) = col.as_any_dictionary_opt() {
+        let values = dict.values();
+        let keys = dict.normalized_keys();
+        return build(ty, col.len(), |i| {
+            if col.is_null(i) {
+                Ok(Cell::Null)
+            } else {
+                cell(values.as_ref(), keys[i])
+            }
+        });
+    }
+    build(ty, col.len(), |i| cell(col.as_ref(), i))
+}
+
+/// One value of a column, whatever its type.
+enum Cell<'a> {
+    Null,
+    Int(i128),
+    Float(f64),
+    Bool(bool),
+    Str(Cow<'a, str>),
+}
+
+fn cell(a: &dyn Array, i: usize) -> Result<Cell<'_>> {
+    if a.is_null(i) {
+        return Ok(Cell::Null);
+    }
+    macro_rules! int {
+        ($t:ty) => {
+            Cell::Int(i128::from(a.as_primitive::<$t>().value(i)))
+        };
+    }
+    Ok(match a.data_type() {
+        DataType::Int8 => int!(types::Int8Type),
+        DataType::Int16 => int!(types::Int16Type),
+        DataType::Int32 => int!(types::Int32Type),
+        DataType::Int64 => int!(types::Int64Type),
+        DataType::UInt8 => int!(types::UInt8Type),
+        DataType::UInt16 => int!(types::UInt16Type),
+        DataType::UInt32 => int!(types::UInt32Type),
+        DataType::UInt64 => int!(types::UInt64Type),
+        DataType::Float32 => Cell::Float(f64::from(a.as_primitive::<types::Float32Type>().value(i))),
+        DataType::Float64 => Cell::Float(a.as_primitive::<types::Float64Type>().value(i)),
+        DataType::Boolean => Cell::Bool(a.as_boolean().value(i)),
+        DataType::Utf8 => Cell::Str(Cow::Borrowed(a.as_string::<i32>().value(i))),
+        DataType::LargeUtf8 => Cell::Str(Cow::Borrowed(a.as_string::<i64>().value(i))),
+        DataType::Utf8View => Cell::Str(Cow::Borrowed(a.as_string_view().value(i))),
+        DataType::Binary => Cell::Str(String::from_utf8_lossy(a.as_binary::<i32>().value(i))),
+        DataType::LargeBinary => Cell::Str(String::from_utf8_lossy(a.as_binary::<i64>().value(i))),
+        DataType::BinaryView => Cell::Str(String::from_utf8_lossy(a.as_binary_view().value(i))),
+        other => bail!("unsupported column type {other}"),
+    })
+}
+
+/// A `ty` column of `n` rows from each row's value.
+fn build<'a>(ty: &DataType, n: usize, at: impl Fn(usize) -> Result<Cell<'a>>) -> Result<ArrayRef> {
+    fn collect<T>(n: usize, at: impl Fn(usize) -> Result<Option<T>>) -> Result<Vec<Option<T>>> {
+        (0..n).map(at).collect()
+    }
+    // Floats truncate toward zero, as arrow's cast does; NaN, infinities and out-of-range values are null.
+    fn int<T: TryFrom<i128>>(c: Cell) -> Option<T> {
+        let whole = match c {
+            Cell::Int(v) => v,
+            Cell::Float(f) if f.is_finite() && f.abs() < 1e38 => f.trunc() as i128,
+            Cell::Bool(b) => i128::from(b),
+            Cell::Str(s) => s.trim().parse().ok()?,
+            _ => return None,
+        };
+        T::try_from(whole).ok()
+    }
+    fn float(c: Cell) -> Option<f64> {
+        match c {
+            Cell::Int(v) => Some(v as f64),
+            Cell::Float(f) => Some(f),
+            Cell::Bool(b) => Some(f64::from(u8::from(b))),
+            Cell::Str(s) => s.trim().parse().ok(),
+            Cell::Null => None,
+        }
+    }
+    Ok(match ty {
+        DataType::UInt32 => Arc::new(UInt32Array::from(collect(n, |i| Ok(int::<u32>(at(i)?)))?)),
+        DataType::Int64 => Arc::new(Int64Array::from(collect(n, |i| Ok(int::<i64>(at(i)?)))?)),
+        DataType::Float64 => Arc::new(Float64Array::from(collect(n, |i| Ok(float(at(i)?)))?)),
+        DataType::Float32 => Arc::new(Float32Array::from(collect(n, |i| Ok(float(at(i)?).map(|f| f as f32)))?)),
+        DataType::Boolean => Arc::new(BooleanArray::from(collect(n, |i| {
+            Ok(match at(i)? {
+                Cell::Bool(b) => Some(b),
+                Cell::Int(v) => Some(v != 0),
+                Cell::Float(f) => Some(f != 0.0),
+                Cell::Str(s) => match s.trim().to_ascii_lowercase().as_str() {
+                    "true" | "t" | "yes" | "y" | "on" | "1" => Some(true),
+                    "false" | "f" | "no" | "n" | "off" | "0" => Some(false),
+                    _ => None,
+                },
+                Cell::Null => None,
+            })
+        })?)),
+        DataType::Utf8 => Arc::new(StringArray::from(collect(n, |i| {
+            Ok(match at(i)? {
+                Cell::Str(s) => Some(s.into_owned()),
+                Cell::Int(v) => Some(v.to_string()),
+                Cell::Float(f) => Some(f.to_string()),
+                Cell::Bool(b) => Some(b.to_string()),
+                Cell::Null => None,
+            })
+        })?)),
+        other => bail!("converting to {other} isn't supported"),
+    })
 }
 
 // ---------------------------------------------------------------- events
@@ -422,4 +542,72 @@ fn load_actors(path: &Path) -> Result<Actors> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::{DictionaryArray, Int32Array, LargeStringArray, UInt64Array};
+
+    use super::*;
+
+    fn arr(a: impl Array + 'static) -> ArrayRef {
+        Arc::new(a)
+    }
+
+    #[test]
+    fn columns_convert_like_a_safe_cast() {
+        let u32s = |col: ArrayRef| -> Vec<Option<u32>> {
+            convert(&col, &DataType::UInt32)
+                .unwrap()
+                .as_primitive::<types::UInt32Type>()
+                .iter()
+                .collect()
+        };
+        // Out of range is null, floats truncate, numeric text parses.
+        assert_eq!(
+            u32s(arr(Int32Array::from(vec![Some(7), Some(-5), None]))),
+            [Some(7), None, None]
+        );
+        assert_eq!(u32s(arr(UInt64Array::from(vec![1, u64::MAX]))), [Some(1), None]);
+        assert_eq!(
+            u32s(arr(Float64Array::from(vec![3.9, -0.5, f64::NAN]))),
+            [Some(3), Some(0), None]
+        );
+        assert_eq!(u32s(arr(StringArray::from(vec!["12", "x"]))), [Some(12), None]);
+
+        let f64s = convert(&arr(Int64Array::from(vec![2, -3])), &DataType::Float64).unwrap();
+        assert_eq!(f64s.as_primitive::<types::Float64Type>().values().to_vec(), [2.0, -3.0]);
+        let f32s = convert(&arr(Float64Array::from(vec![1.5])), &DataType::Float32).unwrap();
+        assert_eq!(f32s.as_primitive::<types::Float32Type>().value(0), 1.5);
+        let bools = convert(&arr(StringArray::from(vec!["true", "0", "maybe"])), &DataType::Boolean).unwrap();
+        assert_eq!(
+            bools.as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), Some(false), None]
+        );
+    }
+
+    #[test]
+    fn strings_come_from_any_string_or_dictionary_column() {
+        let strs = |col: ArrayRef| -> Vec<Option<String>> {
+            let s = convert(&col, &DataType::Utf8).unwrap();
+            s.as_string::<i32>().iter().map(|v| v.map(str::to_owned)).collect()
+        };
+        let o = |s: &str| Some(s.to_owned());
+        assert_eq!(strs(arr(LargeStringArray::from(vec![Some("a"), None]))), [o("a"), None]);
+        let dict: DictionaryArray<types::Int32Type> = vec![Some("b"), None, Some("a"), Some("b")].into_iter().collect();
+        assert_eq!(strs(arr(dict)), [o("b"), None, o("a"), o("b")]);
+        // A dictionary of numbers, to numbers.
+        let keys = Int32Array::from(vec![Some(1), Some(0), None]);
+        let dict = DictionaryArray::new(keys, arr(Int64Array::from(vec![10, 20])));
+        let n = convert(&arr(dict), &DataType::UInt32).unwrap();
+        assert_eq!(
+            n.as_primitive::<types::UInt32Type>().iter().collect::<Vec<_>>(),
+            [Some(20), Some(10), None]
+        );
+        assert_eq!(strs(arr(Int32Array::from(vec![5]))), [o("5")]);
+        // Same type: the column itself.
+        let same = arr(StringArray::from(vec!["x"]));
+        assert!(Arc::ptr_eq(&convert(&same, &DataType::Utf8).unwrap(), &same));
+        assert!(convert(&same, &DataType::Date32).is_err());
+    }
 }
