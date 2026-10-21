@@ -20,11 +20,19 @@ See docs/development.md, "Releasing". CI checks this file's format.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-22
+
+### Fixed
+
+- Screenshots work straight after ffmpeg is installed, even when winget installed it for the whole computer.
+- A replay that was still downloading when Vantage looked for new ones is now read once it finishes, and the bottom left shows the download until then.
+
 ## [1.0.0] - 2026-10-21
 
 ### Added
 
 - The first release.
 
-[Unreleased]: https://github.com/Deaadman/vantage/compare/1.0.0...HEAD
+[Unreleased]: https://github.com/Deaadman/vantage/compare/1.0.1...HEAD
+[1.0.1]: https://github.com/Deaadman/vantage/compare/1.0.0...1.0.1
 [1.0.0]: https://github.com/Deaadman/vantage/releases/tag/1.0.0

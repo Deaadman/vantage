@@ -267,22 +267,54 @@ impl ShotStyle {
 /// Seconds before the death of each moment taken.
 const MOMENTS_S: [f64; 3] = [3.0, 1.0, 0.0];
 
-/// `ffmpeg.exe` on PATH, where winget links it, or in `%LOCALAPPDATA%\vantage\ffmpeg`.
-/// winget's links folder is checked by name: a PATH change only reaches
-/// terminals opened after the install.
+/// `ffmpeg.exe` on PATH, where winget links or unpacks it, or in
+/// `%LOCALAPPDATA%\vantage\ffmpeg`. winget's folders are checked by name: a
+/// PATH change only reaches programs started after the install, and winget
+/// adds the package folder to PATH instead of linking when it can't link.
 pub fn ffmpeg() -> Option<PathBuf> {
     let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        dirs.push(PathBuf::from(local).join("Microsoft").join("WinGet").join("Links"));
+    // Per user, then machine wide (an install from an admin terminal).
+    let winget_roots: Vec<PathBuf> = [("LOCALAPPDATA", "Microsoft"), ("ProgramFiles", "")]
+        .iter()
+        .filter_map(|(var, sub)| std::env::var_os(var).map(|v| PathBuf::from(v).join(sub).join("WinGet")))
+        .collect();
+    for root in &winget_roots {
+        dirs.push(root.join("Links"));
     }
     if let Ok(root) = crate::paths::install_root() {
         dirs.push(root.join("ffmpeg"));
         dirs.push(root.join("ffmpeg").join("bin"));
     }
+    // winget unpacks to `Packages\Gyan.FFmpeg_<source>\ffmpeg-<version>-full_build\bin`.
+    for root in &winget_roots {
+        dirs.extend(winget_package_bins(&root.join("Packages")));
+    }
     dirs.into_iter().map(|d| d.join(exe)).find(|p| p.is_file())
+}
+
+/// The `bin` folders of every ffmpeg winget unpacked under `packages`.
+fn winget_package_bins(packages: &Path) -> Vec<PathBuf> {
+    let children = |dir: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .map(|r| {
+                r.filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| p.is_dir())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    children(packages)
+        .into_iter()
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().to_lowercase().starts_with("gyan.ffmpeg"))
+        })
+        .flat_map(|pkg| children(&pkg))
+        .map(|build| build.join("bin"))
+        .collect()
 }
 
 /// A death's screenshot files: `R07.jpg` for the strip, `R07a.jpg` …
@@ -489,6 +521,21 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), b"").unwrap();
         assert_eq!(find(&dir).len(), 2);
         assert_eq!(find(&dir.join("VALORANT")).len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finds_ffmpeg_where_winget_unpacked_it() {
+        let dir = std::env::temp_dir().join(format!("vantage-winget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bin = dir
+            .join("Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe")
+            .join("ffmpeg-9.0.2-full_build")
+            .join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(dir.join("Other.Package").join("x").join("bin")).unwrap();
+        assert_eq!(winget_package_bins(&dir), vec![bin]);
+        assert!(winget_package_bins(&dir.join("missing")).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

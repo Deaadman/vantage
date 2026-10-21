@@ -325,7 +325,9 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
             (Kind::Dim, " · read after the next update".into()),
         ]);
     }
-    if waiting > 0 {
+    // The shell's watcher shows a download in the status line and reads it once it's done.
+    let watched = abalone::out::captured() && cfg.watch != Some(false);
+    if waiting > 0 && !watched {
         out::row(vec![
             (Kind::Dim, "  · ".into()),
             (Kind::Out, format!("{} still downloading", plural(waiting, "replay"))),

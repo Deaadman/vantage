@@ -170,6 +170,8 @@ pub(crate) enum Flow {
     AiDone(String, Result<ai::Saved, String>),
     /// The watcher stored new matches: open panels built from all matches update.
     NewMatches,
+    /// A replay the watcher waited on finished downloading: read it now.
+    Downloaded,
     /// Those panels again, replacing the open one of the same kind.
     Updated(Panel),
 }
@@ -301,12 +303,10 @@ fn habit_items(prefix: &str) -> Vec<Suggestion> {
         .collect()
 }
 
-/// The replay folder as of the last scan, and what has changed since.
+/// The replay folder as of the last scan.
 struct Watch {
     last_poll: Instant,
     seen: HashMap<PathBuf, u64>,
-    /// Changed files and their sizes at the previous poll.
-    pending: HashMap<PathBuf, u64>,
 }
 
 /// Every replay in the configured folder with its size.
@@ -319,6 +319,18 @@ fn replay_sizes(data_dir: &Path) -> HashMap<PathBuf, u64> {
         .into_iter()
         .filter_map(|p| Some((p.clone(), std::fs::metadata(&p).ok()?.len())))
         .collect()
+}
+
+/// The longest the download job waits before giving the shell back; the
+/// next poll waits again if the replay is still being written.
+const DOWNLOAD_WAIT: Duration = Duration::from_secs(120);
+
+/// On the worker thread: wait until none of `files` is still being written.
+fn wait_for_downloads(files: Vec<PathBuf>) {
+    let started = Instant::now();
+    while started.elapsed() < DOWNLOAD_WAIT && !files.iter().all(|p| vantage_core::scan::settled(p)) {
+        std::thread::sleep(Duration::from_millis(500));
+    }
 }
 
 /// Runs `f` and turns its error into a transcript line.
@@ -366,7 +378,6 @@ impl Vantage {
             watch: Watch {
                 last_poll: Instant::now(),
                 seen: HashMap::new(),
-                pending: HashMap::new(),
             },
             update_known: Arc::new(AtomicBool::new(false)),
             seen_update: false,
@@ -380,11 +391,15 @@ impl Vantage {
     }
 
     /// Run `job` on a worker thread. A job that `scans` marks the replay
-    /// folder's current files as seen, so the watcher only picks up later ones.
+    /// folder's current files as seen, so the watcher only picks up later
+    /// ones. Files still downloading aren't: the scan skips them, so the
+    /// watcher reads them once they're done.
     fn start(&mut self, ctx: &mut Ctx<Self>, label: &str, scans: bool, job: impl FnOnce() -> Flow + Send + 'static) {
         if scans {
-            self.watch.seen = replay_sizes(&self.data_dir);
-            self.watch.pending.clear();
+            self.watch.seen = replay_sizes(&self.data_dir)
+                .into_iter()
+                .filter(|(p, _)| vantage_core::scan::settled(p))
+                .collect();
         }
         ctx.start(label, job);
     }
@@ -398,23 +413,30 @@ impl Vantage {
         });
     }
 
-    /// Scan replays that appeared or changed since the last scan, once their
-    /// size holds still for a poll (a download in progress keeps growing).
+    /// Scan replays that appeared or changed since the last scan. One still
+    /// downloading is waited for first, with the wait in the status line.
     fn poll_replays(&mut self, ctx: &mut Ctx<Self>) {
         if Config::load(&self.data_dir).is_ok_and(|c| c.watch == Some(false)) {
-            self.watch.pending.clear();
             return;
         }
-        let changed: HashMap<PathBuf, u64> = replay_sizes(&self.data_dir)
+        let changed: Vec<PathBuf> = replay_sizes(&self.data_dir)
             .into_iter()
             .filter(|(p, size)| self.watch.seen.get(p) != Some(size))
+            .map(|(p, _)| p)
             .collect();
-        if changed.is_empty() || changed != self.watch.pending {
-            self.watch.pending = changed;
+        if changed.is_empty() {
             return;
         }
         // The scan skips files changed moments ago; wait until it will read them.
-        if !changed.keys().all(|p| vantage_core::scan::settled(p)) {
+        if !changed.iter().all(|p| vantage_core::scan::settled(p)) {
+            let label = match changed.len() {
+                1 => "Downloading the new replay".to_owned(),
+                n => format!("Downloading {n} new replays"),
+            };
+            self.start(ctx, &label, false, move || {
+                wait_for_downloads(changed);
+                Flow::Downloaded
+            });
             return;
         }
         let dir = self.data_dir.clone();
@@ -546,6 +568,10 @@ impl App for Vantage {
         match flow {
             Flow::Continue => {}
             Flow::Launch => self.start_launch(ctx),
+            Flow::Downloaded => {
+                self.watch.last_poll = Instant::now();
+                self.poll_replays(ctx);
+            }
             Flow::Review(data) => ctx.open(Panel::Review(ReviewPanel::new(*data))),
             Flow::Plan(data) => ctx.open(Panel::Plan(PlanPanel::new(*data))),
             Flow::Habits(p) => ctx.open(Panel::Habits(p)),
