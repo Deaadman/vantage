@@ -1,0 +1,28 @@
+# Once a week, opens a pull request for crates and actions with a newer
+# version. Minor and patch updates come together in one pull request per
+# ecosystem; a new major version gets its own, since it may break the code.
+# CI runs on each one, so merge it when it passes.
+#
+# Abalone is left out: it comes from a git tag, which you move yourself
+# when Abalone has a release. vrfkit has its own workflow (vrfkit-watch.yml).
+
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: abalone
+    groups:
+      crates:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        update-types: [minor, patch]

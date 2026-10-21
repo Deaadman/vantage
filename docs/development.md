@@ -50,10 +50,13 @@ Set `BENCH_OUT=<file>` to also save the results as JSON.
 - clippy, with warnings as errors
 - every test, including the fixture test (CI downloads the vrfkit)
 - that a release build works, and shows the exe's size
+- that no crate in `Cargo.lock` has a [security advisory](https://rustsec.org), with `cargo audit`
+
+Once a week, [Dependabot](../.github/dependabot.yml) opens a pull request for crates and actions with a newer version, with the minor and patch updates together. Merge it when CI passes. It leaves Abalone alone: change its `tag` in `crates/cli/Cargo.toml` and `crates/core/Cargo.toml` when Abalone has a release.
 
 ## Releasing
 
-The [release workflow](../.github/workflows/release.yml) is turned off for now. Once it's on:
+The [release workflow](../.github/workflows/release.yml) publishes a release when you push a tag:
 
 1. In [`CHANGELOG.md`](../CHANGELOG.md), rename `## [Unreleased]` to the new version and date, for example `## [0.2.0] - 2026-11-02`. Add a new empty `## [Unreleased]` above it, and update the links at the bottom.
 2. Set the same version in `crates/cli/Cargo.toml`. Commit both files.

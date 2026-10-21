@@ -1,7 +1,8 @@
 # Checks every push to main and every pull request: formatting, the
 # changelog's format, clippy with warnings as errors, then all the tests,
-# including the full scan of the public fixtures with the pinned vrfkit. The
-# release workflow runs this first and only publishes when it passes.
+# including the full scan of the public fixtures with the pinned vrfkit, and
+# a check of Cargo.lock for crates with security advisories. The release
+# workflow runs this first and only publishes when it passes.
 
 name: CI
 
@@ -80,3 +81,15 @@ jobs:
         run: |
           $mb = (Get-Item target/release/vantage.exe).Length / 1MB
           "vantage.exe (release): **{0:N2} MB**" -f $mb >> $env:GITHUB_STEP_SUMMARY
+
+  audit:
+    name: Security advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      # Fails if a crate in Cargo.lock has a RustSec advisory.
+      - name: Audit
+        run: cargo audit
