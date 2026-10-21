@@ -15,7 +15,7 @@ cargo test
 The shell itself (input box, menus, panels, logs, settings file, self-updater and installer) comes from [Abalone](https://github.com/Deaadman/abalone), a separate repository with nothing VALORANT-specific in it. To work on both at once, clone Abalone next to this repository and add this to `Cargo.toml`:
 
 ```toml
-[patch."https://github.com/Deaadman/abalone"]
+[patch.crates-io]
 abalone = { path = "../abalone" }
 ```
 
@@ -53,7 +53,7 @@ Set `BENCH_OUT=<file>` to also save the results as JSON.
 - that the [pictures in the docs](#the-pictures-in-the-docs) match what the code draws now
 - that no crate in `Cargo.lock` has a [security advisory](https://rustsec.org), with `cargo audit`
 
-Once a week, [Dependabot](../.github/dependabot.yml) opens a pull request for crates and actions with a newer version, with the minor and patch updates together. Merge it when CI passes. It leaves Abalone alone: change its `tag` in `crates/cli/Cargo.toml` and `crates/core/Cargo.toml` when Abalone has a release.
+Once a week, [Dependabot](../.github/dependabot.yml) opens a pull request for crates and actions with a newer version, with the minor and patch updates together. Merge it when CI passes. That includes [Abalone](https://crates.io/crates/abalone) when it has a release.
 
 ## Releasing
 
