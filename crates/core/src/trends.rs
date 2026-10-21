@@ -108,6 +108,24 @@ fn metrics() -> Vec<Metric> {
         m!("first_kill", "Rounds where I got the round's first kill", Rate, |r| {
             rate(&r.round_facts, |_| true, |f| f.first_kill, |f| Some(f.round))
         }),
+        m!("opening_duel_win", "Opening duels I won", Rate, |r| {
+            rate(
+                &r.round_facts,
+                |f| f.first_kill || (f.first_death && f.team_first_kill == Some(false)),
+                |f| f.first_kill,
+                |f| Some(f.round),
+            )
+        }),
+        m!(
+            "trades_given",
+            "Teammates who died within 15 m of me whose killer I killed within 3 s",
+            Rate,
+            |r| Sample {
+                num: r.trades_given.0 as f64,
+                den: r.trades_given.1 as f64,
+                ..Default::default()
+            }
+        ),
         m!("died", "Rounds where I died", Rate, |r| rate(
             &r.round_facts,
             |_| true,
@@ -425,16 +443,14 @@ fn metrics() -> Vec<Metric> {
             }
         ),
         m!(
-            "expensive_death_down_two",
-            "Deaths with 2,900+ of gear while down two or more players",
+            "clutch_crossfire",
+            "Clutch deaths with two or more enemies hitting me in the last 3 s",
             Rate,
             |r| {
                 rate(
                     &r.death_facts,
-                    |_| true,
-                    |f| {
-                        f.context.inventory_value.is_some_and(|v| v >= 2900) && f.enemies_alive >= f.teammates_alive + 3
-                    },
+                    |f| !f.self_kill && f.teammates_alive == 0 && f.enemies_alive >= 2,
+                    crate::coach::is_crossfired_clutch,
                     |f| f.round,
                 )
             }

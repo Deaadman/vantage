@@ -154,6 +154,10 @@ pub struct MatchReview {
     /// (traded, deaths with a teammate alive) for me and for my teammates.
     pub my_trades: (usize, usize),
     pub team_trades: (usize, usize),
+    /// (teammate deaths I traded, teammate deaths within reach of me): the
+    /// trades I gave. Missing in reviews stored before it was recorded.
+    #[serde(default)]
+    pub trades_given: (usize, usize),
     pub death_facts: Vec<DeathFact>,
     pub round_facts: Vec<RoundFact>,
     pub duels: Vec<Duel>,
@@ -219,6 +223,7 @@ impl MatchReview {
                 .filter(|&p| p != me.pawn)
                 .map(|p| trades_with_teammate_alive(g, p))
                 .fold((0, 0), |x, y| (x.0 + y.0, x.1 + y.1)),
+            trades_given: trades_given(g, me.pawn),
             round_facts: round_facts(a, me.pawn),
             duels: duels(a, me.pawn),
             death_facts: facts,
@@ -520,6 +525,47 @@ fn trades_with_teammate_alive(g: &Game, pawn: u32) -> (usize, usize) {
             n += 1;
             t += usize::from(is_traded(g, k));
         }
+    }
+    (t, n)
+}
+
+/// (traded, chances): teammates killed while I was alive and within
+/// `TRADE_DISTANCE_M` of them, and how many of their killers I killed within
+/// the trade window.
+fn trades_given(g: &Game, pawn: u32) -> (usize, usize) {
+    let pos = |p: u32, t: u32| {
+        g.export
+            .tracks
+            .get(&p)
+            .and_then(|tr| tr.at(t.saturating_sub(deaths::SAMPLE_BEFORE_DEATH_MS), MAX_SAMPLE_AGE_MS))
+            .map(|s| s.pos)
+    };
+    let mut n = 0;
+    let mut t = 0;
+    for k in g
+        .kills
+        .iter()
+        .filter(|k| !k.is_self_kill() && k.victim != pawn && g.teams.same_team(k.victim, pawn))
+    {
+        let me_dead = g
+            .kills_in_round(k.round_idx)
+            .any(|x| x.index < k.index && x.victim == pawn);
+        let near = match (pos(pawn, k.time_ms), pos(k.victim, k.time_ms)) {
+            (Some(a), Some(b)) => {
+                (a[0] as f64 - b[0] as f64).hypot(a[1] as f64 - b[1] as f64) / 100.0 <= crate::coach::TRADE_DISTANCE_M
+            }
+            _ => false,
+        };
+        if me_dead || !near {
+            continue;
+        }
+        n += 1;
+        t += usize::from(g.kills_in_round(k.round_idx).any(|x| {
+            x.killer == pawn
+                && x.victim == k.killer
+                && x.time_ms >= k.time_ms
+                && x.time_ms - k.time_ms <= deaths::TRADE_WINDOW_MS
+        }));
     }
     (t, n)
 }

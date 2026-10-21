@@ -39,7 +39,7 @@ Type `/` in Vantage to see every command, or `/help` for the keys.
 ## Learn more
 
 - [Reviewing a match](docs/review.md): the six tabs, clips, screenshots and AI review
-- [Habits and focus](docs/habits.md): the 16 habits Vantage tracks
+- [Habits and focus](docs/habits.md): the 21 habits Vantage tracks
 - [Map plans and your rank](docs/plan-and-rank.md)
 - [Commands and keys](docs/commands.md)
 - [Settings and updates](docs/settings.md)

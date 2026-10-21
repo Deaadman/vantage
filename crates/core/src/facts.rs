@@ -96,6 +96,10 @@ pub struct DeathContext {
     pub casts_last_5s: u32,
     /// D. Casts in the last 5 s and no damage dealt after them.
     pub utility_unused_value: bool,
+    /// R. Different enemies who damaged the victim in the 3 s before death
+    /// (missing in facts stored before it was recorded).
+    #[serde(default)]
+    pub attackers_last_3s: u32,
 }
 
 pub fn death_context(a: &Analysis, kill: &Kill) -> DeathContext {
@@ -261,8 +265,22 @@ pub fn death_context(a: &Analysis, kill: &Kill) -> DeathContext {
             .iter()
             .any(|h| h.attacker == Some(v) && h.time_ms >= first && h.time_ms <= t && h.victim.is_some());
     }
+
+    let mut attackers: Vec<u32> = a
+        .hits
+        .iter()
+        .filter(|h| h.victim == Some(v) && h.time_ms <= t && t - h.time_ms <= ATTACKERS_WINDOW_MS)
+        .filter_map(|h| h.attacker)
+        .filter(|&p| p != v && a.side(p).is_some() && a.side(p) != a.side(v))
+        .collect();
+    attackers.sort_unstable();
+    attackers.dedup();
+    c.attackers_last_3s = attackers.len() as u32;
     c
 }
+
+/// How far back `attackers_last_3s` looks.
+const ATTACKERS_WINDOW_MS: u32 = 3000;
 
 // ---------------------------------------------------------------- rounds
 

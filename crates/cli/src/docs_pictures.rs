@@ -138,6 +138,7 @@ fn match_review(shift: u32) -> vantage_core::MatchReview {
         d.context.same_spot_as_own_kill = true;
         d.teammates_alive = 0;
         d.enemies_alive = 4;
+        d.context.attackers_last_3s = 2;
         d.minimap_uv = Some([[0.62, 0.70], [0.58, 0.66], [0.66, 0.74]][k]);
         deaths.push(d);
     }

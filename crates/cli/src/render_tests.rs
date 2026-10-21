@@ -35,6 +35,7 @@ pub(crate) fn match_review() -> vantage_core::MatchReview {
         d.context.same_spot_as_own_kill = true;
         d.teammates_alive = 0;
         d.enemies_alive = 4;
+        d.context.attackers_last_3s = 2;
         deaths.push(d);
     }
     sample::review(&rounds, deaths)

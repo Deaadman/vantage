@@ -14,8 +14,6 @@ use crate::facts::RoundFact;
 
 /// A teammate this far away or further couldn't have traded.
 pub const TRADE_DISTANCE_M: f64 = 15.0;
-/// Gear worth this much is a rifle buy.
-pub const RIFLE_LOADOUT: u32 = 2900;
 /// Faster than this at death is running, not walking.
 pub const RUNNING_M_S: f64 = 2.5;
 
@@ -201,12 +199,10 @@ pub fn is_repeek(d: &DeathFact) -> bool {
     d.context.same_spot_as_own_kill
 }
 
-/// Last alive against 3 or more with no plant, holding a rifle loadout.
-pub fn is_lost_round_fight(d: &DeathFact) -> bool {
-    d.teammates_alive == 0
-        && d.enemies_alive >= 3
-        && !d.context.post_plant
-        && d.context.inventory_value.is_some_and(|v| v >= RIFLE_LOADOUT)
+/// Last alive against 2 or more, and killed with 2 or more enemies shooting:
+/// a clutch fought against several at once instead of one at a time.
+pub fn is_crossfired_clutch(d: &DeathFact) -> bool {
+    !d.self_kill && d.teammates_alive == 0 && d.enemies_alive >= 2 && d.context.attackers_last_3s >= 2
 }
 
 pub fn is_ult_held(d: &DeathFact) -> bool {
@@ -219,6 +215,28 @@ pub fn is_low_ammo(d: &DeathFact) -> bool {
         (Some(a), Some(s)) if s >= 5 => a * 5 <= s as i64,
         _ => false,
     }
+}
+
+/// Died in one of the match's repeated death spots.
+pub fn is_repeat_spot(d: &DeathFact) -> bool {
+    d.cluster_id.is_some()
+}
+
+/// Died without a single hit on the killer.
+pub fn is_no_shot(d: &DeathFact) -> bool {
+    !d.self_kill && d.context.duel_hits_dealt == 0
+}
+
+/// Hit the killer first, for this much damage or more, and still died.
+pub const WON_FIGHT_DAMAGE: f64 = 100.0;
+
+pub fn is_won_then_lost(d: &DeathFact) -> bool {
+    !d.self_kill && d.context.hit_killer_first == Some(true) && d.context.duel_damage_dealt >= WON_FIGHT_DAMAGE
+}
+
+/// On attack, killed carrying the spike, and nobody traded.
+pub fn is_spike_death(d: &DeathFact) -> bool {
+    !d.self_kill && d.context.side == Some(Side::Attack) && d.context.carrying_spike && !d.traded_within_3s
 }
 
 /// Shots fired on the move, and all shots.
@@ -489,34 +507,35 @@ fn find_fixes(r: &MatchReview) -> Vec<Found> {
         });
     }
 
-    // Fighting on in rounds that were lost.
-    let ix = indexes(r, is_lost_round_fight);
+    // Clutches fought against several at once.
+    let ix = indexes(r, is_crossfired_clutch);
     if ix.len() >= 2 {
         let ds = pick(&ix);
         let (rounds, lost) = rounds_of(r, &ds);
         let n = ix.len();
         out.push(Found {
             fix: Fix {
-                kind: "save",
-                title: "Fighting on in rounds that were lost".into(),
-                cost: format!("{} rifles lost", words(n)),
-                phrase: "fighting on in rounds that were already lost".into(),
+                kind: "clutch",
+                title: "Fighting several at once in a clutch".into(),
+                cost: format!("lost {lost} of {}", rounds.len()),
+                phrase: "taking clutch fights against several enemies at once".into(),
                 short: format!(
-                    "{} times you were last alive against 3 or more, with no spike down, and you took the fight instead of saving your rifle.",
+                    "{} times you were last alive and died with two or more enemies shooting you at once.",
                     capitalise(&words(n))
                 ),
-                try_short: "At 1 against 3 or worse with no plant, hide and keep your gun.".into(),
+                try_short: "In a clutch, take one fight at a time: an angle only one enemy can see, then move.".into(),
                 happened: format!(
-                    "Rounds {}. You were the last one alive, outnumbered with the spike not planted, holding a rifle.",
+                    "Rounds {}. You were the last one alive, and in the seconds before you died more than one enemy hit you.",
                     rounds_list(&rounds)
                 ),
-                why: "You lost those fights, and your team couldn't afford as good a buy the round after. Rounds like that are almost never won; the rifle would have been worth more next round.".into(),
+                why: "A 1 against 3 is three 1 against 1s in a row, and each one is winnable. Against two at once you almost never win, however good your aim.".into(),
                 tries: vec![
-                    "When it's 1 against 3 or worse and there's no plant, hide and save.".into(),
-                    "Saving your rifle means a full buy next round, even after the loss.".into(),
+                    "Listen for where they are, and pick an angle where only one of them can see you.".into(),
+                    "After each kill, move before the next enemy comes to check it.".into(),
+                    "Use the clock: on defense they have to come to you; on attack, the spike makes them come to you.".into(),
                 ],
-                check: "Save every rifle in a lost round.".into(),
-                habit: Some("save"),
+                check: "In every clutch, fight one enemy at a time.".into(),
+                habit: Some("clutch"),
                 rounds,
                 lost,
             },
@@ -837,22 +856,22 @@ fn find_moments(r: &MatchReview, fixes: &[Found]) -> Vec<(Moment, usize)> {
         }
         let c = &d.context;
         let place = d.nearest_callout.clone().unwrap_or_else(|| "the open".into());
-        let gun = c.weapon_in_hand.clone().unwrap_or_else(|| "rifle".into());
         let killer = &d.killer_agent;
-        let m = if is_lost_round_fight(d) {
+        let m = if is_crossfired_clutch(d) {
             let secs = c
                 .clock_left_s
                 .map(|s| format!(", {s:.0} seconds left"))
                 .unwrap_or_default();
             Some(Moment {
                 round: f.round + 1,
-                situation: format!("1 against {}{secs}, no plant", d.enemies_alive),
-                better: format!("hide and keep your {gun}"),
+                situation: format!("1 against {}{secs}", d.enemies_alive),
+                better: "fight them one at a time".into(),
                 text: format!(
-                    "You were the last one alive against {} with the spike not planted. You took a fight at {place} and {killer} killed you. Better: fall back and keep your {gun} and shields for next round.",
-                    d.enemies_alive
+                    "You were the last one alive against {}. At {place}, {} of them were shooting you at once, and {killer} got the kill. Better: pick an angle only one of them can see, win that fight, then move.",
+                    d.enemies_alive,
+                    words(c.attackers_last_3s as usize)
                 ),
-                kind: "save",
+                kind: "clutch",
             })
         } else if rotating.contains(&(f.round + 1)) {
             let site = f.plant_site.clone().unwrap_or_else(|| "the site".into());

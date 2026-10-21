@@ -4,11 +4,11 @@ Type `/habits` to see the mistakes you keep making, and whether each one is gett
 
 ![The habits screen](images/habits.svg)
 
-Vantage counts 16 habits in every match, over your last 8 matches. A habit is **getting better** when your last 3 matches beat the ones before.
+Vantage counts 21 habits in every match, over your last 8 matches. A habit is **getting better** when your last 3 matches beat the ones before.
 
 Use ↑ and ↓ to pick a habit and read what it is, why it matters and how to practise it.
 
-## The 16 habits
+## The 21 habits
 
 **Positioning**
 
@@ -17,6 +17,7 @@ Use ↑ and ↓ to pick a habit and read what it is, why it matters and how to p
 - Holding spots enemies can shoot through
 - Pushing out on defense
 - Peeking again after a kill
+- Dying in the same spot again
 
 **Utility**
 
@@ -31,11 +32,15 @@ Use ↑ and ↓ to pick a habit and read what it is, why it matters and how to p
 - Crosshair too low
 - Aiming at bodies
 - Reloading in the open
+- Dying without landing a shot
+- Losing fights you'd already won
+- Caught with your knife out
 
 **Rounds and economy**
 
-- Fighting rounds that are lost
+- Fighting several at once in a clutch
 - Peeking after the plant
+- Dying with the spike
 - Buying out of sync with your team
 
 ## Your focus

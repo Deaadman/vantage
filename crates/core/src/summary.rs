@@ -547,21 +547,19 @@ fn work_on(map: &str, played: &[Played], lines: &[(PlayerLine, Vec<PlayerLine>)]
         ));
     }
 
-    // Fighting on with a rifle when the round is lost.
-    let save = |r: &MatchReview| {
+    // Clutches fought against several at once.
+    let crossfired = |r: &MatchReview| {
         r.death_facts
             .iter()
-            .filter(|f| {
-                f.context.inventory_value.is_some_and(|v| v >= 2900) && f.enemies_alive >= f.teammates_alive + 3
-            })
+            .filter(|f| crate::coach::is_crossfired_clutch(f))
             .count()
     };
-    let save_total: usize = played.iter().map(|p| save(&p.me)).sum();
-    if save_total >= 3 {
+    let crossfired_total: usize = played.iter().map(|p| crossfired(&p.me)).sum();
+    if crossfired_total >= 3 {
         out.push(finding(
-            format!("Died {save_total} times with a rifle loadout while down two or more"),
-            per_match(played, |r| (save(r) > 0).then(|| format!("{} times", save(r)))),
-            save_total as f64 / total_rounds * 2.0,
+            format!("Died to several enemies at once in {crossfired_total} clutches"),
+            per_match(played, |r| (crossfired(r) > 0).then(|| format!("{} times", crossfired(r)))),
+            crossfired_total as f64 / total_rounds * 2.0,
         ));
     }
 

@@ -379,18 +379,17 @@ fn economy(r: &MatchReview, o: &mut String) {
         rifle_no_heavy.len(),
         join(&rifle_no_heavy)
     );
-    let save_worthy: Vec<u32> = r
+    let crossfired: Vec<u32> = r
         .death_facts
         .iter()
-        // Down two or more: enemies alive >= my team alive (me included) + 2.
-        .filter(|f| f.context.inventory_value.is_some_and(|v| v >= 2900) && f.enemies_alive >= f.teammates_alive + 3)
+        .filter(|f| crate::coach::is_crossfired_clutch(f))
         .filter_map(|f| f.round)
         .collect();
     let _ = writeln!(
         o,
-        "- Died with 2,900+ credits of gear while down two or more players: {} (rounds {})",
-        save_worthy.len(),
-        join(&save_worthy)
+        "- Died last alive with two or more enemies hitting me in the last 3 s: {} (rounds {})",
+        crossfired.len(),
+        join(&crossfired)
     );
     let _ = writeln!(o);
 }

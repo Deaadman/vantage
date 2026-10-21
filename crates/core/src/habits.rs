@@ -32,7 +32,7 @@ pub struct Habit {
 }
 
 /// Every habit, group by group.
-pub const HABITS: [Habit; 16] = [
+pub const HABITS: [Habit; 21] = [
     Habit {
         slug: "untraded",
         name: "Dying where nobody can trade",
@@ -72,6 +72,14 @@ pub const HABITS: [Habit; 16] = [
         what: "You got a kill, stayed where you were, and died in the same spot soon after.",
         why: "After a kill the enemy knows exactly where you are, so your next peek walks into a fight they're ready for.",
         drill: "After every kill, move: step back or change angle before you look again.",
+    },
+    Habit {
+        slug: "same-spot",
+        name: "Dying in the same spot again",
+        group: "Positioning",
+        what: "You died in a spot where you'd already died earlier in the match.",
+        why: "Once you've died somewhere, the enemy knows you play there. Going back to it hands them a fight they've already won.",
+        drill: "After you die, pick a different spot or a different timing for that area next round.",
     },
     Habit {
         slug: "first-in",
@@ -138,12 +146,36 @@ pub const HABITS: [Habit; 16] = [
         drill: "Reload behind cover, or switch to your pistol to finish a fight.",
     },
     Habit {
-        slug: "save",
-        name: "Fighting rounds that are lost",
+        slug: "no-shot",
+        name: "Dying without landing a shot",
+        group: "Aim",
+        what: "You died without hitting the player who killed you even once.",
+        why: "A fight you can't land a shot in was lost before it started: they were holding the angle, or you peeked too wide or too slow.",
+        drill: "Peek with your crosshair already where their head will be, and only peek angles you've cleared or used an ability on.",
+    },
+    Habit {
+        slug: "won-lost",
+        name: "Losing fights you'd already won",
+        group: "Aim",
+        what: "You hit your killer first for 100 damage or more, and still died.",
+        why: "One more bullet would have won it. These are usually lost by moving, spraying too long or reloading instead of finishing.",
+        drill: "When you've tagged someone, stop moving and tap their head. If your magazine is low, switch to your pistol.",
+    },
+    Habit {
+        slug: "knife",
+        name: "Caught with your knife out",
+        group: "Aim",
+        what: "You died with your knife in your hand.",
+        why: "Running with the knife is faster, but you can't fight back with it.",
+        drill: "Pull your gun out before you reach any angle an enemy could be holding.",
+    },
+    Habit {
+        slug: "clutch",
+        name: "Fighting several at once in a clutch",
         group: "Rounds and economy",
-        what: "You were outnumbered with no spike planted, and fought on with a rifle instead of saving it.",
-        why: "Losing your rifle in a round you probably couldn't win costs your team the next round's buy too.",
-        drill: "At 1 against 3 or worse with no plant, hide and keep your gun.",
+        what: "You were the last one alive, and died with two or more enemies hitting you in the last 3 seconds.",
+        why: "A 1 against 3 is three 1 against 1s in a row, and each one is winnable. Against two at once you almost never win.",
+        drill: "In a clutch, play off sound and the clock. Hold an angle only one enemy can see, win that fight, then move before the next one arrives.",
     },
     Habit {
         slug: "post-plant",
@@ -152,6 +184,14 @@ pub const HABITS: [Habit; 16] = [
         what: "On attack after the plant, you went looking for a fight and died while teammates were still alive.",
         why: "After the plant the defenders have to come to you. Peeking gives up that advantage.",
         drill: "After the plant, hold an angle on the spike and let the defenders walk into you.",
+    },
+    Habit {
+        slug: "spike",
+        name: "Dying with the spike",
+        group: "Rounds and economy",
+        what: "On attack, you died carrying the spike and nobody got the kill back.",
+        why: "The spike carrier dying alone stalls the whole attack: your team has to go back for it, or the defenders sit on it.",
+        drill: "With the spike, go in behind your team, not in front. Drop it to a teammate if you're going to take an early fight.",
     },
     Habit {
         slug: "buy-sync",
@@ -164,7 +204,10 @@ pub const HABITS: [Habit; 16] = [
 ];
 
 pub fn habit(slug: &str) -> Option<&'static Habit> {
-    HABITS.iter().find(|h| h.slug.eq_ignore_ascii_case(slug.trim()))
+    let slug = slug.trim();
+    // `save` was replaced by `clutch`; a focus set to it carries over.
+    let slug = if slug.eq_ignore_ascii_case("save") { "clutch" } else { slug };
+    HABITS.iter().find(|h| h.slug.eq_ignore_ascii_case(slug))
 }
 
 /// The configured focus, or the default.
@@ -186,9 +229,14 @@ pub fn count(slug: &str, r: &MatchReview) -> Option<f64> {
         "repeek" => deaths(&coach::is_repeek),
         "ult" => deaths(&coach::is_ult_held),
         "reload" => deaths(&coach::is_low_ammo),
-        "save" => deaths(&coach::is_lost_round_fight),
+        "clutch" => deaths(&coach::is_crossfired_clutch),
         "wrong-way" => deaths(&|d| !d.self_kill && d.crosshair_offset_to_killer_deg.is_some_and(|a| a > WRONG_WAY_DEG)),
         "wallbang" => deaths(&|d| d.context.killing_blow_wallbang),
+        "same-spot" => deaths(&coach::is_repeat_spot),
+        "no-shot" => deaths(&coach::is_no_shot),
+        "won-lost" => deaths(&coach::is_won_then_lost),
+        "knife" => deaths(&|d| !d.self_kill && d.context.knife_out),
+        "spike" => deaths(&coach::is_spike_death),
         "push-out" => deaths(&|d| {
             let round = r.round_facts.iter().find(|f| Some(f.round) == d.round);
             d.context.side == Some(Side::Defense)
@@ -491,6 +539,12 @@ mod tests {
         assert_eq!(n("utility"), Some(2.0), "rounds 0 and 2: died with no ability used");
         assert_eq!(n("buy-sync"), Some(1.0));
         assert_eq!(n("rotation"), Some(9.0));
+        // The sample deaths land a hit, but only a small one, and not first.
+        assert_eq!(n("no-shot"), Some(0.0));
+        assert_eq!(n("won-lost"), Some(0.0));
+        assert_eq!(n("knife"), Some(0.0));
+        assert_eq!(n("spike"), Some(0.0));
+        assert_eq!(n("same-spot"), Some(0.0));
         assert_eq!(n("bodies"), Some(0.75));
         assert_eq!(describe("bodies", 0.75), "25% headshots");
         assert_eq!(describe("rotation", 9.0), "9 s to the spike");
@@ -513,6 +567,42 @@ mod tests {
             .map(|h| GROUPS.iter().position(|g| *g == h.group).unwrap())
             .collect();
         assert!(order.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn fight_and_spike_habits() {
+        let rounds = [(false, Side::Attack); 3];
+        // Round 0: hit first for 120 and died. Round 1: knife out. Round 2: carrying the spike, in a repeated spot.
+        let mut won = death(0, "Mid");
+        won.context.hit_killer_first = Some(true);
+        won.context.duel_hits_dealt = 3;
+        won.context.duel_damage_dealt = 120.0;
+        let mut knife = death(1, "A Main");
+        knife.context.knife_out = true;
+        knife.context.duel_hits_dealt = 0;
+        let mut spike = death(2, "B Main");
+        spike.context.side = Some(Side::Attack);
+        spike.context.carrying_spike = true;
+        spike.cluster_id = Some(0);
+        let r = review(&rounds, vec![won, knife, spike.clone()]);
+        let n = |slug: &str| count(slug, &r);
+        assert_eq!(n("won-lost"), Some(1.0));
+        assert_eq!(n("no-shot"), Some(1.0));
+        assert_eq!(n("knife"), Some(1.0));
+        assert_eq!(n("spike"), Some(1.0));
+        assert_eq!(n("same-spot"), Some(1.0));
+        // Clutches: last alive against 3, hit by two of them, then by one.
+        let mut two = death(0, "Mid");
+        two.teammates_alive = 0;
+        two.context.attackers_last_3s = 2;
+        let mut one = two.clone();
+        one.round = Some(1);
+        one.context.attackers_last_3s = 1;
+        assert_eq!(count("clutch", &review(&rounds, vec![two, one])), Some(1.0));
+        assert_eq!(habit("save").unwrap().slug, "clutch", "an old focus carries over");
+        // A traded spike carrier isn't counted.
+        spike.traded_within_3s = true;
+        assert_eq!(count("spike", &review(&rounds, vec![spike])), Some(0.0));
     }
 
     #[test]

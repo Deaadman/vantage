@@ -251,7 +251,7 @@ pub const CATEGORIES: [(&str, &str); 12] = [
     ("repeek", "re-peek"),
     ("ult", "ult"),
     ("reload", "reload"),
-    ("save", "saving"),
+    ("clutch", "clutch"),
 ];
 
 pub fn category_label(c: &str) -> &str {

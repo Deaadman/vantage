@@ -29,6 +29,32 @@ pub struct PlayerLine {
     pub first_deaths: usize,
     /// Rounds with a kill, survived, or death traded (no assists in the replay).
     pub kst: Option<f64>,
+    /// The round's first kill: (mine, me as its victim).
+    pub opening: (usize, usize),
+    /// (traded, chances) for teammates who died near me.
+    pub trades_given: (usize, usize),
+}
+
+impl PlayerLine {
+    pub fn opening_share(&self) -> Option<f64> {
+        let (w, l) = self.opening;
+        ratio(w, w + l)
+    }
+
+    pub fn trades_given_share(&self) -> Option<f64> {
+        let (t, n) = self.trades_given;
+        (n >= 3).then(|| t as f64 / n as f64)
+    }
+}
+
+/// Opening duels: rounds whose first kill was mine, and rounds whose first kill was on me.
+pub fn opening_duels(rf: &[RoundFact]) -> (usize, usize) {
+    (
+        rf.iter().filter(|f| f.first_kill).count(),
+        rf.iter()
+            .filter(|f| f.first_death && f.team_first_kill == Some(false))
+            .count(),
+    )
 }
 
 impl PlayerLine {
@@ -58,6 +84,8 @@ impl PlayerLine {
             first_kills: rf.iter().filter(|f| f.first_kill).count(),
             first_deaths: rf.iter().filter(|f| f.first_death).count(),
             kst: (!rf.is_empty()).then(|| kst as f64 / rounds),
+            opening: opening_duels(rf),
+            trades_given: r.trades_given,
         }
     }
 }
@@ -193,6 +221,30 @@ fn stats(me: &MatchReview, players: &[PlayerLine]) -> Vec<Stat> {
             label: "First deaths",
             value: mine.first_deaths.to_string(),
             rank: rank(&|p| Some(p.first_deaths as f64), true),
+            of,
+        },
+        Stat {
+            label: "Opening duels won",
+            value: format!("{}–{}", mine.opening.0, mine.opening.1),
+            rank: rank(&|p| p.opening_share(), false),
+            of,
+        },
+        Stat {
+            label: "Trades you made",
+            value: match mine.trades_given {
+                (_, 0) => "n/a".into(),
+                (t, n) => format!("{t} of {n}"),
+            },
+            rank: rank(&|p| p.trades_given_share(), false),
+            of,
+        },
+        Stat {
+            label: "Rounds won after the first kill",
+            value: {
+                let (w, n) = advantage(&me.round_facts);
+                if n == 0 { "n/a".into() } else { format!("{w} of {n}") }
+            },
+            rank: None,
             of,
         },
         Stat {
@@ -495,20 +547,19 @@ fn work_on(me: &MatchReview, players: &[PlayerLine]) -> Vec<Finding> {
         });
     }
 
-    // Fighting on when outnumbered with an expensive loadout.
-    let save: Vec<_> = d
-        .iter()
-        .filter(|f| f.context.inventory_value.is_some_and(|v| v >= 2900) && f.enemies_alive >= f.teammates_alive + 3)
-        .collect();
-    if save.len() >= 2 {
+    // Clutches fought against several at once.
+    let crossfired: Vec<_> = d.iter().filter(|f| crate::coach::is_crossfired_clutch(f)).collect();
+    if crossfired.len() >= 2 {
+        let mut evidence = vec![
+            "Last alive, and two or more enemies hit you in the 3 s before you died.".into(),
+            "Fight a clutch one enemy at a time: an angle only one of them can see, then move.".into(),
+        ];
+        evidence.extend(crossfired.iter().map(|f| death_line(f)));
         out.push(Finding {
-            title: format!("Died {} times with a rifle loadout while down two or more", save.len()),
-            evidence: vec![
-                "Saving the gun in a lost round keeps next round's buy.".into(),
-                format!("Rounds: {}.", list(&rounds_of(save.iter().filter_map(|f| f.round)))),
-            ],
-            rounds: rounds_of(save.iter().filter_map(|f| f.round)),
-            score: save.len() as f64 / rf.len().max(1) as f64 * 2.0,
+            title: format!("Died to several enemies at once in {} clutches", crossfired.len()),
+            evidence,
+            rounds: rounds_of(crossfired.iter().filter_map(|f| f.round)),
+            score: crossfired.len() as f64 / rf.len().max(1) as f64 * 2.0,
         });
     }
 
@@ -547,6 +598,79 @@ fn work_on(me: &MatchReview, players: &[PlayerLine]) -> Vec<Finding> {
             ],
             rounds: vec![],
             score: ((m - r) / 30.0).min(0.6),
+        });
+    }
+
+    // Losing the opening duels.
+    let (ow, ol) = opening_duels(rf);
+    if ow + ol >= 4 && ow * 100 <= (ow + ol) * 35 {
+        let lost_rounds: Vec<&RoundFact> = rf
+            .iter()
+            .filter(|f| f.first_death && f.team_first_kill == Some(false))
+            .collect();
+        let team_lost = lost_rounds.iter().filter(|f| f.won == Some(false)).count();
+        out.push(Finding {
+            title: format!("You lost {ol} of {} opening duels", ow + ol),
+            evidence: vec![
+                "An opening duel is the round's first kill, when it's yours or it's on you.".into(),
+                format!(
+                    "Your team lost {team_lost} of the {} rounds you died first in.",
+                    lost_rounds.len()
+                ),
+                "If you keep losing them, take fewer: let a teammate or an ability go first.".into(),
+            ],
+            rounds: rounds_of(lost_rounds.iter().map(|f| f.round)),
+            score: ol as f64 / rf.len().max(1) as f64 * 3.0,
+        });
+    }
+
+    // Not converting the man advantage.
+    let ahead: Vec<&RoundFact> = rf
+        .iter()
+        .filter(|f| f.team_first_kill == Some(true) && f.won.is_some())
+        .collect();
+    let thrown: Vec<&RoundFact> = ahead.iter().copied().filter(|f| f.won == Some(false)).collect();
+    if ahead.len() >= 4 && thrown.len() >= 3 && thrown.len() * 10 >= ahead.len() * 4 {
+        let died: Vec<&crate::deaths::DeathFact> = d
+            .iter()
+            .filter(|f| thrown.iter().any(|t| Some(t.round) == f.round))
+            .collect();
+        let mut evidence = vec![
+            format!(
+                "Your team got the first kill in {} rounds and lost {} of them.",
+                ahead.len(),
+                thrown.len()
+            ),
+            format!(
+                "You died in {} of those. A player up usually means waiting for the enemy to come to you, not chasing more fights.",
+                died.len()
+            ),
+        ];
+        evidence.extend(died.iter().map(|f| death_line(f)));
+        out.push(Finding {
+            title: format!("Lost {} rounds after getting the first kill", thrown.len()),
+            evidence,
+            rounds: rounds_of(thrown.iter().map(|f| f.round)),
+            score: thrown.len() as f64 / rf.len().max(1) as f64 * 3.0,
+        });
+    }
+
+    // Not trading teammates who died near you.
+    let (tg, tn) = me.trades_given;
+    if tn >= 4 && tg * 100 <= tn * 30 {
+        let mut evidence = vec![format!(
+            "{tn} times a teammate died within {:.0} m of you, and you killed their killer within 3 s {tg} times.",
+            crate::coach::TRADE_DISTANCE_M
+        )];
+        if let Some(lobby) = median(players.iter().filter(|p| !p.me).filter_map(|p| p.trades_given_share()).collect()) {
+            evidence.push(format!("Lobby median: {}.", percent(lobby)));
+        }
+        evidence.push("When a teammate fights near you, be ready to swing the moment they die.".into());
+        out.push(Finding {
+            title: format!("You traded {tg} of {tn} teammates who died near you"),
+            evidence,
+            rounds: vec![],
+            score: (tn - tg) as f64 / rf.len().max(1) as f64 * 2.0,
         });
     }
 
@@ -626,6 +750,18 @@ fn went_well(me: &MatchReview, players: &[PlayerLine]) -> Vec<Finding> {
             0.5,
         ));
     }
+    let (ow, ol) = opening_duels(rf);
+    if ow + ol >= 4 && ow * 3 >= (ow + ol) * 2 {
+        out.push(simple(format!("Opening duels {ow}–{ol}"), 0.7));
+    }
+    let (aw, an) = advantage(rf);
+    if an >= 4 && aw * 100 >= an * 85 {
+        out.push(simple(format!("Won {aw} of {an} rounds after the first kill"), 0.5));
+    }
+    let (tg, tn) = me.trades_given;
+    if tn >= 4 && tg * 2 >= tn {
+        out.push(simple(format!("Traded {tg} of {tn} teammates who died near you"), 0.6));
+    }
     let won_clutch: Vec<String> = rf
         .iter()
         .filter(|f| f.clutch_vs.is_some() && f.won == Some(true))
@@ -683,6 +819,12 @@ pub(crate) fn head_hits(rf: &[RoundFact]) -> (usize, usize) {
     let head: u32 = rf.iter().map(|f| f.hits_head).sum();
     let all: u32 = rf.iter().map(|f| f.hits_head + f.hits_body + f.hits_legs).sum();
     (head as usize, all as usize)
+}
+
+/// (won, rounds) where my team got the round's first kill.
+pub(crate) fn advantage(rf: &[RoundFact]) -> (usize, usize) {
+    let ahead = rf.iter().filter(|f| f.team_first_kill == Some(true) && f.won.is_some());
+    (ahead.clone().filter(|f| f.won == Some(true)).count(), ahead.count())
 }
 
 pub(crate) fn ratio(n: usize, d: usize) -> Option<f64> {

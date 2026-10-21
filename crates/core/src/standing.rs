@@ -3,7 +3,7 @@
 //! worse. For `/rank`.
 
 use crate::export::MatchReview;
-use crate::review::head_hits;
+use crate::review::{advantage, head_hits, opening_duels};
 
 /// One of my matches, with every player's review of it (mine included).
 pub struct Game {
@@ -30,7 +30,7 @@ fn per_round(r: &MatchReview, n: usize) -> Option<f64> {
     (!r.round_facts.is_empty()).then(|| n as f64 / r.round_facts.len() as f64)
 }
 
-const MEASURES: [Measure; 5] = [
+const MEASURES: [Measure; 8] = [
     Measure {
         value: |r| {
             per_round(r, 0)
@@ -64,6 +64,30 @@ const MEASURES: [Measure; 5] = [
         value: |r| per_round(r, r.round_facts.iter().filter(|f| f.first_kill).count()),
         better: "You open rounds with the first kill more often than most.",
         behind: "You rarely get the first kill of a round.",
+    },
+    Measure {
+        value: |r| {
+            let (w, l) = opening_duels(&r.round_facts);
+            (w + l >= 3).then(|| w as f64 / (w + l) as f64)
+        },
+        better: "You win more of your opening duels than most players.",
+        behind: "You lose more of your opening duels than most players.",
+    },
+    Measure {
+        value: |r| {
+            let (traded, of) = r.trades_given;
+            (of >= 3).then(|| traded as f64 / of as f64)
+        },
+        better: "When a teammate dies near you, you get the kill back more often than most.",
+        behind: "When a teammate dies near you, you get the kill back less often than most.",
+    },
+    Measure {
+        value: |r| {
+            let (w, n) = advantage(&r.round_facts);
+            (n >= 3).then(|| w as f64 / n as f64)
+        },
+        better: "Your team wins more of its rounds after the first kill than most.",
+        behind: "Your team loses more rounds after getting the first kill than most.",
     },
 ];
 
