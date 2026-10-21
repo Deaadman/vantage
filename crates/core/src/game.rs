@@ -129,10 +129,15 @@ impl Game {
         game
     }
 
-    /// Why this replay isn't a standard or competitive match, if it isn't.
+    /// Why this replay isn't a spike mode Vantage can review, if it isn't.
     /// Everything Vantage derives assumes a spike, rounds and two teams; in
     /// deathmatch the kill graph means nothing and every match reads "drew".
     pub fn unsupported_mode(&self) -> Option<String> {
+        self.unsupported_mode_named(None)
+    }
+
+    /// [`Self::unsupported_mode`], naming the mode when it is known.
+    pub fn unsupported_mode_named(&self, mode: Option<&str>) -> Option<String> {
         let class = &self.export.actors.class;
         let reason = if !class.is_empty() && !class.values().any(|c| c.contains("BombEquippable")) {
             "has no spike"
@@ -144,9 +149,26 @@ impl Game {
         } else {
             return None;
         };
-        Some(format!(
-            "Vantage only reviews standard and competitive matches, and this replay {reason} (deathmatch or another mode?)"
-        ))
+        Some(match mode {
+            Some(mode) => {
+                format!("Vantage only reviews modes with the spike and two teams, and this {mode} replay {reason}")
+            }
+            None => format!(
+                "Vantage only reviews modes with the spike and two teams, and this replay {reason} (deathmatch or another mode?)"
+            ),
+        })
+    }
+
+    /// Asset folder of the replay's game mode, e.g. `GameModes/Bomb`, from
+    /// its game state actor ([`crate::Catalog::mode_name`] names it).
+    pub fn mode_folder(&self) -> Option<&str> {
+        self.export
+            .actors
+            .class
+            .iter()
+            .filter_map(|(guid, c)| Some((guid, crate::modes::game_state_folder(c)?)))
+            .min_by_key(|(guid, _)| **guid)
+            .map(|(_, folder)| folder)
     }
 
     pub fn round(&self, kill: &Kill) -> Option<&Round> {
@@ -649,5 +671,25 @@ mod tests {
         let g = Game::new(ex);
         assert!(g.unsupported_mode().unwrap().contains("no spike"));
         assert!(g.warnings.iter().any(|w| w.starts_with("Vantage only reviews")));
+        assert!(
+            g.unsupported_mode_named(Some("Team Deathmatch"))
+                .unwrap()
+                .contains("this Team Deathmatch replay has no spike")
+        );
+    }
+
+    #[test]
+    fn mode_comes_from_the_game_state() {
+        let mut ex = export(10, five_v_five());
+        assert_eq!(Game::new(ex.clone()).mode_folder(), None);
+        ex.actors.class.insert(
+            90,
+            "/Game/GameModes/Components/Comp_GameState_KillChampion.Comp_GameState_KillChampion_C".into(),
+        );
+        ex.actors.class.insert(
+            91,
+            "/Game/GameModes/QuickBomb/QuickBombGameState.QuickBombGameState_C".into(),
+        );
+        assert_eq!(Game::new(ex).mode_folder(), Some("GameModes/QuickBomb"));
     }
 }
