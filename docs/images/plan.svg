@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="972" height="644" viewBox="0 0 972 644" font-family="Cascadia Mono, Consolas, Menlo, monospace" font-size="14">
+<rect width="972" height="644" rx="8" fill="#16161e"/>
+<text x="16.0" y="29" fill="#b1b9f9" textLength="932.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">───────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="16.0" y="47" fill="#b1b9f9" font-weight="bold" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Plan  </text>
+<text x="83.2" y="47" fill="#d8d8e0" font-weight="bold" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Lotus </text>
+<text x="133.6" y="47" fill="#8c8c8c" textLength="159.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">· 6 matches as Sova</text>
+<text x="293.2" y="47" fill="#8c8c8c" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · for </text>
+<text x="352.0" y="47" fill="#eccf56" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Gold 2</text>
+<rect x="32.8" y="70" width="67.2" height="18" fill="#f0f0f0"/>
+<text x="32.8" y="83" fill="#000000" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Attack </text>
+<text x="108.4" y="83" fill="#d8d8e0" textLength="75.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Defense </text>
+<text x="192.4" y="83" fill="#d8d8e0" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Map </text>
+<text x="16.0" y="119" fill="#d8d8e0" font-weight="bold" textLength="369.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  On attack: how your rounds go at each site</text>
+<text x="16.0" y="137" fill="#8c8c8c" textLength="579.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    Not enough rounds on this side yet to tell one site from another.</text>
+<text x="16.0" y="173" fill="#ff4655" font-weight="bold" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Avoid</text>
+<text x="16.0" y="191" fill="#ff4655" font-weight="bold" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    ✗ </text>
+<text x="66.4" y="191" fill="#d8d8e0" textLength="688.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Taking fights at A Rubble. You've died there 22 times in 6 of your 6 matches here.</text>
+<text x="16.0" y="227" fill="#d8d8e0" font-weight="bold" textLength="142.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  After the plant</text>
+<text x="16.0" y="245" fill="#d8d8e0" textLength="907.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    You haven't played a post-plant here yet. When you do, play the spike from a spot that sees it, not from</text>
+<text x="16.0" y="263" fill="#d8d8e0" textLength="142.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    on top of it.</text>
+<text x="16.0" y="623" fill="#8c8c8c" textLength="613.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ←→ or 1-3 tabs · ↑↓ scroll · Esc closes · /plan --map picks another map</text>
+</svg>

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="972" height="644" viewBox="0 0 972 644" font-family="Cascadia Mono, Consolas, Menlo, monospace" font-size="14">
+<rect width="972" height="644" rx="8" fill="#16161e"/>
+<text x="16.0" y="29" fill="#b1b9f9" textLength="932.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">───────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="16.0" y="47" fill="#b1b9f9" font-weight="bold" textLength="84.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Review  </text>
+<text x="100.0" y="47" fill="#d8d8e0" font-weight="bold" textLength="117.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Sova on Lotus </text>
+<text x="217.6" y="47" fill="#8c8c8c" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">· </text>
+<text x="234.4" y="47" fill="#78c878" font-weight="bold" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">won 13–9</text>
+<text x="301.6" y="47" fill="#8c8c8c" textLength="336.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · 19 kills, 6 deaths · Mon 19 Oct 21:04</text>
+<text x="32.8" y="83" fill="#d8d8e0" textLength="75.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Debrief </text>
+<text x="116.8" y="83" fill="#d8d8e0" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Fixes </text>
+<text x="184.0" y="83" fill="#d8d8e0" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Map </text>
+<text x="234.4" y="83" fill="#d8d8e0" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Clips </text>
+<text x="301.6" y="83" fill="#d8d8e0" textLength="109.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> Screenshots </text>
+<rect x="419.2" y="70" width="33.6" height="18" fill="#f0f0f0"/>
+<text x="419.2" y="83" fill="#000000" textLength="33.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> AI </text>
+<text x="16.0" y="119" fill="#b1b9f9" font-weight="bold" textLength="92.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  AI review</text>
+<text x="108.4" y="119" fill="#8c8c8c" textLength="453.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · Claude (claude-sonnet-5-5) · saved Mon 19 Oct 21:52</text>
+<text x="16.0" y="137" fill="#d8d8e0" textLength="890.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    Most of your deaths came from where you stood, not how you aimed: you held open spots two angles could</text>
+<text x="16.0" y="155" fill="#d8d8e0" textLength="445.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    see, and you were often looking at the wrong one.</text>
+<text x="16.0" y="191" fill="#ffc107" font-weight="bold" textLength="126.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  What it found</text>
+<text x="142.0" y="191" fill="#8c8c8c" textLength="336.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · in the screenshots, most costly first</text>
+<text x="16.0" y="209" fill="#b1b9f9" textLength="462.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ❯ Standing where two angles could see you            </text>
+<text x="478.0" y="209" fill="#b1b9f9" textLength="142.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">two angles · high</text>
+<text x="16.0" y="227" fill="#d8d8e0" textLength="462.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    Crosshair at the floor while walking in            </text>
+<text x="478.0" y="227" fill="#8c8c8c" textLength="151.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">crosshair · medium</text>
+<text x="16.0" y="263" fill="#8c8c8c" textLength="537.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    ────────────────────────────────────────────────────────────</text>
+<text x="16.0" y="299" fill="#8c8c8c" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    Rounds          </text>
+<text x="184.0" y="299" fill="#d8d8e0" textLength="243.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">1, 4 and 7 · R01.jpg, R04.jpg</text>
+<text x="16.0" y="317" fill="#8c8c8c" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    What it saw     </text>
+<text x="184.0" y="317" fill="#d8d8e0" textLength="621.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">You stood in the open at A Rubble with Tree and Root both able to see you.</text>
+<text x="16.0" y="335" fill="#8c8c8c" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    Why it costs    </text>
+<text x="184.0" y="335" fill="#d8d8e0" textLength="697.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Two players could see you, so winning the first fight still left you exposed to the</text>
+<text x="184.0" y="353" fill="#d8d8e0" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">second.</text>
+<text x="16.0" y="371" fill="#8c8c8c" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    Try             </text>
+<text x="184.0" y="371" fill="#78c878" textLength="655.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Pick a spot only one angle can see, and clear the other with your recon first.</text>
+<text x="16.0" y="407" fill="#78c878" font-weight="bold" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Keep doing</text>
+<text x="16.0" y="425" fill="#78c878" font-weight="bold" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    + </text>
+<text x="66.4" y="425" fill="#d8d8e0" textLength="714.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Your utility timing on retakes was good. You flashed before swinging on the B retake.</text>
+<text x="16.0" y="461" fill="#8c8c8c" font-weight="bold" textLength="126.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Couldn't tell</text>
+<text x="16.0" y="479" fill="#8c8c8c" font-weight="bold" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    ? </text>
+<text x="66.4" y="479" fill="#d8d8e0" textLength="344.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">R19.jpg: The clip starts after the fight.</text>
+<text x="16.0" y="623" fill="#8c8c8c" textLength="621.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ←→ or 1-6 tabs · ↑↓ select · j: the format and saved answer · Esc closes</text>
+</svg>

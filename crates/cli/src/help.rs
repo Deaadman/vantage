@@ -20,11 +20,11 @@ const GENERAL: &[(bool, &str)] = &[
     (true, "After a match"),
     (
         false,
-        "  Download the replay in the client. Vantage picks it up, checks your focus habit, and tells you how it went.",
+        "  Download the replay in the client. Vantage picks it up and tells you how it went.",
     ),
     (
         false,
-        "  /review opens the debrief: the short version, the three fixes that cost you the most rounds, and the moments that decided rounds.",
+        "  /review opens the debrief: the short version, the issues that cost you the most rounds, what to keep doing, and how your focus habit went.",
     ),
     (
         false,

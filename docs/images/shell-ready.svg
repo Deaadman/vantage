@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="972" height="644" viewBox="0 0 972 644" font-family="Cascadia Mono, Consolas, Menlo, monospace" font-size="14">
+<rect width="972" height="644" rx="8" fill="#16161e"/>
+<text x="24.4" y="47" fill="#892830" xml:space="preserve">▀</text>
+<text x="32.8" y="47" fill="#892830" xml:space="preserve">▄</text>
+<text x="41.2" y="47" fill="#c0303d" xml:space="preserve">▀</text>
+<text x="49.6" y="47" fill="#c0303d" xml:space="preserve">▄</text>
+<text x="58.0" y="47" fill="#ff4655" xml:space="preserve">▀</text>
+<text x="66.4" y="47" fill="#ff4655" xml:space="preserve">▄</text>
+<text x="74.8" y="47" fill="#ff4655" xml:space="preserve">▀</text>
+<text x="83.2" y="47" fill="#c0303d" xml:space="preserve">▄</text>
+<text x="91.6" y="47" fill="#c0303d" xml:space="preserve">▀</text>
+<text x="100.0" y="47" fill="#892830" xml:space="preserve">▄</text>
+<text x="108.4" y="47" fill="#892830" xml:space="preserve">▀</text>
+<text x="142.0" y="47" fill="#d8d8e0" font-weight="bold" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Vantage</text>
+<text x="200.8" y="47" fill="#8c8c8c" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> v0.1.0</text>
+<text x="41.2" y="65" fill="#892830" xml:space="preserve">▀</text>
+<text x="49.6" y="65" fill="#892830" xml:space="preserve">▄</text>
+<text x="58.0" y="65" fill="#c0303d" xml:space="preserve">▀</text>
+<text x="66.4" y="65" fill="#c0303d" xml:space="preserve">▄</text>
+<text x="74.8" y="65" fill="#c0303d" xml:space="preserve">▀</text>
+<text x="83.2" y="65" fill="#892830" xml:space="preserve">▄</text>
+<text x="91.6" y="65" fill="#892830" xml:space="preserve">▀</text>
+<text x="142.0" y="65" fill="#eccf56" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Gold 2</text>
+<text x="192.4" y="65" fill="#8c8c8c" textLength="151.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · VALORANT v13.08</text>
+<text x="58.0" y="83" fill="#892830" xml:space="preserve">▀</text>
+<text x="66.4" y="83" fill="#892830" xml:space="preserve">▄</text>
+<text x="74.8" y="83" fill="#892830" xml:space="preserve">▀</text>
+<text x="142.0" y="83" fill="#8c8c8c" textLength="336.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">C:\Users\Player\Documents\VALORANT\Demos</text>
+<text x="24.4" y="119" fill="#d8d8e0" font-weight="bold" textLength="151.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Checked 14 replays</text>
+<text x="175.6" y="119" fill="#8c8c8c" textLength="210.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  1 new · 13 already done</text>
+<text x="24.4" y="137" fill="#78c878" textLength="33.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  + </text>
+<text x="58.0" y="137" fill="#d8d8e0" textLength="109.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Sova on Lotus</text>
+<text x="24.4" y="173" fill="#ffc107" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">◆ </text>
+<text x="41.2" y="173" fill="#d8d8e0" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Your focus: </text>
+<text x="142.0" y="173" fill="#d8d8e0" font-weight="bold" textLength="235.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Dying where nobody can trade</text>
+<text x="377.2" y="173" fill="#78c878" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ▇▅▅▃▂</text>
+<text x="436.0" y="173" fill="#78c878" font-weight="bold" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  getting better</text>
+<text x="16.0" y="191" fill="#8c8c8c" textLength="361.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">   To switch, type /focus and pick a habit.</text>
+<text x="16.0" y="569" fill="#6e6e6e" textLength="932.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">───────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="16.0" y="587" fill="#8c8c8c" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">❯ </text>
+<text x="32.8" y="587" fill="#8c8c8c" textLength="554.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Try /review to see what problems were found from your latest match</text>
+<text x="16.0" y="605" fill="#6e6e6e" textLength="932.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">───────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="16.0" y="623" fill="#8c8c8c" textLength="352.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  14 matches · /help for commands and keys</text>
+</svg>

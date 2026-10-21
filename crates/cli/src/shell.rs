@@ -1420,6 +1420,10 @@ fn save_history(path: &Path, line: &str) {
 }
 
 #[cfg(test)]
+#[path = "docs_pictures.rs"]
+mod docs_pictures;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

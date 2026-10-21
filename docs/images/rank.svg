@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="972" height="644" viewBox="0 0 972 644" font-family="Cascadia Mono, Consolas, Menlo, monospace" font-size="14">
+<rect width="972" height="644" rx="8" fill="#16161e"/>
+<text x="16.0" y="29" fill="#b1b9f9" textLength="932.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">───────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="16.0" y="47" fill="#b1b9f9" font-weight="bold" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Rank  </text>
+<text x="83.2" y="47" fill="#eccf56" font-weight="bold" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Gold 2</text>
+<text x="133.6" y="47" fill="#8c8c8c" textLength="336.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> · set by you in /settings · aiming for </text>
+<text x="469.6" y="47" fill="#eccf56" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Gold 3</text>
+<rect x="32.8" y="70" width="201.6" height="18" fill="#f0f0f0"/>
+<text x="32.8" y="83" fill="#000000" textLength="201.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> What wins at your rank </text>
+<text x="242.8" y="83" fill="#d8d8e0" textLength="159.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> You in your games </text>
+<text x="16.0" y="119" fill="#8c8c8c" textLength="537.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  What decides games at Gold and Platinum, most important first.</text>
+<text x="16.0" y="155" fill="#b1b9f9" font-weight="bold" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  1  </text>
+<text x="58.0" y="155" fill="#d8d8e0" font-weight="bold" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Trade your teammates</text>
+<text x="16.0" y="173" fill="#d8d8e0" textLength="924.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     Players here can aim. Rounds are decided by who gets the kill back, so stay a few steps from whoever goes</text>
+<text x="16.0" y="191" fill="#d8d8e0" textLength="117.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     in first.</text>
+<text x="16.0" y="227" fill="#b1b9f9" font-weight="bold" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  2  </text>
+<text x="58.0" y="227" fill="#d8d8e0" font-weight="bold" textLength="252.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Use an ability before you peek</text>
+<text x="16.0" y="245" fill="#d8d8e0" textLength="924.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     Gold and Platinum players punish peeks without utility. One ability first lets you take the fight on your</text>
+<text x="16.0" y="263" fill="#d8d8e0" textLength="92.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     terms.</text>
+<text x="16.0" y="299" fill="#b1b9f9" font-weight="bold" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  3  </text>
+<text x="58.0" y="299" fill="#d8d8e0" font-weight="bold" textLength="142.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Move after a kill</text>
+<text x="16.0" y="317" fill="#d8d8e0" textLength="882.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     Players at this rank expect you to swing again from the same spot. Reposition before you peek again.</text>
+<text x="16.0" y="353" fill="#b1b9f9" font-weight="bold" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  4  </text>
+<text x="58.0" y="353" fill="#d8d8e0" font-weight="bold" textLength="226.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Save when the round is lost</text>
+<text x="16.0" y="371" fill="#d8d8e0" textLength="672.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">     Keeping your rifle for the next round wins more games than a long-shot 1v3.</text>
+<text x="16.0" y="407" fill="#ffc107" textLength="924.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Your aim is good enough for the rank above. What holds players back in Gold and Platinum is when they fight,</text>
+<text x="16.0" y="425" fill="#ffc107" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  not how they shoot.</text>
+<text x="16.0" y="623" fill="#8c8c8c" textLength="898.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  ←→ tabs · ↑↓ scroll · Esc closes · replays don't include rank, so change it in /settings when you rank up</text>
+</svg>
