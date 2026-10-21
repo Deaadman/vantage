@@ -57,7 +57,7 @@ Once a week, [Dependabot](../.github/dependabot.yml) opens a pull request for cr
 
 ## Releasing
 
-The [release workflow](../.github/workflows/release.yml) is turned off for now: uncomment its `push` trigger to turn it on. Once it's on:
+The [release workflow](../.github/workflows/release.yml) runs when a version tag is pushed:
 
 1. In [`CHANGELOG.md`](../CHANGELOG.md), rename `## [Unreleased]` to the new version and date, for example `## [0.2.0] - 2026-11-02`. Add a new empty `## [Unreleased]` above it, and update the links at the bottom.
 2. Set the same version in `crates/cli/Cargo.toml`. Commit both files.

@@ -5,15 +5,14 @@
 # what's-new notes). The version's section of CHANGELOG.md is both the
 # release's description and those notes; the release stops if it has none.
 #
-# Turned off until the first release: tags start nothing, and a manual run
-# checks but never publishes (the job below only publishes from a tag). To
-# turn it on, uncomment the `push` trigger below.
+# A manual run checks but never publishes: the job below only publishes from
+# a tag.
 
 name: Release
 
 on:
-  # push:
-  #   tags: ["[0-9]+.[0-9]+.[0-9]+*"]
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
   workflow_dispatch:
 
 # Read-only by default; only the job that publishes can write.
