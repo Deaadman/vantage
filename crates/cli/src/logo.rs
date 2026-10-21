@@ -3,8 +3,9 @@
 //! on its last frame for the rest of the session.
 
 use crossterm::style::Color;
+use shellkit::{Logo, Row, half_blocks};
 
-use crate::shell::{BRIGHT, RED, Row, Style};
+use crate::shell::{BRIGHT, RED};
 
 /// Frames at the shell's tick (80 ms): 1.2 s.
 pub const FRAMES: usize = 15;
@@ -18,7 +19,7 @@ const SHADES: [Color; 3] = [
     RED,
 ];
 
-type Pixels = [[Option<Color>; W]; H];
+type Pixels = Vec<Vec<Option<Color>>>;
 
 /// Chevron `i`: a V of single pixels with its point `2i` rows up from the bottom.
 fn chevron(px: &mut Pixels, i: usize, c: Color) {
@@ -32,7 +33,7 @@ fn chevron(px: &mut Pixels, i: usize, c: Color) {
 
 fn pixels(frame: usize) -> Pixels {
     let f = frame.min(FRAMES - 1);
-    let mut px = [[None; W]; H];
+    let mut px = vec![vec![None; W]; H];
     for (i, shade) in SHADES.into_iter().enumerate() {
         // Each lands white, then the pulse passes up through them at 10, 11, 12.
         if f < 3 * i {
@@ -44,45 +45,35 @@ fn pixels(frame: usize) -> Pixels {
     px
 }
 
-/// The logo at `frame`, as three rows of half blocks.
-pub fn rows(frame: usize) -> [Row; 3] {
-    let px = pixels(frame);
-    std::array::from_fn(|k| {
-        (0..W)
-            .map(|c| match (px[2 * k][c], px[2 * k + 1][c]) {
-                (None, None) => (Style::default(), " ".to_owned()),
-                (Some(t), None) => (Style::fg(t), "▀".to_owned()),
-                (None, Some(b)) => (Style::fg(b), "▄".to_owned()),
-                (Some(t), Some(b)) if t == b => (Style::fg(t), "█".to_owned()),
-                (Some(t), Some(b)) => (
-                    Style {
-                        bg: Some(b),
-                        ..Style::fg(t)
-                    },
-                    "▀".to_owned(),
-                ),
-            })
-            .collect()
-    })
+/// The logo, for the shell's header.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Chevrons;
+
+impl Logo for Chevrons {
+    fn frames(&self) -> usize {
+        FRAMES
+    }
+
+    fn rows(&self, frame: usize) -> Vec<Row> {
+        half_blocks(&pixels(frame))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn text(r: &Row) -> String {
-        r.iter().map(|(_, s)| s.as_str()).collect()
-    }
+    use shellkit::{Style, row_text};
 
     #[test]
     fn ends_on_three_chevrons() {
-        let last = rows(FRAMES - 1).map(|r| text(&r));
+        let rows = |f| Chevrons.rows(f);
+        let last: Vec<String> = rows(FRAMES - 1).iter().map(row_text).collect();
         assert_eq!(last, ["▀▄▀▄▀▄▀▄▀▄▀", "  ▀▄▀▄▀▄▀  ", "    ▀▄▀    "]);
         // The top chevron is the brightest, at the tip of the badge.
         assert_eq!(rows(FRAMES - 1)[0][5].0, Style::fg(RED));
         // Later frames are the last one: the logo stays put.
         assert_eq!(rows(FRAMES + 40), rows(FRAMES - 1));
         // It starts with only the bottom chevron.
-        assert_eq!(text(&rows(0)[0]), "▀▄       ▄▀");
+        assert_eq!(row_text(&rows(0)[0]), "▀▄       ▄▀");
     }
 }

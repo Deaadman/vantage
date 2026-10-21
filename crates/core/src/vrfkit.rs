@@ -5,16 +5,15 @@
 //! `update::latest_pin`), so a new vrfkit reaches players without a Vantage
 //! release. A vrfkit installed that way saves its pin as `vrfkit\pin.json`.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::builds::Decodes;
+pub use crate::install::sha256_file;
 use crate::install::{Layout, is_newer};
 
 /// One vrfkit release: where it comes from, its hashes, and what it decodes.
@@ -69,7 +68,7 @@ pub fn bundled() -> &'static Pin {
 /// The pin in use: one a vrfkit update saved, when it's newer than the
 /// built-in one, else the built-in one.
 pub fn active() -> Pin {
-    newest(Layout::new().ok().and_then(|l| Pin::load_saved(&l)))
+    newest(crate::install::layout().ok().and_then(|l| Pin::load_saved(&l)))
 }
 
 fn newest(saved: Option<Pin>) -> Pin {
@@ -201,27 +200,15 @@ pub fn parse_branch(inspect: &str) -> Option<String> {
 
 /// Where the installer puts the release in use.
 pub fn installed_path() -> Option<PathBuf> {
-    Layout::new().ok().map(|l| l.vrfkit_exe(&active().tag))
+    crate::install::layout()
+        .ok()
+        .map(|l| crate::install::vrfkit_exe(&l, &active().tag))
 }
 
 fn find_on_path() -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|d| d.join("vrfkit.exe"))
         .find(|p| p.is_file())
-}
-
-pub fn sha256_file(path: &Path) -> Result<String> {
-    let mut f = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1 << 16];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 #[cfg(test)]

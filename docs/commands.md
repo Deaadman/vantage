@@ -20,6 +20,8 @@ Type `/` to see the commands. Keep typing to filter them, and press Tab to compl
 | `/settings` | Your rank, folders, AI review and other settings. See [Settings and updates](settings.md). |
 | `/logs` | Open the folder of session logs, to attach one to a bug report. |
 | `/update` | Install the newest Vantage and vrfkit now. |
+| `/release-notes` | What's new in each version: pick one, or show them all. |
+| `/tui` | `/tui fullscreen` (the default) takes over the whole terminal. `/tui default` runs in the terminal's own scrollback instead, so the output stays after you quit. Vantage remembers which. |
 | `/help` | The commands and keys. |
 | `/clear` | Clear the screen. |
 | `/exit` | Quit Vantage. |
@@ -34,7 +36,7 @@ Add `--help` to a command to see all its options, for example `/scan --help`.
 | Tab or → | Complete the highlighted suggestion |
 | ↑ ↓ | Move in the menu, or go back through what you typed |
 | Esc | Hide the menu, or close a panel |
-| PgUp PgDn | Scroll the output |
+| PgUp PgDn | Scroll the output (with `/tui default`, scroll the terminal instead) |
 | Ctrl+L | Clear the screen |
 | Ctrl+C | Clear the line. Press it twice on an empty line to quit. |
 

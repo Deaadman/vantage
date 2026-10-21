@@ -44,9 +44,16 @@ jobs:
             throw "tag $env:GITHUB_REF_NAME does not match crates/cli version $version"
           }
 
+      # The vrfkit this version has built in, and its notes, from vrfkit.json,
+      # go in beside the notes. An install that already got it from a vrfkit
+      # update shows nothing more for it.
       - name: Read the release notes from CHANGELOG.md
         shell: pwsh
-        run: ./scripts/release-notes.ps1 -Version $env:GITHUB_REF_NAME -OutDir notes
+        run: |
+          $vrfkit = Get-Content -Raw vrfkit.json | ConvertFrom-Json
+          $extra = @{ vrfkit = [ordered]@{ tag = $vrfkit.tag; notes = @($vrfkit.notes) } }
+          [IO.File]::WriteAllText("$PWD/whats-new-extra.json", ($extra | ConvertTo-Json -Depth 4))
+          ./scripts/release-notes.ps1 -Version $env:GITHUB_REF_NAME -OutDir notes -Extra whats-new-extra.json
 
       - uses: Swatinem/rust-cache@v2
 

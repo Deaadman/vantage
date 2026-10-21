@@ -1,257 +1,18 @@
-//! What the full-screen panels share: the frame (rule, title, tabs, body,
-//! footer), wrapped paragraphs and labelled fields, selectable lists, keys,
-//! and the minimap drawn in half blocks.
+//! What the full-screen panels share: shellkit's widgets (the frame,
+//! paragraphs, fields, lists, keys), rank colours, and the minimap drawn in
+//! half blocks (`shellkit::image`).
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::Color;
+use shellkit::image::{self, Image};
+pub use shellkit::widgets::{
+    Item, body_height, bullet, field, frame, heading, is_close, list_rows, para, rule_line, scrolled, step, step_of,
+    steps, tab_key,
+};
+pub use shellkit::{pad, rgb};
 use vantage_core::catalog::MapInfo;
 use vantage_core::minimap::Minimap;
 
-use crate::review_view::GREEN;
-use crate::shell::{ACCENT, BRIGHT, GREY, Row, Style, wrap};
-
-/// Width of a field's label column.
-pub const LABEL_W: usize = 16;
-
-/// `text` padded with spaces to `n` columns.
-pub fn pad(text: &str, n: usize) -> String {
-    let k = text.chars().count();
-    if k >= n {
-        text.to_owned()
-    } else {
-        format!("{text}{}", " ".repeat(n - k))
-    }
-}
-
-/// The panel: a rule, the title, the tabs, the body sized to fit, and a hint.
-pub fn frame(w: usize, h: usize, title: Row, tabs: Option<(&[&str], usize)>, body: Vec<Row>, hint: &str) -> Vec<Row> {
-    let mut rows: Vec<Row> = vec![
-        vec![(Style::fg(ACCENT), "─".repeat(w.saturating_sub(1)))],
-        title,
-        vec![],
-    ];
-    if let Some((names, tab)) = tabs {
-        rows.push(tabs_row(names, tab));
-        rows.push(vec![]);
-    }
-    let footer = [vec![], vec![(Style::fg(GREY), format!("  {hint}"))]];
-    let body_h = h.saturating_sub(rows.len() + footer.len()).max(1);
-    let mut body = body;
-    body.truncate(body_h);
-    body.resize(body_h, vec![]);
-    rows.extend(body);
-    rows.extend(footer);
-    rows.truncate(h);
-    rows
-}
-
-/// Height left for a body under `frame`'s title (and tabs).
-pub fn body_height(h: usize, tabs: bool) -> usize {
-    h.saturating_sub(if tabs { 7 } else { 5 }).max(1)
-}
-
-pub fn tabs_row(names: &[&str], tab: usize) -> Row {
-    let mut row: Row = vec![(Style::default(), " ".into())];
-    for (i, name) in names.iter().enumerate() {
-        row.push((Style::default(), " ".into()));
-        let style = if i == tab {
-            Style {
-                fg: Some(Color::Black),
-                bg: Some(BRIGHT),
-                bold: false,
-            }
-        } else {
-            Style::default()
-        };
-        row.push((style, format!(" {name} ")));
-    }
-    row
-}
-
-/// `  Text` in bold, optionally coloured.
-pub fn heading(text: &str, color: Option<Color>) -> Row {
-    let style = color.map_or(Style::default(), Style::fg).bold();
-    vec![(style, format!("  {text}"))]
-}
-
-/// A paragraph wrapped to the screen, indented `ind` columns.
-pub fn para(text: &str, ind: usize, w: usize, style: Style) -> Vec<Row> {
-    wrap(text, w.saturating_sub(ind + 2).max(10))
-        .into_iter()
-        .map(|p| vec![(style, format!("{}{p}", " ".repeat(ind)))])
-        .collect()
-}
-
-/// A thin rule under a list, before the selected item's detail.
-pub fn rule_line(w: usize) -> Row {
-    vec![(
-        Style::fg(GREY),
-        format!("    {}", "─".repeat(w.saturating_sub(8).clamp(10, 60))),
-    )]
-}
-
-/// `label` in grey, then `text` wrapped beside it.
-pub fn field(label: &str, text: &str, w: usize, style: Style) -> Vec<Row> {
-    wrap(text, w.saturating_sub(4 + LABEL_W + 3).max(10))
-        .into_iter()
-        .enumerate()
-        .map(|(i, p)| {
-            vec![
-                (
-                    Style::fg(GREY),
-                    format!("    {}", pad(if i == 0 { label } else { "" }, LABEL_W)),
-                ),
-                (style, p),
-            ]
-        })
-        .collect()
-}
-
-/// Numbered steps beside a label.
-pub fn steps(label: &str, items: &[String], w: usize) -> Vec<Row> {
-    let mut out = Vec::new();
-    for (n, t) in items.iter().enumerate() {
-        for (i, p) in wrap(t, w.saturating_sub(4 + LABEL_W + 6).max(10))
-            .into_iter()
-            .enumerate()
-        {
-            out.push(vec![
-                (
-                    Style::fg(GREY),
-                    format!("    {}", pad(if n == 0 && i == 0 { label } else { "" }, LABEL_W)),
-                ),
-                (
-                    Style::fg(GREEN),
-                    if i == 0 { format!("{}. ", n + 1) } else { "   ".into() },
-                ),
-                (Style::default(), p),
-            ]);
-        }
-    }
-    out
-}
-
-/// A bullet: `    + text`, wrapped under itself.
-pub fn bullet(mark: &str, color: Color, text: &str, w: usize) -> Vec<Row> {
-    wrap(text, w.saturating_sub(10).max(10))
-        .into_iter()
-        .enumerate()
-        .map(|(i, p)| {
-            vec![
-                (
-                    Style::fg(color).bold(),
-                    if i == 0 {
-                        format!("    {mark} ")
-                    } else {
-                        "      ".into()
-                    },
-                ),
-                (Style::default(), p),
-            ]
-        })
-        .collect()
-}
-
-/// One selectable line: its text, and an optional tail in its own colour.
-pub struct Item {
-    pub text: String,
-    pub tail: Option<(String, Color)>,
-}
-
-impl Item {
-    pub fn new(text: impl Into<String>) -> Self {
-        Item {
-            text: text.into(),
-            tail: None,
-        }
-    }
-
-    pub fn tail(mut self, text: impl Into<String>, color: Color) -> Self {
-        self.tail = Some((text.into(), color));
-        self
-    }
-}
-
-/// `items` as a list `h` rows tall, the selection marked and kept in view.
-pub fn list_rows(items: Vec<Item>, sel: usize, h: usize) -> Vec<Row> {
-    let n = items.len();
-    let first = sel.saturating_sub(h.saturating_sub(1)).min(n.saturating_sub(h));
-    items
-        .into_iter()
-        .enumerate()
-        .skip(first)
-        .take(h)
-        .map(|(i, it)| {
-            let on = i == sel;
-            let mut row: Row = vec![(
-                if on { Style::fg(ACCENT) } else { Style::default() },
-                format!("{}{}", if on { "  ❯ " } else { "    " }, it.text),
-            )];
-            if let Some((t, c)) = it.tail {
-                row.push((Style::fg(if on { ACCENT } else { c }), t));
-            }
-            row
-        })
-        .collect()
-}
-
-/// `lines` from `scroll`, `h` tall, the last row saying how many more.
-pub fn scrolled(scroll: &mut usize, lines: Vec<Row>, h: usize) -> Vec<Row> {
-    let max = lines.len().saturating_sub(h);
-    *scroll = (*scroll).min(max);
-    let mut rows: Vec<Row> = lines.into_iter().skip(*scroll).take(h).collect();
-    if *scroll < max
-        && let Some(last) = rows.last_mut()
-    {
-        *last = vec![(Style::fg(GREY), format!("    ↓ {} more", max - *scroll))];
-    }
-    rows
-}
-
-pub fn is_close(key: &KeyEvent) -> bool {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    matches!(key.code, KeyCode::Esc)
-        || (key.code == KeyCode::Char('q') && !ctrl)
-        || (ctrl && key.code == KeyCode::Char('c'))
-}
-
-/// ←→, Tab and the number keys move between `n` tabs; true when they did.
-pub fn tab_key(tab: &mut usize, key: &KeyEvent, n: usize) -> bool {
-    match key.code {
-        KeyCode::Left | KeyCode::BackTab => *tab = (*tab + n - 1) % n,
-        KeyCode::Right | KeyCode::Tab => *tab = (*tab + 1) % n,
-        KeyCode::Char(c) if c.is_ascii_digit() && !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let i = c as usize - '1' as usize;
-            if c == '0' || i >= n {
-                return false;
-            }
-            *tab = i;
-        }
-        _ => return false,
-    }
-    true
-}
-
-/// ↑↓, PgUp/PgDn, Home/End as a step.
-pub fn step_of(key: &KeyEvent) -> isize {
-    match key.code {
-        KeyCode::Up => -1,
-        KeyCode::Down => 1,
-        KeyCode::PageUp => -10,
-        KeyCode::PageDown => 10,
-        KeyCode::Home => -10_000,
-        KeyCode::End => 10_000,
-        _ => 0,
-    }
-}
-
-pub fn step(v: &mut usize, by: isize, n: usize) {
-    *v = (*v as isize + by).clamp(0, n.saturating_sub(1) as isize) as usize;
-}
-
-pub fn rgb((r, g, b): (u8, u8, u8)) -> Color {
-    Color::Rgb { r, g, b }
-}
+use crate::shell::{BRIGHT, GREY, Row, Style};
 
 /// A rank in its in-game colour; grey when unset.
 pub fn rank_color(rank: Option<&str>) -> Color {
@@ -262,60 +23,23 @@ pub fn rank_color(rank: Option<&str>) -> Color {
 /// columns, with marks on it. Each cell is one pixel wide and two tall.
 /// It's turned so the attackers' spawn is at the bottom.
 pub struct MapCells {
-    cells: Vec<Vec<(Style, String)>>,
+    cells: Vec<Row>,
     n: usize,
     /// Quarter turns clockwise from the image, for placing marks.
     turns: u8,
 }
 
-/// An `n`×`n` image of pixels turned `turns` quarter turns clockwise.
-fn turn_pixels(px: &[[u8; 4]], n: usize, turns: u8) -> Vec<[u8; 4]> {
-    let mut out = px.to_vec();
-    for _ in 0..turns % 4 {
-        let src = out.clone();
-        for y in 0..n {
-            for x in 0..n {
-                // The pixel turned to (x, y) came from (y, n - 1 - x).
-                out[y * n + x] = src[(n - 1 - x) * n + y];
-            }
-        }
-    }
-    out
-}
-
 impl MapCells {
     pub fn new(px: &[[u8; 4]], n: usize, map: Option<&MapInfo>) -> Self {
         let turns = map.map_or(0, MapInfo::attacker_turns);
-        let px = &turn_pixels(px, n, turns);
-        let rows_h = n / 2;
-        let opaque = |p: [u8; 4]| p[3] > 60;
-        let dim = |p: [u8; 4]| Color::Rgb {
-            r: (p[0] as f64 * 0.55) as u8,
-            g: (p[1] as f64 * 0.55) as u8,
-            b: (p[2] as f64 * 0.55) as u8,
-        };
-        let cells = (0..rows_h)
-            .map(|r| {
-                (0..n)
-                    .map(|c| {
-                        let (top, bottom) = (px[2 * r * n + c], px[(2 * r + 1) * n + c]);
-                        match (opaque(top), opaque(bottom)) {
-                            (true, true) => (
-                                Style {
-                                    fg: Some(dim(top)),
-                                    bg: Some(dim(bottom)),
-                                    bold: false,
-                                },
-                                "▀".to_owned(),
-                            ),
-                            (true, false) => (Style::fg(dim(top)), "▀".to_owned()),
-                            (false, true) => (Style::fg(dim(bottom)), "▄".to_owned()),
-                            (false, false) => (Style::default(), " ".to_owned()),
-                        }
-                    })
-                    .collect()
+        // Dimmed so marks stand out; faint pixels are left out.
+        let cells = Image::new(n, n, px.to_vec()).turn(turns).cells(|p| {
+            (p[3] > 60).then(|| Color::Rgb {
+                r: (p[0] as f64 * 0.55) as u8,
+                g: (p[1] as f64 * 0.55) as u8,
+                b: (p[2] as f64 * 0.55) as u8,
             })
-            .collect();
+        });
         let mut m = MapCells { cells, n, turns };
         // Site letters for orientation.
         if let Some(map) = map
@@ -368,7 +92,7 @@ impl MapCells {
 
 /// The minimap shrunk to a size, kept between frames.
 #[derive(Default)]
-pub struct MapCache(Option<(usize, Vec<[u8; 4]>)>);
+pub struct MapCache(image::Cache);
 
 impl MapCache {
     /// Map cells `rows_h` tall, or why there's no map.
@@ -379,11 +103,10 @@ impl MapCache {
         rows_h: usize,
     ) -> Result<MapCells, String> {
         let n = rows_h * 2;
-        if self.0.as_ref().is_none_or(|(size, _)| *size != n) {
-            let m = minimap.as_ref().map_err(Clone::clone)?;
-            self.0 = Some((n, m.downsample(n, n)));
-        }
-        Ok(MapCells::new(&self.0.as_ref().expect("just filled").1, n, map))
+        let img = self
+            .0
+            .get_with(n, n, || minimap.as_ref().map(Minimap::image).map_err(Clone::clone))?;
+        Ok(MapCells::new(&img.px, n, map))
     }
 }
 
@@ -403,7 +126,7 @@ mod tests {
         let mut px = vec![[0, 0, 0, 0]; n * n];
         px[3] = [255, 255, 255, 255];
         for turns in 0..4 {
-            let turned = turn_pixels(&px, n, turns);
+            let turned = Image::new(n, n, px.clone()).turn(turns).px;
             let lit = turned.iter().position(|p| p[3] == 255).unwrap();
             let [u, v] = vantage_core::catalog::turn_uv([3.5 / 4.0, 0.5 / 4.0], turns);
             assert_eq!(

@@ -10,7 +10,15 @@ cargo test
 ## How it's laid out
 
 - `crates/core`: reading replays, the analysis, and the coaching (debrief, habits, plans, ranks, clips and AI review).
-- `crates/cli`: the `vantage` program and its interactive shell.
+- `crates/cli`: the `vantage` program, and what its interactive shell shows: the commands, panels, settings and colours.
+The shell itself comes from [shellkit](https://github.com/Deaadman/shellkit), its own repository, with nothing about VALORANT in it: the header, input box and command menu, status bar, help and settings panels, the session log, the data folder and settings file, half-block pictures, the self-updater and installer, and the release templates. To change it alongside Vantage, clone it beside this repository and add to `Cargo.toml`:
+
+```toml
+[patch."https://github.com/Deaadman/shellkit"]
+shellkit = { path = "../shellkit" }
+```
+
+`install.ps1` and `scripts/release-notes.ps1` come from shellkit. A test fails when they drift from it; `cargo test -p vantage write_install_script -- --ignored` writes them again.
 
 ## Tests
 
@@ -101,7 +109,7 @@ So write for players, not for developers:
 
 The links at the bottom make each heading clickable. `[Unreleased]` compares the newest release with `HEAD`, each version compares with the one before it, and the oldest links to its own tag. Before the first release, `[Unreleased]` links to the commits on `main`.
 
-To see what a release would get, run `.\scripts\release-notes.ps1 -Version 0.2.0 -OutDir notes`. It writes the description to `notes/release-notes.md` and the in-app notes to `notes/whats-new.json`. `.\scripts\release-notes.ps1 -Check` only checks the format, as CI does.
+To see what a release would get, run `.\scripts\release-notes.ps1 -Version 0.2.0 -OutDir notes`. It writes the description to `notes/release-notes.md` and the in-app notes to `notes/whats-new.json`; the release workflow also passes `-Extra` with the vrfkit's notes from `vrfkit.json`. `.\scripts\release-notes.ps1 -Check` only checks the format, as CI does.
 
 ## vrfkit updates
 

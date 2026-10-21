@@ -1,33 +1,48 @@
 # Turns a version's section of CHANGELOG.md into release notes:
 #
 #   release-notes.md   the GitHub release's description: the section as written
-#   whats-new.json     {notes, vrfkit} for manifest.json, which the app shows
+#   whats-new.json     {notes, ...} for manifest.json, which the app shows
 #                      as "what's new" on the first launch after an update
 #
-#   .\scripts\release-notes.ps1 -Version 0.2.0 -OutDir notes
-#   .\scripts\release-notes.ps1 -Check        # only check CHANGELOG.md's format
+#   ./scripts/release-notes.ps1 -Version 0.2.0 -OutDir notes
+#   ./scripts/release-notes.ps1 -Version 0.2.0 -OutDir notes -Extra extra.json
+#   ./scripts/release-notes.ps1 -Check        # only check CHANGELOG.md's format
+#
+# -Extra names a JSON file whose keys are added to whats-new.json beside
+# `notes`, for anything else an update should carry.
 #
 # CHANGELOG.md follows Keep a Changelog 2.0.0 (https://keepachangelog.com/en/2.0.0/),
 # with versions and tags that have no v: "## [0.2.0] - 2026-10-21", entries
-# under the six types, and a link for every version at the bottom. See
-# docs/development.md, "Releasing".
+# under the six types, and a link for every version at the bottom.
+#
+# From shellkit (shellkit::release::NOTES_SCRIPT): change it there, not here.
 param(
     [string]$Version,
     [string]$OutDir = '.',
     [switch]$Check,
-    [string]$Changelog = (Join-Path $PSScriptRoot '..\CHANGELOG.md')
+    [string]$Changelog = (Join-Path (Split-Path -Parent $PSScriptRoot) 'CHANGELOG.md'),
+    # https://github.com/owner/repo; the origin remote's when left out.
+    [string]$Repo,
+    [string]$Extra
 )
+
+# Read before errors stop the script: git's complaint about a missing remote isn't one.
+if (-not $Repo -and (Test-Path $Changelog)) {
+    $origin = git -C (Split-Path -Parent (Resolve-Path $Changelog)) remote get-url origin 2>$null
+    if ($origin) { $Repo = "$origin".Trim() -replace '^git@github\.com:', 'https://github.com/' -replace '\.git$', '' }
+}
 
 $ErrorActionPreference = 'Stop'
 
-$Repo = 'https://github.com/Deaadman/vantage'
+if (-not $Repo) { throw 'Pass -Repo https://github.com/owner/repo (there is no origin remote to read it from)' }
+$Repo = $Repo.TrimEnd('/')
 $Types = @('Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security')
 
 function Fail([string]$Why) { throw "CHANGELOG.md: $Why" }
 
 # The changelog as sections, newest first: @{ Name; Date; Yanked; Text; Notes }, and its links.
 function Read-Changelog([string]$Path) {
-    $lines = [IO.File]::ReadAllLines($Path)
+    $lines = [IO.File]::ReadAllLines((Resolve-Path $Path).Path)
     if ($lines.Count -eq 0 -or $lines[0] -ne '# Changelog') { Fail "the first line should be '# Changelog'" }
     $sections = New-Object Collections.Generic.List[object]
     $links = @{}
@@ -147,17 +162,19 @@ if (-not $section) {
 }
 if ($section.Yanked) { throw "[$Version] is marked [YANKED]" }
 
-# The vrfkit this version has built in, and its notes, from vrfkit.json. An
-# install that already got it from a vrfkit update shows nothing more for it.
-$vrfkit = Get-Content -Raw (Join-Path $PSScriptRoot '..\vrfkit.json') | ConvertFrom-Json
-
 New-Item -ItemType Directory -Force $OutDir | Out-Null
+# .NET resolves relative paths against the process's folder, not PowerShell's.
+$OutDir = (Resolve-Path $OutDir).Path
 $body = ($section.Text -join "`n").Trim() + "`n"
 [IO.File]::WriteAllText((Join-Path $OutDir 'release-notes.md'), $body)
 
-$whatsNew = [ordered]@{
-    notes  = @($section.Notes | ForEach-Object { ConvertTo-PlainNote $_ })
-    vrfkit = [ordered]@{ tag = $vrfkit.tag; notes = @($vrfkit.notes) }
+$whatsNew = [ordered]@{ notes = @($section.Notes | ForEach-Object { ConvertTo-PlainNote $_ }) }
+if ($Extra) {
+    $more = Get-Content -Raw $Extra | ConvertFrom-Json
+    foreach ($p in $more.PSObject.Properties) {
+        if ($p.Name -eq 'notes') { throw "$Extra can't set notes; they come from CHANGELOG.md" }
+        $whatsNew[$p.Name] = $p.Value
+    }
 }
-[IO.File]::WriteAllText((Join-Path $OutDir 'whats-new.json'), (ConvertTo-Json -InputObject $whatsNew -Depth 4))
+[IO.File]::WriteAllText((Join-Path $OutDir 'whats-new.json'), (ConvertTo-Json -InputObject $whatsNew -Depth 6))
 Write-Host "Release notes for $Version written to $OutDir"

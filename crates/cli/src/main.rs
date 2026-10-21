@@ -3,18 +3,14 @@ mod out;
 #[cfg(test)]
 mod bench_tests;
 mod coach_views;
-mod editor;
-mod help;
 mod logo;
 mod panel;
 #[cfg(test)]
 mod render_tests;
 mod review_view;
-mod session_log;
 mod settings;
 mod shell;
 
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -26,7 +22,7 @@ use vantage_core::clips::{self, Matched, ShotStyle};
 use vantage_core::coach::{self, Debrief, plural};
 use vantage_core::config::Config;
 use vantage_core::habits;
-use vantage_core::install::{self, Layout};
+use vantage_core::install;
 use vantage_core::minimap::Minimap;
 use vantage_core::paths;
 use vantage_core::ranks;
@@ -123,32 +119,19 @@ enum Command {
 }
 
 fn main() {
-    session_log::install_panic_hook();
     let cli = Cli::parse();
     // Caught so a crash in the shell is reported after the terminal is restored.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(cli))) {
-        Ok(Ok(())) => session_log::write("INFO", "exited"),
-        Ok(Err(e)) => {
-            out::emit(Kind::Error, format!("error: {e:#}"));
-            std::process::exit(1);
-        }
-        Err(_) => {
-            match session_log::path() {
-                Some(p) => eprintln!(
-                    "{APP_NAME} crashed. Please send this file with your bug report:
-  {}",
-                    p.display()
-                ),
-                None => eprintln!("{APP_NAME} crashed."),
-            }
-            std::process::exit(101);
-        }
-    }
+    shellkit::log::guard(APP_NAME, || run(cli));
 }
 
 fn run(cli: Cli) -> Result<()> {
     let data_dir = paths::data_dir(cli.data_dir.as_deref())?;
-    session_log::start(&data_dir, cli.command.as_ref().map_or("shell", Command::name));
+    shellkit::log::start(
+        &paths::logs_dir(&data_dir),
+        "vantage",
+        &format!("{APP_NAME} {VERSION}"),
+        cli.command.as_ref().map_or("shell", Command::name),
+    );
     match cli.command {
         Some(command) => {
             if !matches!(
@@ -159,7 +142,7 @@ fn run(cli: Cli) -> Result<()> {
             }
             run_command(&data_dir, command)
         }
-        None if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() => shell::run(&data_dir),
+        None if shellkit::term::interactive() => shell::run(&data_dir),
         None => {
             Cli::command().print_help()?;
             Ok(())
@@ -192,13 +175,9 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
     match command {
         Command::Settings => settings::print_status(&data_dir),
         Command::Logs => {
-            let dir = session_log::dir(&data_dir);
+            let dir = paths::logs_dir(&data_dir);
             std::fs::create_dir_all(&dir).with_context(|| format!("couldn't create {}", dir.display()))?;
-            // Explorer opens Documents instead of a path with forward slashes.
-            std::process::Command::new("explorer")
-                .arg(dir.to_string_lossy().replace('/', "\\"))
-                .spawn()
-                .context("couldn't open File Explorer")?;
+            shellkit::files::open(&dir)?;
             outln!("Opened {} in File Explorer.", dir.display());
         }
         Command::Update => update_cmd(&data_dir)?,
@@ -337,9 +316,11 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
 fn log_scan(results: &[vantage_core::scan::FileOutcome]) {
     for f in results {
         match &f.outcome {
-            Outcome::Failed { error } => session_log::write("WARN", &format!("{} couldn't be read: {error}", f.file)),
-            Outcome::Unsupported { reason } => session_log::write("WARN", &format!("{} unsupported: {reason}", f.file)),
-            Outcome::Stored { warnings, .. } if !warnings.is_empty() => session_log::write(
+            Outcome::Failed { error } => shellkit::log::write("WARN", &format!("{} couldn't be read: {error}", f.file)),
+            Outcome::Unsupported { reason } => {
+                shellkit::log::write("WARN", &format!("{} unsupported: {reason}", f.file))
+            }
+            Outcome::Stored { warnings, .. } if !warnings.is_empty() => shellkit::log::write(
                 "WARN",
                 &format!(
                     "{} stored with warnings:
@@ -969,8 +950,9 @@ fn startup_check(data_dir: &Path) {
 /// `vantage update`: installs ffmpeg if it's missing, then the newest
 /// release, or repairs vrfkit when up to date.
 fn update_cmd(data_dir: &Path) -> Result<()> {
-    let layout = Layout::new()?;
-    if std::env::current_exe().is_ok_and(|e| layout.contains(&e)) {
+    let updater = update::updater(data_dir, VERSION)?;
+    let layout = updater.layout.clone();
+    if layout.runs_this() {
         install::cleanup(&layout, VERSION);
     }
     if clips::ffmpeg().is_none() {
@@ -983,7 +965,7 @@ fn update_cmd(data_dir: &Path) -> Result<()> {
     }
     // vrfkit updates on its own, from vrfkit.json on main.
     let new_vrfkit =
-        update::latest_pin().and_then(|pin| Ok(install::update_vrfkit(&layout, &pin, VERSION)?.then_some(pin)));
+        update::latest_pin(&updater).and_then(|pin| Ok(install::update_vrfkit(&layout, &pin, VERSION)?.then_some(pin)));
     match new_vrfkit {
         Ok(Some(pin)) => {
             shell::vrfkit_news(&pin).into_iter().for_each(out::row);
@@ -992,40 +974,16 @@ fn update_cmd(data_dir: &Path) -> Result<()> {
         Ok(None) => {}
         Err(e) => out::emit(Kind::Warn, format!("couldn't update vrfkit: {e:#}")),
     }
-    let manifest = update::latest().context("checking for updates failed")?;
-    if !install::is_newer(&manifest.version, VERSION) {
-        update::State::record(data_dir, format!("up to date ({VERSION})"));
-        if install::ensure_vrfkit(&layout)? {
-            outln!("installed vrfkit {}", vrfkit::active().tag);
-        }
-        outln!("{APP_NAME} is up to date (v{VERSION})");
-        return Ok(());
+    // A new version brings its own vrfkit; an up-to-date one repairs its.
+    if updater.update_command()? == update::Updated::UpToDate && install::ensure_vrfkit(&layout)? {
+        outln!("installed vrfkit {}", vrfkit::active().tag);
     }
-    match update::apply(&layout, &manifest, data_dir) {
-        Ok(_) => {
-            update::State::record(data_dir, format!("installed {}", manifest.version));
-            out::row(vec![
-                (Kind::Paint(review_view::GREEN, true), "✓ ".into()),
-                (Kind::Bold, "New version installed".into()),
-            ]);
-            out::emit(
-                Kind::Dim,
-                format!(
-                    "  Restart {APP_NAME} to use it: /exit, then run vantage again. What's new shows when it opens."
-                ),
-            );
-            Ok(())
-        }
-        Err(e) => {
-            update::State::record(data_dir, format!("failed: {e:#}"));
-            Err(e)
-        }
-    }
+    Ok(())
 }
 
 /// `vantage install`: this exe into `versions`, its vrfkit, and `bin`.
 fn install_cmd(data_dir: &Path, quiet: bool) -> Result<()> {
-    let layout = Layout::new()?;
+    let layout = install::layout()?;
     let exe = std::env::current_exe().context("finding this exe")?;
     let installed = install::install(&layout, VERSION, &exe)?;
     // An older install.ps1 or `init` may have pinned a path inside the
@@ -1041,14 +999,7 @@ fn install_cmd(data_dir: &Path, quiet: bool) -> Result<()> {
     if installed.vrfkit_downloaded {
         outln!("installed vrfkit {} (SHA-256 verified)", vrfkit::active().tag);
     }
-    outln!("installed {APP_NAME} v{VERSION} to {}", layout.launcher().display());
-    let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d == layout.bin()));
-    if !on_path {
-        outln!(
-            "add {} to PATH to run `vantage` from any terminal",
-            layout.bin().display()
-        );
-    }
+    install::report(&layout, APP_NAME, VERSION);
     Ok(())
 }
 

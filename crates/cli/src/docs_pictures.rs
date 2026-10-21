@@ -5,10 +5,11 @@
 //! It needs the network for the map catalog and Lotus's minimap.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::Color;
+use shellkit::Logo;
 use vantage_core::analysis::Side;
 use vantage_core::clips::{Matched, ShotStyle};
 use vantage_core::coach::{self, sample};
@@ -16,6 +17,7 @@ use vantage_core::{ai, habits, plan, standing};
 
 use super::*;
 use crate::coach_views::{HabitsPanel, PlanData, PlanPanel, RankPanel};
+use crate::logo;
 use crate::review_view::ReviewPanel;
 use crate::{Clips, ReviewData};
 
@@ -29,66 +31,34 @@ fn key(code: KeyCode) -> KeyEvent {
 
 // ---------------------------------------------------------------- the screen
 
-/// What `App::draw` paints, as rows.
-fn screen(app: &mut App) -> Vec<Row> {
-    if let Some(panel) = &mut app.panel {
-        return panel.rows(W, H);
-    }
-    // Panels under the input take four fifths of the screen, as in the shell.
-    let panel_h = H * 4 / 5;
-    let bottom = if let Some(panel) = &mut app.settings {
-        panel.rows(W, panel_h)
-    } else {
-        let s = app.editor.suggestions(&app.ctx);
-        let mut bottom = if s.items.is_empty() {
-            vec![app.status_row(W)]
-        } else {
-            let typed: String = app
-                .editor
-                .line()
-                .chars()
-                .take(app.editor.cursor())
-                .skip(s.start)
-                .collect();
-            menu_rows(&s.items, app.editor.selected(s.items.len()), &typed)
-        };
-        bottom.push(rule(W));
-        bottom.push(app.input_row(W).0);
-        bottom.push(rule(W));
-        bottom.push(vec![(Style::fg(GREY), format!("  {}", app.footer))]);
-        bottom
-    };
-    let area = H.saturating_sub(bottom.len());
-    let rows = transcript_rows(&app.transcript, W);
-    let mut out: Vec<Row> = rows[rows.len().saturating_sub(area)..].to_vec();
-    out.resize(area, vec![]);
-    out.extend(bottom);
-    out
+/// What the shell draws, as rows.
+fn screen(shell: &mut Shell<Vantage>) -> Vec<Row> {
+    shell.render(W, H).rows
 }
 
-fn header(rank: Option<&str>) -> Item {
-    Item::Header {
-        rank: rank.map(Into::into),
-        game: "VALORANT v13.08".into(),
-        folder: "C:\\Users\\Player\\Documents\\VALORANT\\Demos".into(),
-        logo: logo::FRAMES - 1,
-    }
+/// The header with the logo at `frame`, for made-up settings.
+fn header(rank: Option<&str>, frame: usize) -> shellkit::Item {
+    shellkit::Item::Rows(shellkit::skin::header(
+        Chevrons.rows(frame),
+        &header_lines(rank, "VALORANT v13.08", "C:\\Users\\Player\\Documents\\VALORANT\\Demos"),
+        W,
+    ))
 }
 
-fn row(pieces: Vec<(Kind, &str)>) -> Item {
-    Item::Row(pieces.into_iter().map(|(k, t)| (k, t.to_owned())).collect())
+fn row(pieces: Vec<(Kind, &str)>) -> shellkit::Item {
+    shellkit::Item::Row(pieces.into_iter().map(|(k, t)| (k, t.to_owned())).collect())
 }
 
 /// The shell just after launch: the scan found one new match.
-fn launched(app: &mut App) {
-    app.transcript = vec![
-        header(Some("Gold 2")),
+fn launched(shell: &mut Shell<Vantage>) {
+    *shell.transcript_mut() = vec![
+        header(Some("Gold 2"), logo::FRAMES - 1),
         row(vec![
             (Kind::Bold, "Checked 14 replays"),
             (Kind::Dim, "  1 new · 13 already done"),
         ]),
         row(vec![(Kind::Good, "  + "), (Kind::Out, "Sova on Lotus")]),
-        Item::Line(Kind::Out, String::new()),
+        shellkit::Item::Line(Kind::Out, String::new()),
         row(vec![
             (Kind::Paint(YELLOW, false), "◆ "),
             (Kind::Out, "Your focus: "),
@@ -96,17 +66,13 @@ fn launched(app: &mut App) {
             (Kind::Paint(crate::review_view::GREEN, false), "  ▇▅▅▃▂"),
             (Kind::Paint(crate::review_view::GREEN, true), "  getting better"),
         ]),
-        Item::Line(Kind::Dim, "  To switch, type /focus and pick a habit.".into()),
+        shellkit::Item::Line(Kind::Dim, "  To switch, type /focus and pick a habit.".into()),
     ];
-    app.scroll = 0;
-    app.job = None;
-    app.help = None;
-    app.settings = None;
-    app.panel = None;
-    app.editor = Editor::new(vec![]);
-    app.notices = vec![];
-    app.update_note = None;
-    app.ranked = true;
+    shell.reset_view();
+    shell.pretend_job(None);
+    shell.set_notices(vec![]);
+    shell.set_footer("14 matches · /help for commands and keys");
+    shell.set_placeholder(placeholder(true));
 }
 
 // ---------------------------------------------------------------- made-up matches
@@ -378,40 +344,35 @@ fn gif(frames: &[(Vec<Row>, u16)], subs: &[(String, String)], path: &Path) {
 
 /// Launch: the logo plays while the scan runs, the scan finds a match, then
 /// `/review` is typed and each tab shown in turn.
-fn launch_and_review(app: &mut App, review: ReviewData) -> Vec<(Vec<Row>, u16)> {
+fn launch_and_review(shell: &mut Shell<Vantage>, review: ReviewData) -> Vec<(Vec<Row>, u16)> {
     let mut frames = Vec::new();
-    launched(app);
-    let scanned = std::mem::take(&mut app.transcript);
+    launched(shell);
+    let scanned = std::mem::take(shell.transcript_mut());
     for tick in 0..logo::FRAMES as u32 + 12 {
-        let mut top = header(Some("Gold 2"));
-        if let Item::Header { logo, .. } = &mut top {
-            *logo = (tick as usize).min(logo::FRAMES - 1);
-        }
-        app.transcript = vec![top];
-        app.job = Some(Job {
-            label: "Checking for new replays".into(),
-            started: Instant::now() - TICK * tick - TICK / 2,
-            handle: std::thread::spawn(|| Flow::Continue),
-        });
-        frames.push((screen(app), 8));
+        *shell.transcript_mut() = vec![header(Some("Gold 2"), (tick as usize).min(logo::FRAMES - 1))];
+        shell.pretend_job(Some((
+            "Checking for new replays".into(),
+            Instant::now() - TICK * tick - TICK / 2,
+        )));
+        frames.push((screen(shell), 8));
     }
-    app.job = None;
-    app.transcript = scanned;
-    frames.push((screen(app), 150));
+    shell.pretend_job(None);
+    *shell.transcript_mut() = scanned;
+    frames.push((screen(shell), 150));
     for c in "/review".chars() {
-        app.editor.insert_str(&c.to_string());
-        frames.push((screen(app), 12));
+        shell.editor_mut().insert_str(&c.to_string());
+        frames.push((screen(shell), 12));
     }
-    frames.push((screen(app), 60));
-    app.editor = Editor::new(vec![]);
-    app.panel = Some(Panel::Review(ReviewPanel::new(review)));
+    frames.push((screen(shell), 60));
+    shell.reset_view();
+    shell.open(Panel::Review(ReviewPanel::new(review)));
     for tab in '1'..='6' {
-        if let Some(Panel::Review(p)) = &mut app.panel {
+        if let Some(Panel::Review(p)) = shell.panel() {
             p.key(key(KeyCode::Char(tab)));
         }
-        frames.push((screen(app), if tab == '6' { 400 } else { 250 }));
+        frames.push((screen(shell), if tab == '6' { 400 } else { 250 }));
     }
-    app.panel = None;
+    shell.reset_view();
     frames
 }
 
@@ -481,15 +442,13 @@ fn redraw_docs_images() {
     cfg.ai_key = Some("sk-ant-example".into());
     cfg.save(&data_dir).unwrap();
 
-    let (_tx, rx) = mpsc::channel();
-    let mut app = App::new(&data_dir, rx);
-    app.footer = "14 matches · /help for commands and keys".into();
+    let mut shell = build(&data_dir);
     let mut pictures: Vec<(&str, Vec<Row>)> = Vec::new();
 
-    launched(&mut app);
-    pictures.push(("shell-ready", screen(&mut app)));
-    app.editor.insert_str("/");
-    pictures.push(("shell-commands", screen(&mut app)));
+    launched(&mut shell);
+    pictures.push(("shell-ready", screen(&mut shell)));
+    shell.editor_mut().insert_str("/");
+    pictures.push(("shell-commands", screen(&mut shell)));
 
     // /settings: Status, Config, and the AI model list.
     let (right, down, enter) = (key(KeyCode::Right), key(KeyCode::Down), key(KeyCode::Enter));
@@ -498,9 +457,9 @@ fn redraw_docs_images() {
         ("settings-config", vec![right]),
         ("settings-ai-model", vec![right, down, down, down, down, enter]),
     ] {
-        launched(&mut app);
+        launched(&mut shell);
         no_key.save(&data_dir).unwrap();
-        let mut p = SettingsPanel::new(&app.data_dir);
+        let p = shell.open_settings().expect("settings");
         for k in keys {
             p.key(k);
         }
@@ -510,8 +469,7 @@ fn redraw_docs_images() {
         }
         // The panel reads the settings as it draws, so the row shows the key.
         cfg.save(&data_dir).unwrap();
-        app.settings = Some(p);
-        pictures.push((name, screen(&mut app)));
+        pictures.push((name, screen(&mut shell)));
     }
 
     // /review, one tab each.
@@ -537,22 +495,22 @@ fn redraw_docs_images() {
     ] {
         let mut p = ReviewPanel::new(review(ai));
         p.key(key(KeyCode::Char(tab)));
-        app.panel = Some(Panel::Review(p));
-        pictures.push((name, screen(&mut app)));
+        shell.open(Panel::Review(p));
+        pictures.push((name, screen(&mut shell)));
     }
 
     // /plan, /habits and /rank.
-    app.panel = Some(Panel::Plan(PlanPanel::new(PlanData {
+    shell.open(Panel::Plan(PlanPanel::new(PlanData {
         plan: plan::plan("Lotus", &all),
         rank: Some("Gold 2".into()),
         fix: Some(("First into A Rubble alone".into(), "Use an ability first.".into())),
         map: Some(lotus.clone()),
         minimap: minimap(),
     })));
-    pictures.push(("plan", screen(&mut app)));
+    pictures.push(("plan", screen(&mut shell)));
     let h = HabitsPanel::new(habits::progress(&all), "untraded", all.len());
-    app.panel = Some(Panel::Habits(Box::new(h)));
-    pictures.push(("habits", screen(&mut app)));
+    shell.open(Panel::Habits(Box::new(h)));
+    pictures.push(("habits", screen(&mut shell)));
     let s = standing::Standing {
         better: vec![
             "You do more damage than most players in your games.".into(),
@@ -564,14 +522,14 @@ fn redraw_docs_images() {
         ],
         games: 6,
     };
-    app.panel = Some(Panel::Rank(Box::new(RankPanel::new(
+    shell.open(Panel::Rank(Box::new(RankPanel::new(
         "Gold 2".into(),
         s,
         "Dying where nobody can trade",
     ))));
-    pictures.push(("rank", screen(&mut app)));
+    pictures.push(("rank", screen(&mut shell)));
 
-    let frames = launch_and_review(&mut app, review(Some(saved())));
+    let frames = launch_and_review(&mut shell, review(Some(saved())));
 
     std::fs::create_dir_all(&out_dir).unwrap();
     for (name, rows) in &pictures {

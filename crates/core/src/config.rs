@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -45,18 +45,11 @@ impl Config {
 
     /// A missing file is an empty config.
     pub fn load(data_dir: &Path) -> Result<Self> {
-        let path = Self::path(data_dir);
-        if !path.is_file() {
-            return Ok(Self::default());
-        }
-        let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+        shellkit::files::load_toml(&Self::path(data_dir))
     }
 
     pub fn save(&self, data_dir: &Path) -> Result<()> {
-        std::fs::create_dir_all(data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
-        let path = Self::path(data_dir);
-        std::fs::write(&path, toml::to_string_pretty(self)?).with_context(|| format!("writing {}", path.display()))
+        shellkit::files::save_toml(&Self::path(data_dir), self)
     }
 
     /// Configured demos dir, else `%LOCALAPPDATA%\VALORANT\Saved\Demos`.

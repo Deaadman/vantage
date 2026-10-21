@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use shellkit::image::Image;
+
 use crate::catalog::MapInfo;
 
 #[derive(Debug, Clone)]
@@ -68,42 +70,10 @@ impl Minimap {
         })
     }
 
-    /// The image shrunk to `w`×`h` by averaging, colour weighted by alpha:
-    /// `[r, g, b, a]` per cell, row-major.
-    pub fn downsample(&self, w: usize, h: usize) -> Vec<[u8; 4]> {
-        let mut out = Vec::with_capacity(w * h);
-        for y in 0..h {
-            let (y0, y1) = span(y, h, self.height);
-            for x in 0..w {
-                let (x0, x1) = span(x, w, self.width);
-                let (mut r, mut g, mut b, mut a, mut n) = (0f64, 0f64, 0f64, 0f64, 0f64);
-                for py in y0..y1 {
-                    for px in x0..x1 {
-                        let i = (py * self.width + px) * 4;
-                        let alpha = self.rgba[i + 3] as f64;
-                        r += self.rgba[i] as f64 * alpha;
-                        g += self.rgba[i + 1] as f64 * alpha;
-                        b += self.rgba[i + 2] as f64 * alpha;
-                        a += alpha;
-                        n += 1.0;
-                    }
-                }
-                out.push(if a > 0.0 {
-                    [(r / a) as u8, (g / a) as u8, (b / a) as u8, (a / n) as u8]
-                } else {
-                    [0, 0, 0, 0]
-                });
-            }
-        }
-        out
+    /// The pixels, for drawing (`shellkit::image`).
+    pub fn image(&self) -> Image {
+        Image::from_rgba(self.width, self.height, &self.rgba)
     }
-}
-
-/// Source pixels `[start, end)` for cell `i` of `cells` over `size` pixels.
-fn span(i: usize, cells: usize, size: usize) -> (usize, usize) {
-    let start = i * size / cells;
-    let end = ((i + 1) * size / cells).max(start + 1).min(size);
-    (start.min(size.saturating_sub(1)), end)
 }
 
 pub fn cache_path(data_dir: &Path, map: &MapInfo) -> PathBuf {
@@ -128,10 +98,10 @@ mod tests {
         }
         let m = Minimap::decode(&bytes).unwrap();
         assert_eq!((m.width, m.height), (2, 2));
-        let full = m.downsample(2, 2);
+        let full = m.image().resize(2, 2).px;
         assert_eq!(full[0], [255, 255, 255, 255]);
         assert_eq!(full[1][3], 0);
-        let one = m.downsample(1, 1);
+        let one = m.image().resize(1, 1).px;
         // Transparent pixels add no colour: white, black and red weighted by alpha.
         assert!(one[0][3] > 0 && one[0][0] > one[0][1]);
     }

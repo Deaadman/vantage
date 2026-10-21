@@ -25,5 +25,7 @@ See docs/development.md, "Releasing". CI checks this file's format.
 - Debriefs that show why you died and the three things that cost you the most rounds.
 - Habits, a focus habit, map plans and rank advice from your own replays.
 - The replay reader updates itself when a new VALORANT patch comes out, with no Vantage update or restart.
+- /release-notes shows what's new in each version.
+- /tui default runs Vantage in your terminal's own scrollback, so its output stays after you quit; /tui fullscreen goes back.
 
 [Unreleased]: https://github.com/Deaadman/vantage/commits/main
