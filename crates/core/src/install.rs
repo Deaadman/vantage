@@ -244,9 +244,12 @@ $bin = $env:VANTAGE_UNINSTALL_BIN.TrimEnd('\')
 $key = Get-Item -LiteralPath 'HKCU:\Environment'
 $path = $key.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
 if (-not $path) { exit 0 }
-$kept = @($path -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ne $bin })
+# Only bin's entries go: empty ones and the rest stay as they are, and a
+# PATH without bin isn't written at all.
+$parts = @($path -split ';')
+$kept = @($parts | Where-Object { $_.TrimEnd('\') -ne $bin })
+if ($kept.Count -eq $parts.Count) { exit 0 }
 $new = $kept -join ';'
-if ($new -eq $path) { exit 0 }
 [Microsoft.Win32.Registry]::SetValue('HKEY_CURRENT_USER\Environment', 'Path', $new, $key.GetValueKind('Path'))
 [Environment]::SetEnvironmentVariable('VANTAGE_UNINSTALL', '1', 'User')
 [Environment]::SetEnvironmentVariable('VANTAGE_UNINSTALL', $null, 'User')
