@@ -32,7 +32,7 @@ jobs:
     name: Look for a new vrfkit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Point vrfkit.json at the newest vrfkit
         id: bump
