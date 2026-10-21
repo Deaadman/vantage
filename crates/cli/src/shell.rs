@@ -1152,13 +1152,13 @@ fn whats_new(title: String, notes: &[String], link: String) {
 fn launch(data_dir: &Path) {
     if let Some(w) = WhatsNew::take(data_dir, crate::VERSION) {
         whats_new(
-            format!("{APP_NAME} updated to {}", w.version),
+            format!("{APP_NAME} updated to v{}", w.version),
             &w.notes,
-            format!("{}/v{}", update::RELEASES, w.version),
+            format!("{}/{}", update::RELEASES, w.version),
         );
         if let Some(v) = &w.vrfkit {
             whats_new(
-                format!("vrfkit updated to {}", v.tag.trim_start_matches('v')),
+                format!("vrfkit updated to v{}", v.tag.trim_start_matches('v')),
                 &v.notes,
                 format!("{}/{}", update::VRFKIT_RELEASES, v.tag),
             );

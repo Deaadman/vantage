@@ -983,7 +983,7 @@ fn update_cmd(data_dir: &Path) -> Result<()> {
         if install::ensure_vrfkit(&layout)? {
             outln!("installed vrfkit {}", PINNED.tag);
         }
-        outln!("{APP_NAME} is up to date ({VERSION})");
+        outln!("{APP_NAME} is up to date (v{VERSION})");
         return Ok(());
     }
     match update::apply(&layout, &manifest, data_dir) {
@@ -1026,7 +1026,7 @@ fn install_cmd(data_dir: &Path, quiet: bool) -> Result<()> {
     if installed.vrfkit_downloaded {
         outln!("installed vrfkit {} (SHA-256 verified)", PINNED.tag);
     }
-    outln!("installed {APP_NAME} {VERSION} to {}", layout.launcher().display());
+    outln!("installed {APP_NAME} v{VERSION} to {}", layout.launcher().display());
     let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d == layout.bin()));
     if !on_path {
         outln!(

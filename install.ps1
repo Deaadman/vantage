@@ -8,8 +8,8 @@
 # which takes the screenshots, comes from winget if it isn't installed. The
 # bin folder is added to your user PATH. After that Vantage updates itself.
 #
-# Set VANTAGE_VERSION to a release tag (for example v0.1.0) to install that
-# release instead of the latest.
+# Set VANTAGE_VERSION to a release's version (for example 0.1.0) to install
+# that release instead of the latest.
 
 param(
     [string]$Version = $env:VANTAGE_VERSION,
@@ -43,7 +43,8 @@ try {
         Copy-Item -LiteralPath $Exe -Destination $download
     } else {
         if ($Version) {
-            $manifestUrl = "https://github.com/$Repo/releases/download/$Version/manifest.json"
+            # Tags have no v prefix; accept one anyway.
+            $manifestUrl = "https://github.com/$Repo/releases/download/$($Version.TrimStart('v'))/manifest.json"
         } else {
             $manifestUrl = "https://github.com/$Repo/releases/latest/download/manifest.json"
         }
@@ -51,7 +52,7 @@ try {
         $asset = $manifest.platforms.$Platform
         if (-not $asset) { throw "release $($manifest.version) has no $Platform build" }
         Write-Host "  Downloading Vantage $($manifest.version)"
-        Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$Repo/releases/download/v$($manifest.version)/$($asset.file)" -OutFile $download
+        Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$Repo/releases/download/$($manifest.version)/$($asset.file)" -OutFile $download
         $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
         if ($actual -ne $asset.sha256.ToLowerInvariant()) {
             throw "$($asset.file) has SHA-256 $actual, expected $($asset.sha256)"

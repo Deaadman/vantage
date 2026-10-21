@@ -146,7 +146,7 @@ fn file_url(manifest: &Manifest, file: &str) -> String {
     match override_base() {
         Some(base) => format!("{base}/{file}"),
         None => format!(
-            "https://github.com/{REPO}/releases/download/v{}/{file}",
+            "https://github.com/{REPO}/releases/download/{}/{file}",
             manifest.version
         ),
     }
@@ -228,6 +228,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(m.asset().unwrap().file, "vantage-windows-x64.exe");
-        assert!(file_url(&m, "x.exe").ends_with("/releases/download/v0.2.0/x.exe") || override_base().is_some());
+        assert!(file_url(&m, "x.exe").ends_with("/releases/download/0.2.0/x.exe") || override_base().is_some());
     }
 }

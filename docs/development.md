@@ -41,7 +41,7 @@ Every push to `main` and every pull request runs [CI](../.github/workflows/ci.ym
 - every test, with the pinned vrfkit downloaded so the fixture scan runs
 - a release build, with the exe's size in the run's summary
 
-The [release workflow](../.github/workflows/release.yml) runs CI first and only publishes from a `v*` tag. It's turned off for now.
+The [release workflow](../.github/workflows/release.yml) runs CI first and only publishes from a tag that matches the version in `crates/cli/Cargo.toml`, such as `0.2.0`. Tags have no `v` in front. It's turned off for now.
 
 ## The pictures in the docs
 

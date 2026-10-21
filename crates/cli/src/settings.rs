@@ -78,7 +78,7 @@ pub fn status_groups(data_dir: &Path) -> StatusGroups {
     let shots = clips::shots_root().map_or_else(|| "?".into(), |p| p.display().to_string());
     vec![
         vec![
-            ("Version", vec![piece(Kind::Out, crate::VERSION)]),
+            ("Version", vec![piece(Kind::Out, format!("v{}", crate::VERSION))]),
             ("Rank", rank),
             (
                 "Focus",

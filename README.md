@@ -1,6 +1,6 @@
 # Vantage
 
-![](https://img.shields.io/badge/Windows-x64-blue?style=flat-square) [![](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/Deaadman/vantage?style=flat-square&label=release)](https://github.com/Deaadman/vantage/releases/latest) ![Windows x64](https://img.shields.io/badge/Windows-x64-blue?style=flat-square) [![License](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 
 Vantage is a VALORANT coach that reads your replays. After each match it shows why you died and the three things that cost you the most rounds. Over time, it tracks the mistakes you keep making.
 
