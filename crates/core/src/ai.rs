@@ -120,11 +120,11 @@ pub fn models(p: &Provider, key: Option<&str>) -> Result<Vec<Model>> {
             about
         },
     };
+    if key.is_empty() && !p.local {
+        return Ok(fallback_models(p));
+    }
     let mut out: Vec<Model> = match p.id {
         "anthropic" => {
-            if key.is_empty() {
-                return Ok(fallback_models(p));
-            }
             let v = get(
                 "https://api.anthropic.com/v1/models?limit=100",
                 &[("x-api-key", key), ("anthropic-version", "2023-06-01")],
@@ -191,7 +191,9 @@ pub fn models(p: &Provider, key: Option<&str>) -> Result<Vec<Model>> {
             for m in v["models"].as_array().into_iter().flatten() {
                 let Some(id) = m["name"].as_str() else { continue };
                 // Only models that can read the screenshots.
-                let show = post(&format!("{OLLAMA}/api/show"), &[], &json!({"model": id}))?;
+                let Ok(show) = post(&format!("{OLLAMA}/api/show"), &[], &json!({"model": id})) else {
+                    continue;
+                };
                 if !show["capabilities"]
                     .as_array()
                     .is_some_and(|c| c.iter().any(|x| x == "vision"))

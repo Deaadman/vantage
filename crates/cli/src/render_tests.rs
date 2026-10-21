@@ -174,8 +174,21 @@ fn plan_habits_and_rank_fit() {
     h.key(key(KeyCode::Down));
     h.key(key(KeyCode::Enter));
     for (w, hh) in SIZES {
-        check("habits", &h.rows(w, hh), w, hh);
+        let rows = h.rows(w, hh);
+        check("habits", &rows, w, hh);
+        // The list scrolls so the habit's detail always fits.
+        let text: String = rows.iter().flatten().map(|(_, s)| s.as_str()).collect();
+        assert!(text.contains("Practise") && text.contains("❯"), "habits at {w}x{hh}");
     }
+    for _ in 0..15 {
+        h.key(key(KeyCode::Down));
+    }
+    let rows = h.rows(88, 30);
+    let text: String = rows.iter().flatten().map(|(_, s)| s.as_str()).collect();
+    assert!(
+        text.contains("Practise") && text.contains("❯"),
+        "the last habit at 88x30"
+    );
     let s = standing::Standing {
         better: vec!["You do more damage than most players in your games.".into()],
         behind: vec!["You die first in a round more often than almost anyone in your games.".into()],

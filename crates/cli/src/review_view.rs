@@ -100,9 +100,7 @@ impl ReviewPanel {
             return ReviewAction::Close;
         }
         if tab_key(&mut self.tab, &key, TABS.len()) {
-            self.sel = 0;
-            self.scroll = 0;
-            self.flash = None;
+            self.open(self.tab);
             return ReviewAction::None;
         }
         let ch = match key.code {
@@ -163,7 +161,7 @@ impl ReviewPanel {
             }
         } else if key.code == KeyCode::Enter {
             match self.tab {
-                0 => self.tab = T_FIXES,
+                0 => self.open(T_FIXES),
                 T_FIXES => {
                     // The fix's first death, on the map.
                     if let Some(i) = d
@@ -171,19 +169,23 @@ impl ReviewPanel {
                         .get(self.sel)
                         .and_then(|f| d.deaths.iter().position(|x| f.rounds.contains(&x.round)))
                     {
+                        self.open(T_MAP);
                         self.death = i;
-                        self.tab = T_MAP;
                     }
                 }
-                T_CLIPS | T_SHOTS => {
-                    self.tab += 1;
-                    self.sel = 0;
-                    self.flash = None;
-                }
+                T_CLIPS | T_SHOTS => self.open(self.tab + 1),
                 _ => {}
             }
         }
         ReviewAction::None
+    }
+
+    /// Switches to `tab`, from its top.
+    fn open(&mut self, tab: usize) {
+        self.tab = tab;
+        self.sel = 0;
+        self.scroll = 0;
+        self.flash = None;
     }
 
     fn run_ai(&mut self) -> ReviewAction {
@@ -238,7 +240,7 @@ impl ReviewPanel {
         };
         let clips_set = matches!(self.data.clips, Clips::Set { .. });
         let what = match self.tab {
-            0 => "",
+            0 => "↑↓ scroll · Enter: the fixes · ",
             T_FIXES => "↑↓ select · Enter: on the map · ",
             T_MAP => "↑↓ step through deaths · ",
             T_CLIPS if clips_set => "↑↓ select · Enter: the screenshots · ",

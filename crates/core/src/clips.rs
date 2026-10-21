@@ -191,13 +191,14 @@ fn find_box(f: &mut std::fs::File, start: u64, stop: u64, kind: &[u8; 4]) -> Opt
         } else if size == 0 {
             size = stop - at;
         }
-        if size < body - at {
+        let next = at.checked_add(size)?;
+        if size < body - at || next > stop {
             return None;
         }
         if &head[4..8] == kind {
-            return Some((body, at + size - body));
+            return Some((body, next - body));
         }
-        at += size;
+        at = next;
     }
     None
 }

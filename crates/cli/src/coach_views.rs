@@ -350,11 +350,16 @@ impl HabitsPanel {
                 pad("now", 20)
             ),
         )]];
+        let mut list: Vec<Row> = Vec::new();
+        let mut sel_row = 0;
         for (i, p) in self.progress.iter().enumerate() {
             if i == 0 || self.progress[i - 1].habit.group != p.habit.group {
-                b.push(heading(p.habit.group, Some(GREY)));
+                list.push(heading(p.habit.group, Some(GREY)));
             }
             let on = i == self.sel;
+            if on {
+                sel_row = list.len();
+            }
             let c = trend_color(p.trend);
             let base = if on { Style::fg(ACCENT) } else { Style::default() };
             let mut row: Row = vec![
@@ -369,20 +374,29 @@ impl HabitsPanel {
             if p.habit.slug == self.focus {
                 row.push((Style::fg(YELLOW).bold(), "◆ focus".into()));
             }
-            b.push(row);
+            list.push(row);
         }
+        let mut detail: Vec<Row> = Vec::new();
         if let Some(p) = self.progress.get(self.sel) {
-            b.push(vec![]);
-            b.push(rule_line(w));
-            b.push(vec![]);
-            b.extend(field("What it is", p.habit.what, w, Style::default()));
-            b.extend(field("Why it matters", p.habit.why, w, Style::default()));
-            b.extend(field("Practise", p.habit.drill, w, Style::fg(GREEN)));
+            detail.push(vec![]);
+            detail.push(rule_line(w));
+            detail.push(vec![]);
+            detail.extend(field("What it is", p.habit.what, w, Style::default()));
+            detail.extend(field("Why it matters", p.habit.why, w, Style::default()));
+            detail.extend(field("Practise", p.habit.drill, w, Style::fg(GREEN)));
         }
         if let Some(f) = &self.flash {
-            b.push(vec![]);
-            b.push(vec![(Style::fg(YELLOW), format!("    ◆ {f}"))]);
+            detail.push(vec![]);
+            detail.push(vec![(Style::fg(YELLOW), format!("    ◆ {f}"))]);
         }
+        // On a short screen the list scrolls with the selection, so the detail still fits.
+        let list_h = body_height(h, false).saturating_sub(b.len() + detail.len()).max(5);
+        if list.len() > list_h {
+            let first = sel_row.saturating_sub(list_h / 2).min(list.len() - list_h);
+            list = list.drain(first..first + list_h).collect();
+        }
+        b.extend(list);
+        b.extend(detail);
         frame(
             w,
             h,

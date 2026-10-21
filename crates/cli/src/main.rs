@@ -967,8 +967,11 @@ fn update_cmd(data_dir: &Path) -> Result<()> {
     if std::env::current_exe().is_ok_and(|e| layout.contains(&e)) {
         install::cleanup(&layout, VERSION);
     }
+    if clips::ffmpeg().is_none() {
+        outln!("installing ffmpeg, which takes the screenshots (winget)…");
+    }
     match install::ensure_ffmpeg() {
-        Ok(true) => outln!("installed ffmpeg, which takes the screenshots"),
+        Ok(true) => outln!("installed ffmpeg"),
         Ok(false) => {}
         Err(e) => out::emit(Kind::Warn, format!("{e:#}")),
     }

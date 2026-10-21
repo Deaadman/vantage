@@ -190,13 +190,16 @@ impl Setting {
 /// One value to pick: (value, name, about).
 type Choice = (String, String, String);
 
+/// The AI's models, and why the usual ones are offered instead when the list can't be fetched.
+type Models = (Vec<Choice>, Option<String>);
+
 /// A list of values to pick one from.
 struct Picker {
     setting: Setting,
     options: Vec<(String, String, String)>,
     sel: usize,
     /// The AI's models, while they're being fetched: who is asked, and the answer.
-    loading: Option<(&'static str, Receiver<Vec<Choice>>)>,
+    loading: Option<(&'static str, Receiver<Models>)>,
     /// Why the list couldn't be fetched; the models offered are a fallback.
     note: Option<String>,
 }
@@ -421,10 +424,7 @@ impl SettingsPanel {
                     "type its model ID".into()
                 },
             ));
-            if let Some(n) = note {
-                options.insert(0, (String::from("\u{0}note"), n, String::new()));
-            }
-            let _ = tx.send(options);
+            let _ = tx.send((options, note));
         });
         self.picker = Some(Picker {
             setting: Setting::AiModel,
@@ -449,10 +449,8 @@ impl SettingsPanel {
         let cur = self.current(Setting::AiModel, &self.config());
         let p = self.picker.as_mut().expect("checked");
         p.loading = None;
-        if let Some(mut options) = got {
-            if options.first().is_some_and(|o| o.0 == "\u{0}note") {
-                p.note = Some(options.remove(0).1);
-            }
+        if let Some((options, note)) = got {
+            p.note = note;
             p.sel = options.iter().position(|o| Some(&o.0) == cur.as_ref()).unwrap_or(0);
             p.options = options;
         }
@@ -755,7 +753,14 @@ impl SettingsPanel {
                 if p.options.is_empty() {
                     rows.push(vec![(
                         Style::fg(GREY),
-                        format!("{indent}No account is in 2 or more matches yet"),
+                        format!(
+                            "{indent}{}",
+                            if setting == Setting::Account {
+                                "No account is in 2 or more matches yet"
+                            } else {
+                                "Nothing to pick from"
+                            }
+                        ),
                     )]);
                 }
                 let name_w = p
