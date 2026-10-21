@@ -127,6 +127,18 @@ fn lobby_lines(p: &Played) -> (PlayerLine, Vec<PlayerLine>) {
     (mine, all)
 }
 
+/// `5: won 3, lost 1, drew 1`; draws only when there were any.
+fn match_record(n: usize, matches: &[MatchLine]) -> String {
+    let won = matches.iter().filter(|m| m.won > m.lost).count();
+    let lost = matches.iter().filter(|m| m.won < m.lost).count();
+    let drew = matches.len() - won - lost;
+    let mut s = format!("{n}: won {won}, lost {lost}");
+    if drew > 0 {
+        s.push_str(&format!(", drew {drew}"));
+    }
+    s
+}
+
 fn stats(played: &[Played], lines: &[(PlayerLine, Vec<PlayerLine>)], matches: &[MatchLine]) -> Vec<Stat> {
     let n = played.len();
     let rounds: Vec<&RoundFact> = played.iter().flat_map(|p| &p.me.round_facts).collect();
@@ -155,11 +167,10 @@ fn stats(played: &[Played], lines: &[(PlayerLine, Vec<PlayerLine>)], matches: &[
             .flat_map(|(_, all)| all.iter().filter(|l| !l.me).map(key))
             .collect())
     };
-    let won_matches = matches.iter().filter(|m| m.won > m.lost).count();
     let mut out = vec![
         Stat {
             label: "Matches",
-            value: format!("{n}: won {won_matches}, lost {}", n - won_matches),
+            value: match_record(n, matches),
             rank: None,
             of: 0,
         },
@@ -558,19 +569,15 @@ fn work_on(map: &str, played: &[Played], lines: &[(PlayerLine, Vec<PlayerLine>)]
     if crossfired_total >= 3 {
         out.push(finding(
             format!("Died to several enemies at once in {crossfired_total} clutches"),
-            per_match(played, |r| (crossfired(r) > 0).then(|| format!("{} times", crossfired(r)))),
+            per_match(played, |r| {
+                (crossfired(r) > 0).then(|| format!("{} times", crossfired(r)))
+            }),
             crossfired_total as f64 / total_rounds * 2.0,
         ));
     }
 
     // Isolated deaths.
-    let alone = |r: &MatchReview| {
-        r.death_facts
-            .iter()
-            .filter(|f| f.teammates_alive > 0)
-            .filter(|f| f.nearest_teammate_m().is_none_or(|m| m > 15.0) && !f.traded_within_3s)
-            .count()
-    };
+    let alone = |r: &MatchReview| r.death_facts.iter().filter(|f| crate::coach::is_alone(f)).count();
     let alone_total: usize = played.iter().map(|p| alone(&p.me)).sum();
     if alone_total >= 5 && alone_total as f64 >= total_deaths * 0.25 {
         out.push(finding(

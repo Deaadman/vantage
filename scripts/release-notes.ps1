@@ -40,6 +40,35 @@ $Types = @('Added', 'Changed', 'Deprecated', 'Removed', 'Fixed', 'Security')
 
 function Fail([string]$Why) { throw "CHANGELOG.md: $Why" }
 
+# -1, 0 or 1 as SemVer orders two versions: 1.1.0-beta.2 < 1.1.0-rc.1 < 1.1.0.
+# Build metadata (+...) doesn't count.
+function Compare-Version([string]$A, [string]$B) {
+    $a1, $aPre = ($A -replace '\+.*$', '') -split '-', 2
+    $b1, $bPre = ($B -replace '\+.*$', '') -split '-', 2
+    $c = ([version]$a1).CompareTo([version]$b1)
+    if ($c -ne 0) { return [Math]::Sign($c) }
+    # A pre-release comes before its version.
+    if (-not $aPre -and -not $bPre) { return 0 }
+    if (-not $aPre) { return 1 }
+    if (-not $bPre) { return -1 }
+    $x = $aPre -split '\.'
+    $y = $bPre -split '\.'
+    for ($i = 0; $i -lt [Math]::Min($x.Count, $y.Count); $i++) {
+        $xNum = $x[$i] -match '^\d+$'
+        $yNum = $y[$i] -match '^\d+$'
+        if ($xNum -and $yNum) {
+            # Compared as text by length then digits, so any length works.
+            $p = $x[$i].TrimStart('0'); $q = $y[$i].TrimStart('0')
+            $c = $p.Length.CompareTo($q.Length)
+            if ($c -eq 0) { $c = [string]::CompareOrdinal($p, $q) }
+        } elseif ($xNum) { $c = -1 }
+        elseif ($yNum) { $c = 1 }
+        else { $c = [string]::CompareOrdinal($x[$i], $y[$i]) }
+        if ($c -ne 0) { return [Math]::Sign($c) }
+    }
+    return [Math]::Sign($x.Count.CompareTo($y.Count))
+}
+
 # The changelog as sections, newest first: @{ Name; Date; Yanked; Text; Notes }, and its links.
 function Read-Changelog([string]$Path) {
     $lines = [IO.File]::ReadAllLines((Resolve-Path $Path).Path)
@@ -111,9 +140,7 @@ function Read-Changelog([string]$Path) {
     $versions = @($sections | Where-Object { $_.Name -ne 'Unreleased' })
     if ($sections.Count -eq 0 -or $sections[0].Name -ne 'Unreleased') { Fail "the first section should be '## [Unreleased]'" }
     for ($i = 1; $i -lt $versions.Count; $i++) {
-        $newer = [version]($versions[$i - 1].Name -replace '[-+].*$', '')
-        $older = [version]($versions[$i].Name -replace '[-+].*$', '')
-        if ($older -ge $newer) { Fail "[$($versions[$i].Name)] should come after [$($versions[$i - 1].Name)]: newest first" }
+        if ((Compare-Version $versions[$i].Name $versions[$i - 1].Name) -ge 0) { Fail "[$($versions[$i].Name)] should come after [$($versions[$i - 1].Name)]: newest first" }
     }
     foreach ($s in $sections) {
         foreach ($t in $s.Types.Keys) {

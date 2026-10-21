@@ -114,6 +114,7 @@ enum Setting {
     ClipFolder,
     Watch,
     AutoUpdate,
+    Light,
 }
 
 /// The Config tab grouped like Status: choices, then folders, then on/off switches.
@@ -127,10 +128,10 @@ const GROUPS: [&[Setting]; 3] = [
         Setting::Shots,
     ],
     &[Setting::ReplayFolder, Setting::ClipFolder],
-    &[Setting::Watch, Setting::AutoUpdate],
+    &[Setting::Watch, Setting::AutoUpdate, Setting::Light],
 ];
 /// Every setting, and the blank rows between the groups.
-const SETTING_ROWS: usize = 12;
+const SETTING_ROWS: usize = 13;
 
 /// The settings shown, group by group: the AI model only once an AI is picked.
 fn shown(cfg: &Config) -> Vec<Vec<Setting>> {
@@ -146,7 +147,7 @@ fn shown(cfg: &Config) -> Vec<Vec<Setting>> {
 }
 
 impl Setting {
-    const ALL: [Setting; 10] = [
+    const ALL: [Setting; 11] = [
         Setting::Rank,
         Setting::Focus,
         Setting::Account,
@@ -157,6 +158,7 @@ impl Setting {
         Setting::ClipFolder,
         Setting::Watch,
         Setting::AutoUpdate,
+        Setting::Light,
     ];
 
     /// The row's id in the panel.
@@ -172,6 +174,7 @@ impl Setting {
             Setting::Shots => "shots",
             Setting::Watch => "watch",
             Setting::Account => "account",
+            Setting::Light => "light",
         }
     }
 
@@ -191,6 +194,7 @@ impl Setting {
             Setting::Shots => "Screenshots per death",
             Setting::Watch => "Watch the replay folder",
             Setting::Account => "Your account",
+            Setting::Light => "Light terminal background",
         }
     }
 
@@ -199,6 +203,7 @@ impl Setting {
         match self {
             Setting::AutoUpdate => Some(cfg.auto_update != Some(false)),
             Setting::Watch => Some(cfg.watch != Some(false)),
+            Setting::Light => Some(cfg.light.unwrap_or_else(abalone::light_background)),
             _ => None,
         }
     }
@@ -392,6 +397,7 @@ impl SettingsModel for VantageSettings {
         if let Some(on) = setting.switch(&cfg) {
             return self.save(|c| match setting {
                 Setting::AutoUpdate => c.auto_update = Some(!on),
+                Setting::Light => c.light = Some(!on),
                 _ => c.watch = Some(!on),
             });
         }
@@ -444,7 +450,14 @@ impl SettingsModel for VantageSettings {
                     .unwrap_or_default();
                 Outcome::Edit(Field::new(id, &start).hint(PATH_HINT))
             }
-            Some(Setting::ClipFolder) => self.save(|c| c.clips_dir = Some(PathBuf::from(value))),
+            Some(Setting::ClipFolder) => {
+                let path = PathBuf::from(value);
+                // An app listed but not installed has no folder to read.
+                if !path.is_dir() {
+                    return Outcome::Error(format!("There's no folder at {}", path.display()));
+                }
+                self.save(|c| c.clips_dir = Some(path))
+            }
             Some(Setting::AiModel) if value == OTHER_MODEL => {
                 Outcome::Edit(Field::new(id, "").hint("Type the model's name · Enter saves · Esc cancels"))
             }
@@ -472,11 +485,11 @@ impl SettingsModel for VantageSettings {
             Some(Setting::AiModel) => self.save(|c| c.ai_model = Some(text)),
             Some(setting @ (Setting::ClipFolder | Setting::ReplayFolder)) => {
                 let path = std::path::absolute(&text).unwrap_or_else(|_| PathBuf::from(&text));
-                if setting == Setting::ReplayFolder {
-                    return self.save(|c| c.demos_dir = Some(path));
-                }
                 if !path.is_dir() {
                     return Outcome::Error(format!("There's no folder at {}", path.display()));
+                }
+                if setting == Setting::ReplayFolder {
+                    return self.save(|c| c.demos_dir = Some(path));
                 }
                 self.save(|c| c.clips_dir = Some(path))
             }
@@ -531,7 +544,7 @@ fn value(setting: Setting, cfg: &Config) -> Value {
             Some(me) => text(me.clone()),
             None => unset("Not found yet"),
         },
-        Setting::Watch | Setting::AutoUpdate => text(String::new()),
+        Setting::Watch | Setting::AutoUpdate | Setting::Light => text(String::new()),
     }
 }
 
@@ -559,7 +572,11 @@ mod tests {
                     "Screenshots per death"
                 ],
                 vec!["Replay folder", "Clip folder"],
-                vec!["Watch the replay folder", "Automatic updates"],
+                vec![
+                    "Watch the replay folder",
+                    "Automatic updates",
+                    "Light terminal background"
+                ],
             ]
         );
         cfg.ai = Some("anthropic".into());

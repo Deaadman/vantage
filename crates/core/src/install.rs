@@ -88,16 +88,31 @@ fn fetch_vrfkit(layout: &Layout, pin: &Pin) -> Result<bool> {
     }
     let dir = exe.parent().expect("vrfkit_exe has a parent");
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let zip_path = dir.join("download.zip");
-    download(&pin.zip_url, &zip_path)?;
+    // Names of their own, so a background update and `vantage update` at
+    // once don't write over each other's files.
+    let unique = format!("{}-{}", std::process::id(), crate::time::now_unix());
+    // Old copies moved aside by an earlier update, once nothing runs them.
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        if e.file_name().to_string_lossy().ends_with(".exe.old") {
+            let _ = fs::remove_file(e.path());
+        }
+    }
+    let zip_path = dir.join(format!("download-{unique}.zip"));
+    let partial = dir.join(format!("vrfkit-{unique}.exe.partial"));
     let result = (|| {
+        download(&pin.zip_url, &zip_path)?;
         check_sha256(&zip_path, &pin.zip_sha256, "the vrfkit release ZIP")?;
-        let partial = dir.join("vrfkit.exe.partial");
         extract_file(&zip_path, "vrfkit.exe", &partial)?;
         check_sha256(&partial, &pin.exe_sha256, "vrfkit.exe")?;
+        if exe.is_file() && fs::remove_file(&exe).is_err() {
+            // A running exe can't be deleted on Windows, but it can be moved aside.
+            fs::rename(&exe, dir.join(format!("vrfkit-{unique}.exe.old")))
+                .with_context(|| format!("moving the old {} aside", exe.display()))?;
+        }
         fs::rename(&partial, &exe).with_context(|| format!("moving vrfkit into {}", exe.display()))
     })();
     let _ = fs::remove_file(&zip_path);
+    let _ = fs::remove_file(&partial);
     result.map(|()| true)
 }
 
@@ -185,7 +200,10 @@ pub fn uninstall(layout: &Layout, data_dir: Option<&Path>) -> Result<bool> {
     let removed = remove_entries(&layout.root, INSTALL_ENTRIES)
         .and_then(|()| data_dir.map_or(Ok(()), |dir| remove_entries(dir, DATA_ENTRIES)));
     if let Err(e) = removed {
-        bail!("{e:#}; close every Vantage window, then delete {}", layout.root.display());
+        bail!(
+            "{e:#}; close every Vantage window, then delete {}",
+            layout.root.display()
+        );
     }
     if let Some(dir) = data_dir {
         let _ = fs::remove_dir(dir);

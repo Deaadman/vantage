@@ -206,7 +206,11 @@ pub const HABITS: [Habit; 21] = [
 pub fn habit(slug: &str) -> Option<&'static Habit> {
     let slug = slug.trim();
     // `save` was replaced by `clutch`; a focus set to it carries over.
-    let slug = if slug.eq_ignore_ascii_case("save") { "clutch" } else { slug };
+    let slug = if slug.eq_ignore_ascii_case("save") {
+        "clutch"
+    } else {
+        slug
+    };
     HABITS.iter().find(|h| h.slug.eq_ignore_ascii_case(slug))
 }
 
@@ -239,7 +243,8 @@ pub fn count(slug: &str, r: &MatchReview) -> Option<f64> {
         "spike" => deaths(&coach::is_spike_death),
         "push-out" => deaths(&|d| {
             let round = r.round_facts.iter().find(|f| Some(f.round) == d.round);
-            d.context.side == Some(Side::Defense)
+            !d.self_kill
+                && d.context.side == Some(Side::Defense)
                 && !d.context.post_plant
                 && round.is_some_and(|f| f.first_death && f.forward_rank == Some(1))
         }),
@@ -477,7 +482,7 @@ mod tests {
         let deaths = (0..n as u32)
             .map(|r| {
                 let mut d = death(r, "Mid");
-                d.nearest_teammates.clear();
+                d.nearest_teammates[0].dist_m = 30.0;
                 d
             })
             .collect();
@@ -536,6 +541,9 @@ mod tests {
         assert_eq!(n("wallbang"), Some(1.0));
         assert_eq!(n("post-plant"), Some(1.0));
         assert_eq!(n("push-out"), Some(1.0));
+        let mut fell = r.clone();
+        fell.death_facts[2].self_kill = true;
+        assert_eq!(count("push-out", &fell), Some(0.0), "a fall isn't pushing out");
         assert_eq!(n("utility"), Some(2.0), "rounds 0 and 2: died with no ability used");
         assert_eq!(n("buy-sync"), Some(1.0));
         assert_eq!(n("rotation"), Some(9.0));

@@ -564,11 +564,7 @@ fn work_on(me: &MatchReview, players: &[PlayerLine]) -> Vec<Finding> {
     }
 
     // Isolated deaths.
-    let alone: Vec<_> = d
-        .iter()
-        .filter(|f| f.teammates_alive > 0)
-        .filter(|f| f.nearest_teammate_m().is_none_or(|m| m > 15.0) && !f.traded_within_3s)
-        .collect();
+    let alone: Vec<_> = d.iter().filter(|f| crate::coach::is_alone(f)).collect();
     if alone.len() >= 4 {
         out.push(Finding {
             title: format!("{} deaths with no teammate within 15 m to trade", alone.len()),
@@ -662,7 +658,13 @@ fn work_on(me: &MatchReview, players: &[PlayerLine]) -> Vec<Finding> {
             "{tn} times a teammate died within {:.0} m of you, and you killed their killer within 3 s {tg} times.",
             crate::coach::TRADE_DISTANCE_M
         )];
-        if let Some(lobby) = median(players.iter().filter(|p| !p.me).filter_map(|p| p.trades_given_share()).collect()) {
+        if let Some(lobby) = median(
+            players
+                .iter()
+                .filter(|p| !p.me)
+                .filter_map(|p| p.trades_given_share())
+                .collect(),
+        ) {
             evidence.push(format!("Lobby median: {}.", percent(lobby)));
         }
         evidence.push("When a teammate fights near you, be ready to swing the moment they die.".into());
@@ -932,6 +934,30 @@ mod tests {
         assert_eq!(ordinal(4), "4th");
         assert_eq!(ordinal(11), "11th");
         assert_eq!(ordinal(22), "22nd");
+    }
+
+    #[test]
+    fn isolated_deaths_need_known_positions() {
+        use crate::coach::sample::{death, review};
+        let isolated = |dist: Option<f64>| {
+            let deaths = (0..6)
+                .map(|i| {
+                    let mut d = death(i, "Mid");
+                    match dist {
+                        Some(m) => d.nearest_teammates[0].dist_m = m,
+                        None => d.nearest_teammates.clear(),
+                    }
+                    d
+                })
+                .collect();
+            let r = review(&[(false, Side::Attack); 13], deaths);
+            overview(&r, &[])
+                .work_on
+                .iter()
+                .any(|f| f.title.contains("no teammate within 15 m"))
+        };
+        assert!(isolated(Some(30.0)));
+        assert!(!isolated(None), "unknown positions aren't isolation");
     }
 
     #[test]

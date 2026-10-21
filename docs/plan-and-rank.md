@@ -8,7 +8,7 @@ Type `/plan` before you queue. It gives you a game plan for one map from your ow
 
 It picks the map you play most. To choose another, type `/plan --map` and pick it from the list, for example `/plan --map Lotus`.
 
-The plan has three tabs: **Attack**, **Defense** and **Map**. With only one match on a map, it shows what that match tells you instead.
+The plan has three tabs: **Attack**, **Defense** and **Map**. It needs 3 matches on the map. With fewer, there are no tabs: you get the map's general tips, what wins at your rank if you've set it, and the top fix from your latest match there.
 
 ## Your rank
 

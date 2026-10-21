@@ -36,10 +36,15 @@ pub struct DeathFact {
     pub killer_pawn: u32,
     pub killer_agent: String,
     pub self_kill: bool,
+    /// The round's first death to an enemy (self-kills and team kills don't count).
     pub first_death_of_round: bool,
     /// Teammates and enemies alive just before this death, from kill events only (revives not modelled).
     pub teammates_alive: u32,
     pub enemies_alive: u32,
+    /// Every player's team was known, so the two counts above are complete
+    /// (missing in facts stored before it was recorded: assumed known).
+    #[serde(default = "yes")]
+    pub teams_known: bool,
     /// Up to two nearest living teammates with a known position, planar distance.
     pub nearest_teammates: Vec<NearTeammate>,
     pub dist_to_killer_m: Option<f64>,
@@ -62,6 +67,17 @@ impl DeathFact {
     pub fn nearest_teammate_m(&self) -> Option<f64> {
         self.nearest_teammates.first().map(|t| t.dist_m)
     }
+
+    /// Whether a living teammate stood within `m` metres; `None` when no
+    /// teammate's distance is known (no teammate alive, or the victim's or
+    /// their positions were missing), which is not the same as nobody near.
+    pub fn teammate_within(&self, m: f64) -> Option<bool> {
+        self.nearest_teammate_m().map(|d| d <= m)
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A cross-team kill is traded when a teammate of the victim kills the killer
@@ -102,12 +118,14 @@ pub fn place(map: Option<&MapInfo>, pos_cm: [f64; 3]) -> (Option<[f64; 2]>, Opti
 fn death_fact(game: &Game, catalog: &Catalog, map: Option<&MapInfo>, kill: &Kill) -> DeathFact {
     let victim = kill.victim;
     let round = game.round(kill);
-    let dead_before: Vec<u32> = game
+    let before: Vec<&Kill> = game
         .kills_in_round(kill.round_idx)
         .filter(|k| k.index < kill.index)
-        .map(|k| k.victim)
         .collect();
-    let first_death_of_round = dead_before.is_empty() && kill.round_idx.is_some();
+    let dead_before: Vec<u32> = before.iter().map(|k| k.victim).collect();
+    // A fall or a team kill earlier in the round isn't the opening duel, nor is this one if it is one.
+    let first_death_of_round =
+        kill.round_idx.is_some() && game.is_cross_team(kill) && !before.iter().any(|k| game.is_cross_team(k));
 
     let alive = |p: &u32| !dead_before.contains(p);
     let teammates: Vec<u32> = game
@@ -180,6 +198,7 @@ fn death_fact(game: &Game, catalog: &Catalog, map: Option<&MapInfo>, kill: &Kill
         first_death_of_round,
         teammates_alive: teammates.len() as u32,
         enemies_alive: enemies.len() as u32,
+        teams_known: game.teams_complete(),
         nearest_teammates: nearest,
         dist_to_killer_m,
         crosshair_offset_to_killer_deg: crosshair,
@@ -210,6 +229,27 @@ pub(crate) fn round_to(v: f64, places: i32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fall_is_not_the_first_death_and_positions_can_be_unknown() {
+        use crate::game::sample::{export, kill, round};
+        let mut ev = vec![round(0, 0)];
+        for i in 1..=5 {
+            ev.extend([kill(i * 10, i, 5 + i), kill(i * 10 + 1, i, 5 + i % 5 + 1)]);
+        }
+        // Round 1: 1 falls, then 6 kills 2.
+        ev.extend([round(100_000, 1), kill(101_000, 1, 1), kill(102_000, 6, 2)]);
+        let g = Game::new(export(10, ev));
+        let catalog = Catalog::builtin();
+        let fact = |i: usize| death_fact(&g, &catalog, None, &g.kills[i]);
+        let (fall, opening) = (fact(10), fact(11));
+        assert!(fall.self_kill && !fall.first_death_of_round);
+        assert!(opening.first_death_of_round);
+        assert!(opening.teams_known);
+        // No tracks: teammates were alive, but how far away is unknown.
+        assert_eq!(opening.teammates_alive, 3);
+        assert_eq!(opening.teammate_within(15.0), None);
+    }
 
     #[test]
     fn angles() {

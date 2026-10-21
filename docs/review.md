@@ -39,7 +39,7 @@ The first time, Vantage looks for the folders of these apps and lets you pick on
 - Outplayed
 - SteelSeries Moments
 
-You can also type your own folder. Change it later in `/settings`.
+For any other folder, pick **Another folder…**: it points you to `/settings` → Config → **Clip folder**, where you type the path. Change it there later too.
 
 ![The Clips tab](images/review-clips.svg)
 

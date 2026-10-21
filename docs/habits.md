@@ -8,6 +8,8 @@ Vantage counts 21 habits in every match, over your last 8 matches. A habit is **
 
 Use ↑ and ↓ to pick a habit and read what it is, why it matters and how to practise it.
 
+A habit only counts what the replay shows for sure. A death where Vantage can't see where your teammates were doesn't count as dying where nobody can trade. Falling to your death or dying to your own ability doesn't count as going in first or pushing out.
+
 ## The 21 habits
 
 **Positioning**

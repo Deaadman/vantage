@@ -14,11 +14,12 @@ use vantage_core::habits::{self, Check};
 
 use crate::coach_views::trend_color;
 use crate::panel::{
-    Item, MapCache, bullet, field, frame, heading, is_close, list_rows, map_rows_h, pad, para, rule_line, scrolled,
-    step, step_of, steps, tab_key,
+    Item, MapCache, bullet, field, fit, frame, heading, is_close, list_h, list_rows, map_rows_h, pad, para, rule_line,
+    scrolled, step, step_of, steps, tab_key,
 };
 use crate::shell::{ACCENT, GREY, RED, Row, Style, YELLOW, spike, wrap};
 use crate::{ClipFolder, Clips, ReviewData};
+use abalone::row_width;
 
 pub const GREEN: Color = Color::Rgb { r: 120, g: 200, b: 120 };
 const TABS: [&str; 6] = ["Debrief", "Fixes", "Map", "Clips", "Screenshots", "AI"];
@@ -73,6 +74,18 @@ impl ReviewPanel {
         &self.data.debrief.match_id
     }
 
+    /// The same review, reloaded, on the tab this one was showing.
+    pub fn reloaded(&self, data: ReviewData) -> Self {
+        let mut p = ReviewPanel::new(data);
+        p.tab = self.tab;
+        p
+    }
+
+    /// A line of news at the bottom of the panel.
+    pub fn note(&mut self, text: String) {
+        self.flash = Some(text);
+    }
+
     pub fn data(&self) -> &ReviewData {
         &self.data
     }
@@ -115,6 +128,7 @@ impl ReviewPanel {
                 KeyCode::Up => self.clip_pick = self.clip_pick.saturating_sub(1),
                 KeyCode::Down => self.clip_pick = (self.clip_pick + 1).min(folders.len().saturating_sub(1)),
                 KeyCode::Enter => match folders.get(self.clip_pick).and_then(|f| f.path.clone()) {
+                    Some(p) if !p.is_dir() => self.flash = Some(format!("There's no folder at {}", p.display())),
                     Some(p) => return ReviewAction::SetClips(p),
                     None => self.flash = Some("Type the path in /settings → Config → Clip folder.".into()),
                 },
@@ -313,12 +327,24 @@ impl ReviewPanel {
                 (Style::default(), format!("Your focus, {}: ", c.habit.name)),
                 (Style::default().bold(), focus_result(c)),
             ];
+            let mut trend: Row = Vec::new();
             if let Some(p) = self.data.focus_trend.as_ref().filter(|p| !p.values.is_empty()) {
                 let c = trend_color(p.trend);
-                row.push((Style::fg(c), format!("  {}", habits::spark(&p.values))));
-                row.push((Style::fg(c).bold(), format!("  {}", p.trend.lately())));
+                trend.push((Style::fg(c), format!("  {}", habits::spark(&p.values))));
+                trend.push((Style::fg(c).bold(), format!("  {}", p.trend.lately())));
             }
-            b.push(row);
+            // The trend goes on its own line when both don't fit on one.
+            if row_width(&row) + row_width(&trend) < w {
+                row.extend(trend);
+                b.push(row);
+            } else {
+                b.push(row);
+                if !trend.is_empty() {
+                    let mut next: Row = vec![(Style::default(), "  ".into())];
+                    next.extend(trend);
+                    b.push(next);
+                }
+            }
         }
         for n in &self.data.notes {
             b.push(vec![]);
@@ -338,6 +364,16 @@ impl ReviewPanel {
             );
         }
         self.sel = self.sel.min(d.fixes.len() - 1);
+        let f = &d.fixes[self.sel];
+        let mut detail: Vec<Row> = vec![vec![], rule_line(w), vec![]];
+        detail.extend(field("What happened", &f.happened, w, Style::default()));
+        detail.push(vec![]);
+        detail.extend(field("Why it costs", &f.why, w, Style::default()));
+        detail.push(vec![]);
+        detail.extend(steps("Try this", &f.tries, w));
+        detail.push(vec![]);
+        detail.extend(field("Next match", &f.check, w, Style::fg(ACCENT)));
+        // The list shrinks, scrolling with the selection, so the fix's detail fits.
         let mut b = list_rows(
             d.fixes
                 .iter()
@@ -345,21 +381,10 @@ impl ReviewPanel {
                 .map(|(i, f)| Item::new(format!("{}  {} ", i + 1, pad(&f.title, 50))).tail(&f.cost, GREY))
                 .collect(),
             self.sel,
-            d.fixes.len().min(8),
+            list_h(d.fixes.len(), 8, detail.len(), h),
         );
-        let f = &d.fixes[self.sel];
-        b.push(vec![]);
-        b.push(rule_line(w));
-        b.push(vec![]);
-        b.extend(field("What happened", &f.happened, w, Style::default()));
-        b.push(vec![]);
-        b.extend(field("Why it costs", &f.why, w, Style::default()));
-        b.push(vec![]);
-        b.extend(steps("Try this", &f.tries, w));
-        b.push(vec![]);
-        b.extend(field("Next match", &f.check, w, Style::fg(ACCENT)));
-        b.truncate(h);
-        b
+        b.extend(detail);
+        fit(b, h)
     }
 
     fn map(&mut self, w: usize, h: usize) -> Vec<Row> {
@@ -425,7 +450,7 @@ impl ReviewPanel {
                 legend.push(vec![(Style::fg(GREY), p)]);
             }
         }
-        cells.beside(legend)
+        fit(cells.beside(legend), h)
     }
 
     fn clips(&mut self, w: usize, h: usize) -> Vec<Row> {
@@ -535,8 +560,7 @@ impl ReviewPanel {
                 b.extend(list_rows(items, self.sel, h.saturating_sub(3).max(3)));
             }
         }
-        b.truncate(h);
-        b
+        fit(b, h)
     }
 
     fn shots(&mut self, w: usize, h: usize) -> Vec<Row> {
@@ -619,8 +643,7 @@ impl ReviewPanel {
             }
         }
         self.flash_rows(&mut b, w);
-        b.truncate(h);
-        b
+        fit(b, h)
     }
 
     fn ai_tab(&mut self, w: usize, h: usize) -> Vec<Row> {
@@ -718,8 +741,7 @@ impl ReviewPanel {
             }
         }
         self.flash_rows(&mut b, w);
-        b.truncate(h);
-        b
+        fit(b, h)
     }
 
     fn ai_result(&mut self, s: &Saved, w: usize, h: usize) -> Vec<Row> {
@@ -740,6 +762,21 @@ impl ReviewPanel {
             (Style::fg(GREY), " · in the screenshots, most costly first".into()),
         ]);
         self.sel = self.sel.min(o.findings.len().saturating_sub(1));
+        let mut detail: Vec<Row> = Vec::new();
+        if let Some(f) = o.findings.get(self.sel) {
+            detail.extend([vec![], rule_line(w), vec![]]);
+            let rounds: Vec<String> = f.rounds.iter().map(u32::to_string).collect();
+            detail.extend(field(
+                "Rounds",
+                &format!("{} · {}", list_and(&rounds), f.screenshots.join(", ")),
+                w,
+                Style::default(),
+            ));
+            detail.extend(field("What it saw", &f.saw, w, Style::default()));
+            detail.extend(field("Why it costs", &f.why, w, Style::default()));
+            detail.extend(field("Try", &f.try_this, w, Style::fg(GREEN)));
+        }
+        // The list shrinks, scrolling with the selection, so the finding's detail fits.
         b.extend(list_rows(
             o.findings
                 .iter()
@@ -749,23 +786,9 @@ impl ReviewPanel {
                 })
                 .collect(),
             self.sel,
-            o.findings.len(),
+            list_h(o.findings.len(), o.findings.len(), b.len() + detail.len(), h),
         ));
-        if let Some(f) = o.findings.get(self.sel) {
-            b.push(vec![]);
-            b.push(rule_line(w));
-            b.push(vec![]);
-            let rounds: Vec<String> = f.rounds.iter().map(u32::to_string).collect();
-            b.extend(field(
-                "Rounds",
-                &format!("{} · {}", list_and(&rounds), f.screenshots.join(", ")),
-                w,
-                Style::default(),
-            ));
-            b.extend(field("What it saw", &f.saw, w, Style::default()));
-            b.extend(field("Why it costs", &f.why, w, Style::default()));
-            b.extend(field("Try", &f.try_this, w, Style::fg(GREEN)));
-        }
+        b.extend(detail);
         if !o.keep.is_empty() {
             b.push(vec![]);
             b.push(heading("Keep doing", Some(GREEN)));
@@ -780,8 +803,7 @@ impl ReviewPanel {
                 b.extend(bullet("?", GREY, &format!("{}: {}", u.screenshot, u.reason), w));
             }
         }
-        b.truncate(h);
-        b
+        fit(b, h)
     }
 
     fn ai_json(&mut self, s: &Saved, w: usize, h: usize) -> Vec<Row> {

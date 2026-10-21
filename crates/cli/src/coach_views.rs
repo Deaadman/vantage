@@ -16,6 +16,7 @@ use crate::panel::{
 };
 use crate::review_view::GREEN;
 use crate::shell::{ACCENT, GREY, RED, Row, Style, YELLOW, wrap};
+use abalone::{row_width, text_width};
 
 pub enum CoachAction {
     None,
@@ -113,7 +114,11 @@ impl PlanPanel {
         let body = match self.tab {
             0 => scrolled(&mut self.scroll, side(&self.d.plan.attack, true, w), body_h),
             1 => scrolled(&mut self.scroll, side(&self.d.plan.defense, false, w), body_h),
-            _ => self.map(w, body_h),
+            // The legend carries on under the map, so this tab scrolls too.
+            _ => {
+                let rows = self.map(w, body_h);
+                scrolled(&mut self.scroll, rows, body_h)
+            }
         };
         frame(
             w,
@@ -280,6 +285,23 @@ fn side(p: &SidePlan, attack: bool, w: usize) -> Vec<Row> {
 /// The habit names' column.
 const NAME_W: usize = 40;
 
+impl HabitsPanel {
+    /// A line of news at the bottom of the panel, in place of the last one.
+    pub fn note(&mut self, text: String) {
+        self.flash = Some(text);
+    }
+
+    /// This panel with newer matches, on the same habit (habits keep their order).
+    pub fn updated(&self, mut new: HabitsPanel) -> HabitsPanel {
+        new.sel = self.sel.min(new.progress.len().saturating_sub(1));
+        new.flash = Some(format!(
+            "Updated with your newest match: now {}.",
+            plural(new.matches, "match")
+        ));
+        new
+    }
+}
+
 pub struct HabitsPanel {
     progress: Vec<Progress>,
     focus: &'static str,
@@ -341,13 +363,18 @@ impl HabitsPanel {
             (Style::fg(GREY), format!("your last {} · focus: ", plural(n, "match"))),
             (Style::fg(YELLOW).bold(), focus_name.into()),
         ];
+        // Columns as wide as their longest entry, so a row fits 80 columns.
+        let widest = |f: &dyn Fn(&Progress) -> usize| self.progress.iter().map(f).max().unwrap_or(0);
+        let name_w = (widest(&|p| text_width(p.habit.name)) + 1).clamp(8, NAME_W);
+        let now_w = (widest(&|p| text_width(&p.now)) + 2).clamp(5, 20);
+        let spark_w = (widest(&|p| text_width(&spark(&p.values))) + 2).max(text_width(&format!("last {n}")) + 2);
         let mut b: Vec<Row> = vec![vec![(
             Style::fg(GREY),
             format!(
                 "    {}{}{}lately",
-                pad("habit", NAME_W),
-                pad(&format!("last {n}"), 10),
-                pad("now", 20)
+                pad("habit", name_w),
+                pad(&format!("last {n}"), spark_w),
+                pad("now", now_w)
             ),
         )]];
         let mut list: Vec<Row> = Vec::new();
@@ -365,14 +392,19 @@ impl HabitsPanel {
             let mut row: Row = vec![
                 (
                     base,
-                    format!("{}{}", if on { "  ❯ " } else { "    " }, pad(p.habit.name, NAME_W)),
+                    format!("{}{}", if on { "  ❯ " } else { "    " }, pad(p.habit.name, name_w)),
                 ),
-                (Style::fg(c), pad(&spark(&p.values), 10)),
-                (base, pad(&p.now, 20)),
+                (Style::fg(c), pad(&spark(&p.values), spark_w)),
+                (base, pad(&p.now, now_w)),
                 (Style::fg(c).bold(), pad(p.trend.word(), 8)),
             ];
             if p.habit.slug == self.focus {
-                row.push((Style::fg(YELLOW).bold(), "◆ focus".into()));
+                // Just the mark when the word wouldn't fit.
+                let used = row_width(&row);
+                let mark = if used + 8 <= w { "◆ focus" } else { "◆" };
+                if used + text_width(mark) < w {
+                    row.push((Style::fg(YELLOW).bold(), mark.into()));
+                }
             }
             list.push(row);
         }
@@ -448,6 +480,13 @@ impl RankPanel {
             tab: 0,
             scroll: 0,
         }
+    }
+
+    /// This panel with newer matches, on the same tab and scroll.
+    pub fn updated(&self, mut new: RankPanel) -> RankPanel {
+        new.tab = self.tab;
+        new.scroll = self.scroll;
+        new
     }
 
     pub fn key(&mut self, key: KeyEvent) -> CoachAction {

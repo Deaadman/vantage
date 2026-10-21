@@ -72,9 +72,13 @@ impl MapCells {
         );
     }
 
-    /// The map with `legend` beside it, one legend row per map row.
+    /// The map with `legend` beside it, one legend row per map row. Legend
+    /// rows past the bottom of the map carry on under it, in the same column.
     pub fn beside(self, legend: Vec<Row>) -> Vec<Row> {
-        self.cells
+        let indent = " ".repeat(2 + self.n + 4);
+        let map_h = self.cells.len();
+        let mut rows: Vec<Row> = self
+            .cells
             .into_iter()
             .enumerate()
             .map(|(r, row)| {
@@ -86,7 +90,13 @@ impl MapCells {
                 }
                 out
             })
-            .collect()
+            .collect();
+        for l in legend.into_iter().skip(map_h) {
+            let mut out: Row = vec![(Style::default(), indent.clone())];
+            out.extend(l);
+            rows.push(out);
+        }
+        rows
     }
 }
 
@@ -110,6 +120,21 @@ impl MapCache {
     }
 }
 
+/// `rows` cut to `h`; when any are cut, the last row says there's more.
+pub fn fit(mut rows: Vec<Row>, h: usize) -> Vec<Row> {
+    if rows.len() > h && h > 0 {
+        rows.truncate(h - 1);
+        rows.push(vec![(Style::fg(GREY), "    ↓ more · make the window taller".into())]);
+    }
+    rows
+}
+
+/// How many rows of a list of `n` to show, at most `max`, so `around` other
+/// rows still fit in `h`; never fewer than 3 (or `n`).
+pub fn list_h(n: usize, max: usize, around: usize, h: usize) -> usize {
+    h.saturating_sub(around).clamp(3.min(n), max.min(n).max(1))
+}
+
 /// Map rows for a body `h` tall beside a legend `legend_w` wide.
 pub fn map_rows_h(w: usize, h: usize, legend_w: usize) -> usize {
     h.min(w.saturating_sub(legend_w + 8) / 2).max(4)
@@ -118,6 +143,19 @@ pub fn map_rows_h(w: usize, h: usize, legend_w: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cut_rows_say_so() {
+        let rows: Vec<Row> = (0..10).map(|i| vec![(Style::default(), i.to_string())]).collect();
+        assert_eq!(fit(rows.clone(), 10).len(), 10);
+        let cut = fit(rows, 4);
+        assert_eq!(cut.len(), 4);
+        assert!(cut[3][0].1.contains("↓ more"));
+        assert_eq!(list_h(8, 8, 20, 24), 4);
+        assert_eq!(list_h(8, 8, 30, 24), 3);
+        assert_eq!(list_h(2, 8, 30, 24), 2);
+        assert_eq!(list_h(8, 8, 0, 24), 8);
+    }
 
     #[test]
     fn marks_turn_with_the_map() {

@@ -175,18 +175,17 @@ fn round_of<'a>(r: &'a MatchReview, d: &DeathFact) -> Option<&'a RoundFact> {
     r.round_facts.iter().find(|f| Some(f.round) == d.round)
 }
 
-/// Teammates alive, none near enough to trade, and nobody did.
+/// Teammates alive, none near enough to trade, and nobody did. A death
+/// where no teammate's position is known isn't counted: unknown isn't alone.
 pub fn is_alone(d: &DeathFact) -> bool {
-    !d.self_kill
-        && d.teammates_alive > 0
-        && !d.traded_within_3s
-        && d.nearest_teammate_m().is_none_or(|m| m > TRADE_DISTANCE_M)
+    !d.self_kill && d.teammates_alive > 0 && !d.traded_within_3s && d.teammate_within(TRADE_DISTANCE_M) == Some(false)
 }
 
 /// First of my team to die on attack, with no ability used before the round's first fight.
 pub fn is_entry(r: &MatchReview, d: &DeathFact) -> bool {
     let Some(f) = round_of(r, d) else { return false };
-    d.first_death_of_round
+    !d.self_kill
+        && d.first_death_of_round
         && f.first_death
         && f.side == Some(Side::Attack)
         && !d.traded_within_3s
@@ -202,7 +201,7 @@ pub fn is_repeek(d: &DeathFact) -> bool {
 /// Last alive against 2 or more, and killed with 2 or more enemies shooting:
 /// a clutch fought against several at once instead of one at a time.
 pub fn is_crossfired_clutch(d: &DeathFact) -> bool {
-    !d.self_kill && d.teammates_alive == 0 && d.enemies_alive >= 2 && d.context.attackers_last_3s >= 2
+    !d.self_kill && d.teams_known && d.teammates_alive == 0 && d.enemies_alive >= 2 && d.context.attackers_last_3s >= 2
 }
 
 pub fn is_ult_held(d: &DeathFact) -> bool {
@@ -1237,7 +1236,7 @@ mod tests {
             let mut d = death(round, "A Rubble");
             d.first_death_of_round = true;
             d.context.casts_last_5s = 0;
-            d.nearest_teammates.clear();
+            d.nearest_teammates[0].dist_m = 30.0;
             deaths.push(d);
         }
         for round in [5, 7] {
@@ -1264,6 +1263,49 @@ mod tests {
         assert_eq!(b.rounds.len(), 13);
         assert_eq!(b.rounds[1].death, Some(0));
         assert!(!b.moments.is_empty());
+    }
+
+    #[test]
+    fn unknown_teammate_positions_are_not_alone() {
+        let mut d = death(1, "Mid");
+        d.nearest_teammates[0].dist_m = 30.0;
+        assert!(is_alone(&d));
+        // The victim's own position was missing, so no distances at all.
+        d.nearest_teammates.clear();
+        assert!(!is_alone(&d));
+        let r = review(
+            &[(false, Side::Attack); 13],
+            (0..6)
+                .map(|i| {
+                    let mut d = death(i, "Mid");
+                    d.nearest_teammates.clear();
+                    d
+                })
+                .collect(),
+        );
+        assert!(!debrief(&r, &[]).fixes.iter().any(|f| f.kind == "untraded"));
+    }
+
+    #[test]
+    fn a_fall_is_not_going_in_first() {
+        let mut d = death(1, "A Main");
+        d.first_death_of_round = true;
+        d.context.casts_last_5s = 0;
+        let mut r = review(&[(false, Side::Attack); 3], vec![d.clone()]);
+        assert!(is_entry(&r, &d));
+        d.self_kill = true;
+        r.death_facts[0].self_kill = true;
+        assert!(!is_entry(&r, &d));
+    }
+
+    #[test]
+    fn no_clutch_claimed_when_a_team_is_unknown() {
+        let mut d = death(1, "Mid");
+        d.teammates_alive = 0;
+        d.context.attackers_last_3s = 2;
+        assert!(is_crossfired_clutch(&d));
+        d.teams_known = false;
+        assert!(!is_crossfired_clutch(&d));
     }
 
     #[test]

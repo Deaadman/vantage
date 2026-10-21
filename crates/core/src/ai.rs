@@ -15,7 +15,9 @@ use crate::coach::Debrief;
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const SCHEMA: &str = "vantage.ai-review/1";
-const TIMEOUT: Duration = Duration::from_secs(300);
+/// Long enough for a slow model to write its longest answer: a request that
+/// times out has usually been charged for already.
+const TIMEOUT: Duration = Duration::from_secs(600);
 const OLLAMA: &str = "http://localhost:11434";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -479,7 +481,8 @@ pub fn run(
     shots: &[Shot],
 ) -> Result<Saved> {
     let path = saved_path(data_dir, &d.match_id);
-    if path.is_file() {
+    // Only a review that reads back blocks a new one; a damaged file doesn't.
+    if load(data_dir, &d.match_id).is_some() {
         bail!("This match already has an AI review. It's saved and can't be rerun.");
     }
     let key = match (provider.key, key.map(str::trim).filter(|k| !k.is_empty())) {
@@ -520,9 +523,7 @@ pub fn run(
             format: FORMAT_VERSION,
         },
     };
-    std::fs::create_dir_all(path.parent().expect("has a parent"))?;
-    std::fs::write(&path, serde_json::to_string_pretty(&saved)?)
-        .with_context(|| format!("writing {}", path.display()))?;
+    crate::files::write_atomic(&path, serde_json::to_string_pretty(&saved)?.as_bytes())?;
     Ok(saved)
 }
 

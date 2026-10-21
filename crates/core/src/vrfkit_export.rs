@@ -243,10 +243,23 @@ fn load_manifest(path: &Path) -> Result<Manifest> {
         bail!("manifest lists no players with a pawn; is this an unsupported replay?");
     }
 
+    // The id names files (`tracks/<id>.parquet`, `ai/<id>.json`), so it may
+    // only hold characters that can't leave those folders.
+    let safe = |id: String| -> Option<String> {
+        let id = id.trim().to_owned();
+        let ok = !id.is_empty()
+            && id.len() <= 128
+            && !id.starts_with('.')
+            && id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+        ok.then_some(id)
+    };
     let match_id = raw
         .friendly_name
-        .or(raw.source_file.map(|s| s.trim_end_matches(".vrf").to_owned()))
-        .unwrap_or_else(|| "unknown".into());
+        .and_then(safe)
+        .or(raw
+            .source_file
+            .and_then(|s| safe(s.trim_end_matches(".vrf").to_owned())))
+        .context("manifest has no usable match id")?;
     Ok(Manifest {
         match_id,
         replay_build: raw.replay_build,

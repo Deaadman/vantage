@@ -30,7 +30,12 @@ $token = if ($env:GH_TOKEN) { $env:GH_TOKEN } else { $env:GITHUB_TOKEN }
 if ($token) { $headers.Authorization = "Bearer $token" }
 
 # v0.4.0 or 13.08 as a [version] for comparing.
-function ConvertTo-Version([string]$v) { [version](($v.TrimStart('v') -split '[-+]')[0]) }
+# [version] needs two parts, so a tag like v1 is read as 1.0.
+function ConvertTo-Version([string]$v) {
+    $core = ($v.TrimStart('v') -split '[-+]')[0]
+    if ($core -notmatch '\.') { $core += '.0' }
+    [version]$core
+}
 
 function Set-Output([string]$Name, [string]$Value) {
     if ($env:GITHUB_OUTPUT) { "$Name=$Value" >> $env:GITHUB_OUTPUT }

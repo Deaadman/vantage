@@ -126,23 +126,30 @@ pub fn death_times(played_at: &str, times_ms: &[u32]) -> Option<Vec<f64>> {
     Some(times_ms.iter().map(|t| start as f64 + *t as f64 / 1000.0).collect())
 }
 
-/// Each death's clip: the first clip saved within `MATCH_WINDOW_S` after it,
-/// no clip used twice.
+/// Each death's clip: the first clip saved within `MATCH_WINDOW_S` after it
+/// that is long enough to show it, no clip used twice.
 pub fn match_deaths(deaths_unix: &[f64], clips: &[Clip]) -> Vec<Option<Matched>> {
+    let lengths: Vec<Option<f64>> = clips.iter().map(|c| mp4_length(&c.path)).collect();
+    match_deaths_with(deaths_unix, clips, &lengths)
+}
+
+fn match_deaths_with(deaths_unix: &[f64], clips: &[Clip], lengths: &[Option<f64>]) -> Vec<Option<Matched>> {
     let mut used = vec![false; clips.len()];
     deaths_unix
         .iter()
         .map(|&t| {
+            // A clip whose length is known must start before the death.
+            let covers = |i: usize, c: &Clip| lengths[i].is_none_or(|len| c.saved_unix - t <= len);
             let (i, c) = clips
                 .iter()
                 .enumerate()
-                .filter(|(i, c)| !used[*i] && c.saved_unix >= t && c.saved_unix - t <= MATCH_WINDOW_S)
+                .filter(|(i, c)| !used[*i] && c.saved_unix >= t && c.saved_unix - t <= MATCH_WINDOW_S && covers(*i, c))
                 .min_by(|a, b| a.1.saved_unix.total_cmp(&b.1.saved_unix))?;
             used[i] = true;
             Some(Matched {
                 path: c.path.clone(),
                 before_end_s: c.saved_unix - t,
-                length_s: mp4_length(&c.path),
+                length_s: lengths[i],
                 bytes: std::fs::metadata(&c.path).ok().map(|m| m.len()),
             })
         })
@@ -278,15 +285,22 @@ pub fn ffmpeg() -> Option<PathBuf> {
     dirs.into_iter().map(|d| d.join(exe)).find(|p| p.is_file())
 }
 
-/// A death's screenshot files: `R07.jpg`, or `R07a.jpg` … `R07c.jpg`.
+/// A death's screenshot files: `R07.jpg` for the strip, `R07a.jpg` …
+/// `R07c.jpg` for three, and just `R07c.jpg`, the moment of the death, for one.
+/// Each style has its own names, so changing style never shows another's image.
 pub fn shot_names(round: u32, style: ShotStyle) -> Vec<String> {
     match style {
         ShotStyle::Three => ["a", "b", "c"].iter().map(|s| format!("R{round:02}{s}.jpg")).collect(),
-        _ => vec![format!("R{round:02}.jpg")],
+        ShotStyle::One => vec![format!("R{round:02}c.jpg")],
+        ShotStyle::Strip => vec![format!("R{round:02}.jpg")],
     }
 }
 
+/// The longest one ffmpeg run may take before it's stopped.
+const FFMPEG_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Takes the screenshots of one death into `dir`, unless they are there already.
+/// `dir` must belong to this one match (see `shots_folder`).
 pub fn screenshot(ffmpeg: &Path, clip: &Matched, round: u32, style: ShotStyle, dir: &Path) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let names = shot_names(round, style);
@@ -295,16 +309,41 @@ pub fn screenshot(ffmpeg: &Path, clip: &Matched, round: u32, style: ShotStyle, d
         return Ok(paths);
     }
     // Seconds from the clip's end, never past its start.
-    let from_end = |before: f64| format!("-{:.2}", (clip.before_end_s + before).max(0.05));
+    let longest = clip.length_s.map_or(f64::INFINITY, |l| (l - 0.05).max(0.05));
+    let from_end = |before: f64| format!("-{:.2}", (clip.before_end_s + before).clamp(0.05, longest));
     let input = clip.path.to_string_lossy().into_owned();
-    let mut cmd = Command::new(ffmpeg);
-    cmd.args(["-hide_banner", "-loglevel", "error", "-y"]);
+    // ffmpeg writes to a temporary name that is renamed once it succeeds, so a
+    // crash never leaves a half-written image that would be kept as done.
+    let part = |p: &Path| p.with_extension("part.jpg");
+    let finish = |p: &Path| std::fs::rename(part(p), p).with_context(|| format!("saving {}", p.display()));
+    let one_frame = |before: f64, out: &Path| -> Result<()> {
+        let mut one = Command::new(ffmpeg);
+        one.args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-sseof",
+            &from_end(before),
+            "-i",
+            &input,
+        ]);
+        one.args(["-frames:v", "1", "-q:v", "3"]).arg(part(out));
+        run(&mut one)?;
+        finish(out)
+    };
     match style {
-        ShotStyle::One => {
-            cmd.args(["-sseof", &from_end(0.0), "-i", &input, "-frames:v", "1", "-q:v", "3"]);
-            cmd.arg(&paths[0]);
+        ShotStyle::One => one_frame(0.0, &paths[0])?,
+        ShotStyle::Three => {
+            for (m, p) in MOMENTS_S.iter().zip(&paths) {
+                if !p.is_file() {
+                    one_frame(*m, p)?;
+                }
+            }
         }
         ShotStyle::Strip => {
+            let mut cmd = Command::new(ffmpeg);
+            cmd.args(["-hide_banner", "-loglevel", "error", "-y"]);
             for m in MOMENTS_S {
                 cmd.args(["-sseof", &from_end(m), "-i", &input]);
             }
@@ -316,39 +355,36 @@ pub fn screenshot(ffmpeg: &Path, clip: &Matched, round: u32, style: ShotStyle, d
                 "-q:v",
                 "3",
             ]);
-            cmd.arg(&paths[0]);
-        }
-        ShotStyle::Three => {
-            for (m, p) in MOMENTS_S.iter().zip(&paths) {
-                let mut one = Command::new(ffmpeg);
-                one.args([
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-y",
-                    "-sseof",
-                    &from_end(*m),
-                    "-i",
-                    &input,
-                ]);
-                one.args(["-frames:v", "1", "-q:v", "3"]).arg(p);
-                run(&mut one)?;
-            }
-            return Ok(paths);
+            cmd.arg(part(&paths[0]));
+            run(&mut cmd)?;
+            finish(&paths[0])?;
         }
     }
-    run(&mut cmd)?;
     Ok(paths)
 }
 
+/// The folder for one match's screenshots: its local start time and map, plus
+/// the start of its id, so two matches on the same map and day never share one.
+pub fn shots_folder(played_local: Option<&str>, map: &str, match_id: &str) -> String {
+    let when = played_local.map_or_else(|| "undated".to_owned(), |t| t.replace(':', "."));
+    let id: String = match_id.chars().filter(char::is_ascii_alphanumeric).take(8).collect();
+    let name = format!("{when} {map} {id}");
+    // Nothing from the replay may reach the path as a separator or a reserved character.
+    name.chars()
+        .map(|c| {
+            if c.is_control() || r#"\/:*?"<>|"#.contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
 fn run(cmd: &mut Command) -> Result<()> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW: no console flashing over the shell.
-        cmd.creation_flags(0x0800_0000);
-    }
-    let out = cmd.output().context("running ffmpeg")?;
+    let out = crate::files::output_within(cmd, FFMPEG_LIMIT).context("running ffmpeg")?;
     if !out.status.success() {
         bail!("ffmpeg failed: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
@@ -425,7 +461,21 @@ mod tests {
         // 75 is too long after the second death's 200; 500 is too late for 400.
         assert!(m[1].is_none() && m[2].is_none());
         assert_eq!(shot_names(7, ShotStyle::Three), ["R07a.jpg", "R07b.jpg", "R07c.jpg"]);
+        assert_ne!(shot_names(7, ShotStyle::One), shot_names(7, ShotStyle::Strip));
         assert_eq!(ShotStyle::parse(None), ShotStyle::Strip);
+
+        // A 30 s clip saved 40 s after the death starts after it: skipped for the 60 s one.
+        let m = match_deaths_with(&deaths[..1], &clips[..2], &[Some(5.0), Some(60.0)]);
+        assert_eq!(m[0].as_ref().unwrap().before_end_s, 15.0);
+    }
+
+    #[test]
+    fn each_match_has_its_own_screenshot_folder() {
+        let a = shots_folder(Some("2026-10-19 21:04"), "Ascent", "5c673443-5bdc-4576");
+        let b = shots_folder(Some("2026-10-19 22:10"), "Ascent", "9f8b32c5-c243-41ec");
+        assert_eq!(a, "2026-10-19 21.04 Ascent 5c673443");
+        assert_ne!(a, b);
+        assert_eq!(shots_folder(None, "..\\x/y", "../.."), "undated .._x_y");
     }
 
     #[test]

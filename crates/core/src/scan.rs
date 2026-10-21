@@ -10,7 +10,7 @@ use crate::catalog::Catalog;
 use crate::game::Game;
 use crate::store::{FileState, Store};
 use crate::tracks::write_tracks;
-use crate::vrfkit::Vrfkit;
+use crate::vrfkit::{CouldNotRun, Vrfkit};
 use crate::vrfkit_export::Export;
 
 pub struct ScanOptions {
@@ -47,6 +47,20 @@ pub enum Outcome {
     Failed {
         error: String,
     },
+    /// Skipped for now: changed moments ago, so it may still be downloading.
+    NotReady,
+}
+
+/// How long a replay must be left alone before it's read.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Whether `vrf` has been left alone for `SETTLE`, so it's done downloading.
+pub fn settled(vrf: &Path) -> bool {
+    let age = std::fs::metadata(vrf)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|m| m.elapsed().ok());
+    !age.is_some_and(|a| a < SETTLE)
 }
 
 #[derive(Debug)]
@@ -113,6 +127,10 @@ fn scan_one(
     let size = std::fs::metadata(vrf)
         .with_context(|| format!("reading {}", vrf.display()))?
         .len();
+    // A replay changed moments ago may still be downloading; the next scan gets it.
+    if !settled(vrf) {
+        return Ok(Outcome::NotReady);
+    }
     match store.file_state(file, size)? {
         FileState::Stored { .. } => return Ok(Outcome::AlreadyStored),
         // Reported when first found; quiet afterwards.
@@ -139,11 +157,7 @@ fn scan_one(
                 return Ok(Outcome::Unsupported { reason });
             }
         }
-        Err(e) => {
-            let error = format!("{e:#}");
-            store.log_file(file, size, "failed", &error, &vrfkit.version)?;
-            return Ok(Outcome::Failed { error });
-        }
+        Err(e) => return failed(store, vrfkit, file, size, e),
     }
 
     let raw = raw_dir(&opts.data_dir, vrf);
@@ -165,12 +179,18 @@ fn scan_one(
     }
     match result {
         Ok(outcome) => Ok(outcome),
-        Err(e) => {
-            let error = format!("{e:#}");
-            store.log_file(file, size, "failed", &error, &vrfkit.version)?;
-            Ok(Outcome::Failed { error })
-        }
+        Err(e) => failed(store, vrfkit, file, size, e),
     }
+}
+
+/// A replay that couldn't be read. It's logged so later scans skip it, unless
+/// vrfkit never got to read it: then it's tried again next time.
+fn failed(store: &Store, vrfkit: &Vrfkit, file: &str, size: u64, e: anyhow::Error) -> Result<Outcome> {
+    let error = format!("{e:#}");
+    if !e.chain().any(|c| c.is::<CouldNotRun>()) {
+        store.log_file(file, size, "failed", &error, &vrfkit.version)?;
+    }
+    Ok(Outcome::Failed { error })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -201,6 +221,11 @@ fn export_and_store(
     }
 
     let game = Game::new(export);
+    // Deathmatch and other modes without the spike and two teams aren't reviewed.
+    if let Some(reason) = game.unsupported_mode() {
+        store.log_file(file, size, "unsupported", &reason, &vrfkit.version)?;
+        return Ok(Outcome::Unsupported { reason });
+    }
     warnings.extend(game.warnings.iter().cloned());
     let ctx = store.insert_match(&game, catalog, file, size, &vrfkit.version)?;
     if let Err(e) = write_tracks(&game, &tracks_path(&opts.data_dir, &ctx.match_id)) {

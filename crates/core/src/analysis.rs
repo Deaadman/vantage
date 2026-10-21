@@ -136,7 +136,7 @@ pub struct Analysis<'a> {
     pub casts: Vec<Cast>,
     /// Ultimate activations (slot 9 casts) per pawn, as times when known.
     pub ult_uses: Vec<(u32, Option<usize>, Option<u32>)>,
-    /// Max `NumUltimatePoints` seen per pawn: the ult cost if they ever had it ready.
+    /// Ult cost per pawn, for pawns seen to spend their ult (see `ult_cost`).
     pub ult_cost: HashMap<u32, i64>,
     ult_points: HashMap<u32, Vec<(u32, i64)>>,
     owners: HashMap<u32, Vec<(u32, u32)>>,
@@ -196,10 +196,6 @@ impl<'a> Analysis<'a> {
         let money = by_state(&f.money);
         let start_money = by_state(&f.start_money);
         let ult_points = by_state(&f.ult_points);
-        let ult_cost = ult_points
-            .iter()
-            .map(|(&p, v)| (p, v.iter().map(|x| x.1).max().unwrap_or(0)))
-            .collect();
 
         let mut a = Analysis {
             game,
@@ -212,7 +208,7 @@ impl<'a> Analysis<'a> {
             shots: Vec::new(),
             casts: Vec::new(),
             ult_uses: Vec::new(),
-            ult_cost,
+            ult_cost: HashMap::new(),
             ult_points,
             owners,
             in_hand,
@@ -262,6 +258,11 @@ impl<'a> Analysis<'a> {
             .iter()
             .filter(|c| c.slot == 9)
             .map(|c| (c.pawn, c.round_idx, c.time_ms))
+            .collect();
+        a.ult_cost = a
+            .ult_points
+            .iter()
+            .filter_map(|(&p, v)| Some((p, ult_cost(v, a.ult_uses.iter().any(|u| u.0 == p))?)))
             .collect();
         a
     }
@@ -547,8 +548,34 @@ impl<'a> Analysis<'a> {
     }
 }
 
+/// The ult cost from one player's `NumUltimatePoints` history: the most they
+/// held, but only once they are seen to spend it (points fall from that most,
+/// or an ult cast is recorded). Someone who peaked below the cost and never
+/// ulted would otherwise read as "ult ready" at their peak.
+fn ult_cost(points: &[(u32, i64)], ulted: bool) -> Option<i64> {
+    let (at, max) = points.iter().enumerate().max_by_key(|(i, x)| (x.1, usize::MAX - i))?;
+    let spent = points[at..].iter().any(|x| x.1 < max.1);
+    (max.1 > 0 && (spent || ulted)).then_some(max.1)
+}
+
 /// Last value at or before `t` in a time-sorted list.
 fn last_at<T: Copy>(v: &[(u32, T)], t: u32) -> Option<T> {
     let i = v.partition_point(|(time, _)| *time <= t);
     i.checked_sub(1).map(|i| v[i].1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ult_cost_only_once_spent() {
+        // Peaked at 6 and never ulted: the cost could be 7 or 8.
+        assert_eq!(ult_cost(&[(0, 0), (10, 3), (20, 6)], false), None);
+        // Reached 7 and dropped: 7 is the cost.
+        assert_eq!(ult_cost(&[(0, 0), (10, 7), (20, 0), (30, 2)], false), Some(7));
+        // An ult cast recorded, even if the drop wasn't replicated.
+        assert_eq!(ult_cost(&[(0, 0), (10, 8)], true), Some(8));
+        assert_eq!(ult_cost(&[], true), None);
+    }
 }

@@ -26,6 +26,7 @@ Use ↑ and ↓ to pick a setting, and Enter or Space to change it.
 | Clip folder | Where your clip app saves clips. |
 | Watch the replay folder | Pick up new replays while Vantage is open. |
 | Automatic updates | Download new versions in the background. |
+| Light terminal background | Turn on if your terminal has a light background, so text is darkened to read on it. Vantage can tell by itself in some terminals, but not in Windows Terminal. |
 
 ### Choosing an AI model
 

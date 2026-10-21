@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -54,8 +55,7 @@ impl Pin {
 
     pub fn save(&self, layout: &Layout) -> Result<()> {
         let path = Self::saved_path(layout);
-        let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
+        crate::files::write_atomic(&path, serde_json::to_string_pretty(self)?.as_bytes())
     }
 }
 
@@ -134,21 +134,20 @@ impl Vrfkit {
     /// Whether the exe starts at all: `vrfkit --help` exits 0. Checked before
     /// switching to a newly installed release.
     pub fn starts(exe: &Path) -> bool {
-        Command::new(exe)
-            .arg("--help")
-            .output()
+        crate::files::output_within(Command::new(exe).arg("--help"), Duration::from_secs(30))
             .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("vrfkit"))
     }
 
     /// `vrfkit export <vrf> --out <out_dir>`; `out_dir` must be new or empty.
     pub fn export(&self, vrf: &Path, out_dir: &Path) -> Result<()> {
-        let output = Command::new(&self.path)
-            .arg("export")
-            .arg(vrf)
-            .arg("--out")
-            .arg(out_dir)
-            .output()
-            .with_context(|| format!("running {}", self.path.display()))?;
+        let output = self.run(
+            Command::new(&self.path)
+                .arg("export")
+                .arg(vrf)
+                .arg("--out")
+                .arg(out_dir),
+            EXPORT_LIMIT,
+        )?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let tail: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
@@ -170,12 +169,13 @@ impl Vrfkit {
     /// The replay's build branch from `vrfkit inspect` (fast: header only),
     /// e.g. `++Ares-Core+release-13.08`.
     pub fn inspect_build(&self, vrf: &Path) -> Result<String> {
-        let output = Command::new(&self.path)
-            .arg("inspect")
-            .arg(vrf)
-            .arg("--redact-identifiers")
-            .output()
-            .with_context(|| format!("running {}", self.path.display()))?;
+        let output = self.run(
+            Command::new(&self.path)
+                .arg("inspect")
+                .arg(vrf)
+                .arg("--redact-identifiers"),
+            INSPECT_LIMIT,
+        )?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let last = stderr
@@ -186,6 +186,31 @@ impl Vrfkit {
             bail!("vrfkit inspect failed ({}): {last}", output.status);
         }
         parse_branch(&String::from_utf8_lossy(&output.stdout)).context("vrfkit inspect printed no Branch line")
+    }
+}
+
+/// The longest a header check may take.
+const INSPECT_LIMIT: Duration = Duration::from_secs(60);
+/// The longest a full export may take; a normal one takes a few seconds.
+const EXPORT_LIMIT: Duration = Duration::from_secs(600);
+
+/// vrfkit didn't run to the end: it couldn't start (antivirus holding the exe,
+/// say) or it hung. Says nothing about the replay, so scan tries it again later.
+#[derive(Debug)]
+pub struct CouldNotRun(pub String);
+
+impl std::fmt::Display for CouldNotRun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CouldNotRun {}
+
+impl Vrfkit {
+    fn run(&self, cmd: &mut Command, limit: Duration) -> Result<std::process::Output> {
+        crate::files::output_within(cmd, limit)
+            .map_err(|e| anyhow::Error::new(CouldNotRun(format!("running {}: {e:#}", self.path.display()))))
     }
 }
 

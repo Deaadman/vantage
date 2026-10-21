@@ -54,7 +54,8 @@ pub(crate) fn spike(elapsed: Duration) -> (Style, &'static str) {
     let tick = elapsed.as_millis() / TICK.as_millis();
     let gap = 15u128.saturating_sub(elapsed.as_secs() as u128 / 4).max(3);
     match tick % gap {
-        0 => (Style::fg(BRIGHT), "◆"),
+        // The terminal's own text colour, so the flash shows on light backgrounds too.
+        0 => (Style::default().bold(), "◆"),
         1 => (Style::fg(RED), "◆"),
         _ => (Style::fg(DIM_RED), "◇"),
     }
@@ -107,14 +108,24 @@ pub fn run(data_dir: &Path) -> Result<()> {
     build(data_dir).run()
 }
 
+/// Tells Abalone about a light background set in /settings; true when set.
+fn apply_light(data_dir: &Path) -> bool {
+    let light = Config::load(data_dir).ok().and_then(|c| c.light);
+    if let Some(l) = light {
+        abalone::set_light_background(l);
+    }
+    light.is_some()
+}
+
 /// The shell, ready to run.
 pub(crate) fn build(data_dir: &Path) -> Shell<Vantage> {
+    apply_light(data_dir);
     let app = Vantage::new(data_dir);
     let (known, pin_tx) = (app.update_known.clone(), app.pin_tx.clone());
     let dir = data_dir.to_path_buf();
     let mut shell = Shell::new(app)
         .title(APP_NAME)
-        .theme(THEME)
+        .theme(THEME.for_terminal())
         .logo(Chevrons)
         .spinner(|t: Duration| {
             let (style, glyph) = spike(t);
@@ -153,8 +164,14 @@ pub(crate) enum Flow {
     Rank(Box<RankPanel>),
     /// Open the settings panel.
     Settings,
-    /// The AI review finished (for the open review).
-    AiDone(Result<ai::Saved, String>),
+    /// The review again after picking a clip folder: replaces the open one.
+    Reloaded(Box<ReviewData>),
+    /// The AI review of a match finished.
+    AiDone(String, Result<ai::Saved, String>),
+    /// The watcher stored new matches: open panels built from all matches update.
+    NewMatches,
+    /// Those panels again, replacing the open one of the same kind.
+    Updated(Panel),
 }
 
 /// What covers the whole screen.
@@ -333,6 +350,8 @@ pub(crate) struct Vantage {
     pin_rx: Receiver<Pin>,
     /// A vrfkit that was just installed, announced once no job is running.
     new_vrfkit: Option<Pin>,
+    /// A review's request made while a job ran, started when it ends.
+    queued: Option<(String, ReviewAction)>,
 }
 
 impl Vantage {
@@ -354,6 +373,7 @@ impl Vantage {
             pin_tx,
             pin_rx,
             new_vrfkit: None,
+            queued: None,
         };
         app.refresh();
         app
@@ -393,6 +413,10 @@ impl Vantage {
             self.watch.pending = changed;
             return;
         }
+        // The scan skips files changed moments ago; wait until it will read them.
+        if !changed.keys().all(|p| vantage_core::scan::settled(p)) {
+            return;
+        }
         let dir = self.data_dir.clone();
         self.start(ctx, "Reading the new replay", true, move || {
             let stored = match crate::scan_cmd(&dir, None, false, false) {
@@ -410,16 +434,26 @@ impl Vantage {
             if let Some(m) = newest {
                 crate::new_match(&dir, &m.id);
             }
-            Flow::Continue
+            if stored.is_empty() {
+                Flow::Continue
+            } else {
+                Flow::NewMatches
+            }
         });
     }
 
     /// What a review asks for: a clip folder, or the AI review.
     fn review_action(&mut self, a: ReviewAction, ctx: &mut Ctx<Self>) {
-        if ctx.busy() {
+        let busy = ctx.busy();
+        let Some(Panel::Review(p)) = ctx.panel() else { return };
+        // One job at a time: this one starts when the running one ends.
+        if busy {
+            if matches!(a, ReviewAction::SetClips(_) | ReviewAction::RunAi) {
+                p.note("Starting as soon as Vantage finishes what it's doing…".into());
+                self.queued = Some((p.match_id().to_owned(), a));
+            }
             return;
         }
-        let Some(Panel::Review(p)) = ctx.panel() else { return };
         let dir = self.data_dir.clone();
         let id = p.match_id().to_owned();
         let data = p.data();
@@ -428,12 +462,16 @@ impl Vantage {
             .map(|provider| (provider, data.debrief.clone(), data.shots()));
         match a {
             ReviewAction::SetClips(path) => {
-                if let Ok(mut cfg) = Config::load(&dir) {
+                let saved = Config::load(&dir).and_then(|mut cfg| {
                     cfg.clips_dir = Some(path);
-                    let _ = cfg.save(&dir);
+                    cfg.save(&dir)
+                });
+                if let Err(e) = saved {
+                    p.note(format!("Couldn't save the clip folder: {e:#}"));
+                    return;
                 }
                 self.start(ctx, "Finding your clips", false, move || {
-                    panel_or_error(|| crate::load_review(&dir, Some(id)), |d| Flow::Review(Box::new(d)))
+                    panel_or_error(|| crate::load_review(&dir, Some(id)), |d| Flow::Reloaded(Box::new(d)))
                 });
             }
             ReviewAction::RunAi => {
@@ -448,7 +486,7 @@ impl Vantage {
                         &debrief,
                         &shots,
                     );
-                    Flow::AiDone(r.map_err(|e| format!("{e:#}")))
+                    Flow::AiDone(debrief.match_id.clone(), r.map_err(|e| format!("{e:#}")))
                 });
             }
             _ => {}
@@ -513,11 +551,53 @@ impl App for Vantage {
             Flow::Habits(p) => ctx.open(Panel::Habits(p)),
             Flow::Rank(p) => ctx.open(Panel::Rank(p)),
             Flow::Settings => ctx.open_settings(),
-            Flow::AiDone(result) => {
-                if let Some(Panel::Review(p)) = ctx.panel() {
-                    p.ai_done(result);
+            // Only while the review is still open: closing it means the player moved on.
+            Flow::Reloaded(data) => {
+                if let Some(Panel::Review(p)) = ctx.panel()
+                    && p.match_id() == data.debrief.match_id
+                {
+                    let p = p.reloaded(*data);
+                    ctx.open(Panel::Review(p));
                 }
             }
+            Flow::NewMatches => {
+                let dir = self.data_dir.clone();
+                match ctx.panel() {
+                    Some(Panel::Habits(_)) => self.start(ctx, "Updating your habits", false, move || {
+                        crate::load_habits(&dir).map_or(Flow::Continue, |(p, focus, n)| {
+                            Flow::Updated(Panel::Habits(Box::new(HabitsPanel::new(p, focus, n))))
+                        })
+                    }),
+                    Some(Panel::Rank(_)) => self.start(ctx, "Updating your rank", false, move || {
+                        crate::load_rank(&dir).map_or(Flow::Continue, |(rank, standing, focus)| {
+                            Flow::Updated(Panel::Rank(Box::new(RankPanel::new(rank, standing, focus))))
+                        })
+                    }),
+                    _ => {}
+                }
+            }
+            Flow::Updated(new) => match (ctx.panel(), new) {
+                (Some(Panel::Habits(old)), Panel::Habits(new)) => {
+                    let p = old.updated(*new);
+                    ctx.open(Panel::Habits(Box::new(p)));
+                }
+                (Some(Panel::Rank(old)), Panel::Rank(new)) => {
+                    let p = old.updated(*new);
+                    ctx.open(Panel::Rank(Box::new(p)));
+                }
+                _ => {}
+            },
+            Flow::AiDone(id, result) => match ctx.panel() {
+                Some(Panel::Review(p)) if p.match_id() == id => p.ai_done(result),
+                // The review was closed meanwhile: say how it went in the transcript.
+                _ => match result {
+                    Ok(_) => out::emit(
+                        Kind::Good,
+                        "The AI review is done. Open /review and go to the AI tab.".into(),
+                    ),
+                    Err(e) => out::emit(Kind::Error, format!("The AI review didn't finish: {e}")),
+                },
+            },
         }
     }
 
@@ -525,9 +605,12 @@ impl App for Vantage {
         match event {
             PanelAction::Review(a) => self.review_action(a, ctx),
             PanelAction::Focus(slug) => {
-                if let Ok(mut cfg) = Config::load(&self.data_dir) {
+                let saved = Config::load(&self.data_dir).and_then(|mut cfg| {
                     cfg.focus = Some(slug.to_owned());
-                    let _ = cfg.save(&self.data_dir);
+                    cfg.save(&self.data_dir)
+                });
+                if let (Err(e), Some(Panel::Habits(p))) = (saved, ctx.panel()) {
+                    p.note(format!("Couldn't save your focus: {e:#}"));
                 }
             }
         }
@@ -552,6 +635,13 @@ impl App for Vantage {
                 Flow::Continue
             });
         }
+        // Only for the review it was asked from, if that's still open.
+        if !ctx.busy()
+            && let Some((id, a)) = self.queued.take()
+            && matches!(ctx.panel(), Some(Panel::Review(p)) if p.match_id() == id)
+        {
+            self.review_action(a, ctx);
+        }
         if !ctx.busy() && self.watch.last_poll.elapsed() >= WATCH_EVERY {
             self.watch.last_poll = Instant::now();
             self.poll_replays(ctx);
@@ -567,6 +657,9 @@ impl App for Vantage {
 
     /// Re-read what commands may have changed: matches, settings, notices.
     fn refresh(&mut self) {
+        if apply_light(&self.data_dir) {
+            abalone::set_theme(THEME.for_terminal());
+        }
         self.completions.matches = matches(&self.data_dir);
         self.notices = notices(&self.data_dir, self.update_known.load(Ordering::Relaxed));
         self.ranked = Config::load(&self.data_dir).is_ok_and(|c| c.rank.is_some());
@@ -895,7 +988,10 @@ fn execute_line(line: &str, data_dir: &Path) -> Flow {
             |(rank, standing, focus)| Flow::Rank(Box::new(RankPanel::new(rank, standing, focus))),
         ),
         crate::Command::Uninstall { .. } => {
-            out::emit(Kind::Error, "To uninstall, quit Vantage and run `vantage uninstall`".into());
+            out::emit(
+                Kind::Error,
+                "To uninstall, quit Vantage and run `vantage uninstall`".into(),
+            );
             Flow::Continue
         }
         command => {
@@ -934,13 +1030,21 @@ mod tests {
         let cmds = shell.commands();
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
         for n in [
-            "review", "plan", "habits", "focus", "rank", "matches", "scan", "settings", "logs", "help", "exit",
+            "review", "plan", "habits", "focus", "rank", "matches", "scan", "settings", "logs", "update", "help",
+            "exit",
         ] {
             assert!(names.contains(&n), "{n}");
         }
         // Removed for the coach, automatic in the shell, or terminal-only.
         for n in [
-            "export", "summary", "trends", "init", "players", "sync", "update", "install", "uninstall",
+            "export",
+            "summary",
+            "trends",
+            "init",
+            "players",
+            "sync",
+            "install",
+            "uninstall",
         ] {
             assert!(!names.contains(&n), "{n}");
         }
@@ -994,7 +1098,7 @@ mod tests {
     fn spike_beeps_faster_the_longer_a_job_runs() {
         let beeps = |from: u64| {
             (0..50)
-                .filter(|i| spike(Duration::from_millis(from * 1000 + i * 80)).0 == Style::fg(BRIGHT))
+                .filter(|i| spike(Duration::from_millis(from * 1000 + i * 80)).0 == Style::default().bold())
                 .count()
         };
         // 4 s of ticks: every 15th at first, every 3rd once the job is long.

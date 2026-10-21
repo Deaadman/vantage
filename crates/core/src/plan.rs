@@ -242,7 +242,8 @@ fn side_plan(reviews: &[MatchReview], side: Side) -> SidePlan {
                 .max_by_key(|(_, f)| f.kills);
             match best_round {
                 Some((r, f)) if f.kills >= 2 => {
-                    let date = r.context.played_at.as_deref().and_then(|t| t.get(..10)).unwrap_or("?");
+                    let local = r.context.played_at.as_deref().and_then(crate::time::local_minutes);
+                    let date = local.as_deref().and_then(|t| t.get(..10)).unwrap_or("?");
                     let at = site_of(f).map(|s| format!(" holding {s}")).unwrap_or_default();
                     format!(
                         "Your best defense round here: round {} on {date}, {}{at}, and you survived. Do that again.",

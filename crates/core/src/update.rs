@@ -86,6 +86,14 @@ fn check_pin(pin: &Pin, any_host: bool) -> Result<()> {
     if pin.decodes().newest == 0 {
         bail!("its builds {:?} aren't versions", pin.builds);
     }
+    // The tag names the folder vrfkit is installed in.
+    let tag_ok = !pin.tag.is_empty()
+        && pin.tag.len() <= 64
+        && !pin.tag.starts_with('.')
+        && pin.tag.chars().all(|c| c.is_ascii_alphanumeric() || "-_.+".contains(c));
+    if !tag_ok {
+        bail!("its tag {:?} isn't a release name", pin.tag);
+    }
     Ok(())
 }
 

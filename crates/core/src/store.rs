@@ -16,8 +16,8 @@ use crate::time::now_rfc3339;
 pub const STORE_SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = "
-CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE matches (
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS matches (
     match_id TEXT PRIMARY KEY,
     source_file TEXT NOT NULL,
     source_size INTEGER NOT NULL,
@@ -32,7 +32,7 @@ CREATE TABLE matches (
     context_json TEXT NOT NULL,
     UNIQUE (source_file, source_size)
 );
-CREATE TABLE players (
+CREATE TABLE IF NOT EXISTS players (
     match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
     subject TEXT NOT NULL,
     pawn INTEGER NOT NULL,
@@ -46,13 +46,13 @@ CREATE TABLE players (
     reconnects INTEGER NOT NULL,
     PRIMARY KEY (match_id, subject)
 );
-CREATE TABLE rounds (
+CREATE TABLE IF NOT EXISTS rounds (
     match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
     number INTEGER NOT NULL,
     start_ms INTEGER NOT NULL,
     PRIMARY KEY (match_id, number)
 );
-CREATE TABLE kills (
+CREATE TABLE IF NOT EXISTS kills (
     match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
     idx INTEGER NOT NULL,
     time_ms INTEGER NOT NULL,
@@ -64,7 +64,7 @@ CREATE TABLE kills (
     PRIMARY KEY (match_id, idx)
 );
 -- One row per death of every player; fact_json is a deaths.jsonl line.
-CREATE TABLE deaths (
+CREATE TABLE IF NOT EXISTS deaths (
     match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
     time_ms INTEGER NOT NULL,
     victim_subject TEXT NOT NULL,
@@ -72,9 +72,9 @@ CREATE TABLE deaths (
     fact_json TEXT NOT NULL,
     PRIMARY KEY (match_id, time_ms, victim_subject)
 );
-CREATE INDEX deaths_by_subject ON deaths (victim_subject);
+CREATE INDEX IF NOT EXISTS deaths_by_subject ON deaths (victim_subject);
 -- Files scan should not retry: failed exports and duplicates of stored matches.
-CREATE TABLE scan_log (
+CREATE TABLE IF NOT EXISTS scan_log (
     source_file TEXT NOT NULL,
     source_size INTEGER NOT NULL,
     status TEXT NOT NULL,
@@ -88,7 +88,7 @@ CREATE TABLE scan_log (
 /// Added in schema 2.
 const SCHEMA_V2: &str = "
 -- One row per player per round; fact_json is a rounds.jsonl line.
-CREATE TABLE round_facts (
+CREATE TABLE IF NOT EXISTS round_facts (
     match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
     subject TEXT NOT NULL,
     round INTEGER NOT NULL,
@@ -100,7 +100,7 @@ CREATE TABLE round_facts (
 /// Added in schema 3.
 const SCHEMA_V3: &str = "
 -- One MatchReview (everything an export shows) per player per match.
-CREATE TABLE reviews (
+CREATE TABLE IF NOT EXISTS reviews (
     match_id TEXT NOT NULL REFERENCES matches(match_id) ON DELETE CASCADE,
     subject TEXT NOT NULL,
     review_json TEXT NOT NULL,
@@ -152,9 +152,12 @@ impl Store {
         Ok(store)
     }
 
+    /// Creates or upgrades the tables. It's one transaction, and every
+    /// statement is `IF NOT EXISTS`, so a crash part way leaves the file as it
+    /// was, and a file left half made by an older Vantage is finished off.
     fn migrate(&self) -> Result<()> {
-        let has_meta: bool = self
-            .conn
+        let tx = self.conn.unchecked_transaction()?;
+        let has_meta: bool = tx
             .query_row(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
                 [],
@@ -162,23 +165,18 @@ impl Store {
             )
             .optional()?
             .is_some();
-        if !has_meta {
-            self.conn.execute_batch(SCHEMA)?;
-            self.conn.execute_batch(SCHEMA_V2)?;
-            self.conn.execute_batch(SCHEMA_V3)?;
-            self.conn.execute(
-                "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
-                [STORE_SCHEMA_VERSION.to_string()],
-            )?;
-            return Ok(());
-        }
-        let version: i64 = self
-            .conn
-            .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| {
+        // No version row: a new file, or one an older Vantage left half made.
+        let version: i64 = if has_meta {
+            tx.query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| {
                 r.get::<_, String>(0)
-            })?
-            .parse()
-            .context("bad schema_version in meta")?;
+            })
+            .optional()?
+            .map(|v| v.parse().context("bad schema_version in meta"))
+            .transpose()?
+            .unwrap_or(0)
+        } else {
+            0
+        };
         if version > STORE_SCHEMA_VERSION {
             bail!(
                 "database schema {version} is newer than this version of Vantage ({STORE_SCHEMA_VERSION}); update Vantage"
@@ -186,16 +184,21 @@ impl Store {
         }
         // Matches stored before a migration lack the new rows; their raw
         // exports are gone, so they stay without them.
+        if version < 1 {
+            tx.execute_batch(SCHEMA)?;
+        }
         if version < 2 {
-            self.conn.execute_batch(SCHEMA_V2)?;
+            tx.execute_batch(SCHEMA_V2)?;
         }
         if version < 3 {
-            self.conn.execute_batch(SCHEMA_V3)?;
+            tx.execute_batch(SCHEMA_V3)?;
         }
-        self.conn.execute(
-            "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
             [STORE_SCHEMA_VERSION.to_string()],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -296,7 +299,8 @@ impl Store {
         for team in &ctx.teams {
             for p in &team.players {
                 tx.execute(
-                    "INSERT INTO players (match_id, subject, pawn, agent_id, agent, role, side, kills, deaths, ping_median, reconnects)
+                    // A player listed twice (after a reconnect) keeps their first row.
+                    "INSERT OR IGNORE INTO players (match_id, subject, pawn, agent_id, agent, role, side, kills, deaths, ping_median, reconnects)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                     params![
                         ctx.match_id,
@@ -438,7 +442,15 @@ impl Store {
         let rows = stmt
             .query_map([subject], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.iter().map(|j| parse_review(j)).collect()
+        // One review this version can't read is left out, not the whole history.
+        Ok(rows
+            .iter()
+            .filter_map(|j| {
+                parse_review(j)
+                    .inspect_err(|e| abalone::log::write("WARN", &format!("skipped a stored review: {e:#}")))
+                    .ok()
+            })
+            .collect())
     }
 
     /// Stored matches, newest first: (match_id, played_at, map).
@@ -600,5 +612,38 @@ mod tests {
         assert_eq!(s.counts().unwrap().logged, 1);
         drop(s);
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn half_made_files_are_finished_off() {
+        let path = std::env::temp_dir().join(format!("vantage-store-half-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        // A crash after the tables but before the version row.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(SCHEMA_V2).unwrap();
+        drop(conn);
+        let s = Store::open(&path).unwrap();
+        s.log_file("a.vrf", 1, "failed", "x", "v0.3.0").unwrap();
+        drop(s);
+        // A crash after schema 3's table but before the version was raised.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute("UPDATE meta SET value = '2' WHERE key = 'schema_version'", [])
+            .unwrap();
+        drop(conn);
+        assert_eq!(Store::open(&path).unwrap().counts().unwrap().logged, 1);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_review_is_skipped() {
+        let s = Store::open_in_memory().unwrap();
+        s.conn
+            .execute_batch(
+                "INSERT INTO matches VALUES ('m1', 'a.vrf', 1, 'b', NULL, NULL, '2026-01-01', 0, 0, 'v', 'now', '{}');
+                 INSERT INTO reviews VALUES ('m1', 'me', '{not json');",
+            )
+            .unwrap();
+        assert!(s.reviews_of("me").unwrap().is_empty());
     }
 }

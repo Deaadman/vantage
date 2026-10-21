@@ -146,8 +146,8 @@ fn metrics() -> Vec<Metric> {
             |r| {
                 rate(
                     &r.death_facts,
-                    |f| f.nearest_teammate_m().is_some(),
-                    |f| f.nearest_teammate_m().is_some_and(|d| d > 15.0),
+                    |f| f.teammate_within(crate::coach::TRADE_DISTANCE_M).is_some(),
+                    |f| f.teammate_within(crate::coach::TRADE_DISTANCE_M) == Some(false),
                     |f| f.round,
                 )
             }
@@ -449,7 +449,7 @@ fn metrics() -> Vec<Metric> {
             |r| {
                 rate(
                     &r.death_facts,
-                    |f| !f.self_kill && f.teammates_alive == 0 && f.enemies_alive >= 2,
+                    |f| !f.self_kill && f.teams_known && f.teammates_alive == 0 && f.enemies_alive >= 2,
                     crate::coach::is_crossfired_clutch,
                     |f| f.round,
                 )

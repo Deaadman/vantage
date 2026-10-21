@@ -27,7 +27,7 @@ pub(crate) fn match_review() -> vantage_core::MatchReview {
         let mut d = sample::death(round, "A Rubble");
         d.first_death_of_round = true;
         d.context.casts_last_5s = 0;
-        d.nearest_teammates.clear();
+        d.nearest_teammates[0].dist_m = 30.0;
         deaths.push(d);
     }
     for round in [12, 15, 18] {

@@ -105,9 +105,8 @@ enum Command {
     /// Download agents, maps and weapons from valorant-api.com into the local cache.
     #[command(hide = true)]
     Sync,
-    // Hidden: the shell updates in the background on launch.
-    /// Download and install the newest vrfkit and Vantage (a new Vantage needs a restart).
-    #[command(hide = true)]
+    // Shown: notices and the docs tell players to type it.
+    /// Install the newest Vantage and vrfkit now (a new Vantage needs a restart)
     Update,
     /// Install this exe and its vrfkit into %LOCALAPPDATA%\vantage (install.ps1 runs this).
     #[command(hide = true)]
@@ -280,6 +279,7 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
     let seen = count(|o| matches!(o, Outcome::AlreadyStored | Outcome::Duplicate { .. }));
     let failed = count(|o| matches!(o, Outcome::Failed { .. } | Outcome::PreviouslyFailed { .. }));
     let unsupported = count(|o| matches!(o, Outcome::Unsupported { .. } | Outcome::PreviouslyUnsupported { .. }));
+    let waiting = count(|o| matches!(o, Outcome::NotReady));
     let n = results.len();
     out::row(vec![
         (Kind::Bold, format!("Checked {}", plural(n, "replay"))),
@@ -323,6 +323,13 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
                 format!("{unsupported} from a VALORANT version Vantage can't read yet"),
             ),
             (Kind::Dim, " · read after the next update".into()),
+        ]);
+    }
+    if waiting > 0 {
+        out::row(vec![
+            (Kind::Dim, "  · ".into()),
+            (Kind::Out, format!("{} still downloading", plural(waiting, "replay"))),
+            (Kind::Dim, " · read once it's done".into()),
         ]);
     }
     Ok(ids)
@@ -546,11 +553,8 @@ fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
         .and_then(|p| clips::death_times(p, &times))
         .map(|t| clips::match_deaths(&t, &found))
         .unwrap_or_else(|| vec![None; d.deaths.len()]);
-    let folder = format!(
-        "{} {}",
-        d.played_at.as_deref().and_then(|t| t.get(..10)).unwrap_or("undated"),
-        d.map
-    );
+    let played = d.played_at.as_deref().and_then(vantage_core::time::local_minutes);
+    let folder = clips::shots_folder(played.as_deref(), &d.map, &d.match_id);
     let shots_dir = clips::shots_root().unwrap_or_else(|| dir.join("vantage")).join(folder);
     let mut shots = Vec::new();
     let mut shot_error = None;
@@ -814,8 +818,13 @@ fn day_heading(ymd: &str, today: i64) -> Option<(String, Option<String>)> {
     Some((format!("{weekday} {d} {}", MONTHS[m as usize - 1]), ago))
 }
 
-/// `2026-10-19T21:04:11Z` -> `Mon 19 Oct 21:04`.
+/// `2026-10-19T21:04:11Z` -> `Mon 19 Oct 21:04`, in local time.
 pub fn short_when(t: &str) -> String {
+    short_local(vantage_core::time::local_minutes(t).as_deref().unwrap_or(t))
+}
+
+/// `2026-10-19 21:04` -> `Mon 19 Oct 21:04`.
+fn short_local(t: &str) -> String {
     match day_parts(t) {
         Some((day, m, d)) => format!(
             "{} {d} {} {}",
@@ -851,10 +860,14 @@ fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
     } else {
         matches.len().min(MATCHES_SHOWN)
     };
-    let today = vantage_core::time::now_unix().div_euclid(86_400);
+    let today = vantage_core::time::local_today();
     let mut day: Option<String> = None;
     for m in &matches[..shown] {
-        let played = m.played_at.clone().unwrap_or_default();
+        let played = m
+            .played_at
+            .as_deref()
+            .and_then(vantage_core::time::local_minutes)
+            .unwrap_or_default();
         let date = played.get(..10).unwrap_or("").to_owned();
         if day.as_ref() != Some(&date) {
             if day.is_some() {
@@ -1054,10 +1067,16 @@ fn uninstall_cmd(data_dir: &Path, keep_data: bool, yes: bool) -> Result<()> {
     // Pictures\Vantage, which holds Clips.
     let shots = clips::shots_root().and_then(|d| d.parent().map(Path::to_path_buf));
     if let Some(shots) = shots.filter(|d| d.is_dir()) {
-        outln!("your screenshots are still in {}; delete it to remove them", shots.display());
+        outln!(
+            "your screenshots are still in {}; delete it to remove them",
+            shots.display()
+        );
     }
     if clips::ffmpeg().is_some() {
-        outln!("ffmpeg stays installed; `winget uninstall {}` removes it", install::FFMPEG_PACKAGE);
+        outln!(
+            "ffmpeg stays installed; `winget uninstall {}` removes it",
+            install::FFMPEG_PACKAGE
+        );
     }
     Ok(())
 }
@@ -1088,6 +1107,6 @@ mod tests {
         assert_eq!(h("2026-10-14"), day("Wednesday 14 October", Some("6 days ago")));
         assert_eq!(h("2026-10-13"), day("Tuesday 13 October", None));
         assert_eq!(h(""), None);
-        assert_eq!(short_when("2026-10-19T21:04:11Z"), "Mon 19 Oct 21:04");
+        assert_eq!(short_local("2026-10-19 21:04"), "Mon 19 Oct 21:04");
     }
 }

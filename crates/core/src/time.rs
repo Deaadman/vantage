@@ -1,4 +1,4 @@
-//! Small UTC time helpers; avoids a date crate for three conversions.
+//! Small time helpers; avoids a date crate for a few conversions.
 
 /// Seconds between 0001-01-01 and 1970-01-01.
 const UE_EPOCH_TO_UNIX_S: i64 = 62_135_596_800;
@@ -49,9 +49,101 @@ pub fn rfc3339_utc(secs: i64) -> String {
     )
 }
 
+/// A fixed offset in place of the time zone's, or `i64::MIN` for none.
+static FIXED_OFFSET: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(i64::MIN);
+
+/// Use `offset_s` as the local offset (`None`: the time zone's again), so
+/// pictures and tests draw the same times on every machine.
+pub fn set_fixed_offset(offset_s: Option<i64>) {
+    FIXED_OFFSET.store(offset_s.unwrap_or(i64::MIN), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Seconds the local clock was ahead of UTC at `unix`, with that day's
+/// daylight saving. Windows only; elsewhere 0, so times stay in UTC.
+pub fn local_offset_s(unix: i64) -> i64 {
+    let fixed = FIXED_OFFSET.load(std::sync::atomic::Ordering::Relaxed);
+    if fixed != i64::MIN {
+        return fixed;
+    }
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        #[derive(Default)]
+        struct SystemTime {
+            year: u16,
+            month: u16,
+            weekday: u16,
+            day: u16,
+            hour: u16,
+            minute: u16,
+            second: u16,
+            ms: u16,
+        }
+        unsafe extern "system" {
+            fn SystemTimeToTzSpecificLocalTime(
+                zone: *const std::ffi::c_void,
+                utc: *const SystemTime,
+                local: *mut SystemTime,
+            ) -> i32;
+        }
+        let t = rfc3339_utc(unix);
+        let n = |r: std::ops::Range<usize>| t.get(r).and_then(|s| s.parse::<u16>().ok()).unwrap_or(0);
+        let utc = SystemTime {
+            year: n(0..4),
+            month: n(5..7),
+            day: n(8..10),
+            hour: n(11..13),
+            minute: n(14..16),
+            second: n(17..19),
+            ..Default::default()
+        };
+        let mut local = SystemTime::default();
+        // A null zone means the current time zone, with its rules for that date.
+        if unsafe { SystemTimeToTzSpecificLocalTime(std::ptr::null(), &utc, &mut local) } == 0 {
+            return 0;
+        }
+        let local_unix = days_from_civil(local.year.into(), local.month.into(), local.day.into()) * 86_400
+            + i64::from(local.hour) * 3600
+            + i64::from(local.minute) * 60
+            + i64::from(local.second);
+        local_unix - unix
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = unix;
+        0
+    }
+}
+
+/// A UTC `YYYY-MM-DDTHH:MM:SSZ` as local time, `YYYY-MM-DD HH:MM`.
+pub fn local_minutes(t: &str) -> Option<String> {
+    let unix = crate::clips::parse_rfc3339(t)?;
+    let local = rfc3339_utc(unix + local_offset_s(unix));
+    Some(format!("{} {}", &local[..10], &local[11..16]))
+}
+
+/// Today's day number (days since 1970-01-01) on the local clock.
+pub fn local_today() -> i64 {
+    let now = now_unix();
+    (now + local_offset_s(now)).div_euclid(86_400)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_times_shift_by_the_offset() {
+        let t = "2026-10-19T21:04:11Z";
+        let unix = crate::clips::parse_rfc3339(t).unwrap();
+        let expected = rfc3339_utc(unix + local_offset_s(unix));
+        assert_eq!(
+            local_minutes(t).unwrap(),
+            format!("{} {}", &expected[..10], &expected[11..16])
+        );
+        assert_eq!(local_offset_s(unix) % 900, 0, "offsets are whole quarter hours");
+        assert!(local_minutes("not a time").is_none());
+    }
 
     #[test]
     fn timestamps() {

@@ -146,7 +146,8 @@ pub fn death_context(a: &Analysis, kill: &Kill) -> DeathContext {
         .filter(|&p| a.side(p).is_some() && a.side(p) != a.side(v))
         .filter(alive)
         .count();
-    c.outnumbered = enemies > my_team;
+    // With a player of unknown team the counts are short; don't claim it.
+    c.outnumbered = g.teams_complete() && enemies > my_team;
 
     // Killing blow: the damage invocation on the victim that killed, at the death.
     if let Some(h) = a
@@ -330,7 +331,8 @@ pub struct RoundFact {
     pub shots_no_shotgun: u32,
     /// D. Shots fired faster than 1.5 m/s.
     pub moving_shots: u32,
-    /// R. My team's first kill / first death of the round was mine.
+    /// R. The round's first cross-team kill was mine / my team's first death
+    /// to an enemy was mine (falls and own utility aren't opening duels).
     pub first_kill: bool,
     pub first_death: bool,
     /// R. My team got the round's first kill (man advantage).
@@ -429,12 +431,13 @@ pub fn round_facts(a: &Analysis, pawn: u32) -> Vec<RoundFact> {
                 economy: mine,
                 team_buys,
                 enemy_buys,
-                kills: kills.iter().filter(|k| k.killer == pawn && !k.is_self_kill()).count() as u32,
+                kills: kills.iter().filter(|k| k.killer == pawn && g.is_cross_team(k)).count() as u32,
                 died: kills.iter().any(|k| k.victim == pawn),
                 ..Default::default()
             };
             for h in hits.iter().filter(|h| h.victim.is_some()) {
-                if h.attacker == Some(pawn) && h.victim != Some(pawn) {
+                // Hits on teammates (and on myself) aren't damage dealt.
+                if h.attacker == Some(pawn) && h.victim.is_some_and(|v| v != pawn && !g.teams.same_team(v, pawn)) {
                     f.damage_dealt += h.damage;
                     match h.region {
                         Some(0) => f.hits_body += 1,
@@ -475,20 +478,25 @@ pub fn round_facts(a: &Analysis, pawn: u32) -> Vec<RoundFact> {
                 }
             }
 
-            let cross: Vec<&&Kill> = kills.iter().filter(|k| !k.is_self_kill()).collect();
+            // Self-kills and team kills are nobody's opening duel.
+            let cross: Vec<&&Kill> = kills.iter().filter(|k| g.is_cross_team(k)).collect();
             if let Some(k) = cross.first() {
                 f.team_first_kill = my_side.map(|s| a.side(k.killer) == Some(s));
                 f.first_kill = k.killer == pawn;
             }
-            let my_team_deaths: Vec<&&Kill> = kills.iter().filter(|k| a.side(k.victim) == my_side).collect();
-            f.first_death = my_team_deaths.first().is_some_and(|k| k.victim == pawn);
+            f.first_death = my_side.is_some()
+                && cross
+                    .iter()
+                    .find(|k| a.side(k.victim) == my_side)
+                    .is_some_and(|k| k.victim == pawn);
 
             let barrier = r.buy_end_ms.unwrap_or(r.start_ms);
             let player_hits = || {
                 hits.iter()
                     .filter(|h| h.victim.is_some() && h.attacker.is_some() && h.attacker != h.victim)
             };
-            f.first_contact_s = player_hits().next().map(|h| secs(h.time_ms.saturating_sub(barrier)));
+            let first_contact_ms = player_hits().next().map(|h| h.time_ms);
+            f.first_contact_s = first_contact_ms.map(|t| secs(t.saturating_sub(barrier)));
             f.my_first_contact_s = player_hits()
                 .find(|h| h.attacker == Some(pawn) || h.victim == Some(pawn))
                 .map(|h| secs(h.time_ms.saturating_sub(barrier)));
@@ -539,10 +547,12 @@ pub fn round_facts(a: &Analysis, pawn: u32) -> Vec<RoundFact> {
                 .map(|p| p.pawn)
                 .filter(|&p| a.side(p).is_some() && a.side(p) != my_side)
                 .collect();
+            // A player of unknown team could still be alive on either side: no clutch claimed.
+            let teams_known = g.teams_complete();
             for k in &kills {
                 alive_team.retain(|&p| p != k.victim);
                 alive_enemy.retain(|&p| p != k.victim);
-                if f.clutch_vs.is_none() && alive_team == [pawn] && !alive_enemy.is_empty() {
+                if teams_known && f.clutch_vs.is_none() && alive_team == [pawn] && !alive_enemy.is_empty() {
                     f.clutch_vs = Some(alive_enemy.len() as u32);
                 }
             }
@@ -561,8 +571,7 @@ pub fn round_facts(a: &Analysis, pawn: u32) -> Vec<RoundFact> {
                 if c.slot == 9 {
                     f.ult_used = true;
                 }
-                let contact = f.first_contact_s.map(|s| barrier + (s * 1000.0) as u32);
-                if c.slot != 9 && c.time_ms.zip(contact).is_some_and(|(ct, fc)| ct < fc) {
+                if c.slot != 9 && c.time_ms.zip(first_contact_ms).is_some_and(|(ct, fc)| ct < fc) {
                     f.casts_before_contact += 1;
                 }
             }
@@ -638,6 +647,86 @@ fn secs(ms: u32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::Catalog;
+    use crate::fields::{AbilityCast, Change, DamageHit};
+    use crate::game::Game;
+    use crate::game::sample::{export, kill, round};
+    use crate::vrfkit_export::{EventKind, Export};
+
+    /// Teams 1-5 and 6-10 from round 0, then `events` in round 1 (barrier at 100.5 s).
+    fn match_with(players: u32, events: Vec<(u32, EventKind)>) -> Export {
+        let mut ev = vec![round(0, 0)];
+        let mut t = 1000;
+        for i in 1..=5 {
+            for (k, v) in [(i, 5 + i), (i, 5 + i % 5 + 1), (5 + i, i)] {
+                ev.push(kill(t, k, v));
+                t += 1000;
+            }
+        }
+        ev.push(round(100_000, 1));
+        ev.extend(events);
+        let mut ex = export(players, ev);
+        ex.fields.phases.push(Change {
+            time_ms: 100_500,
+            actor: 0,
+            value: 4,
+        });
+        ex
+    }
+
+    fn hit(time_ms: u32, attacker: u32, victim: u32, damage: f64, region: i64) -> DamageHit {
+        DamageHit {
+            time_ms,
+            victim,
+            damager_state: Some(100 + attacker),
+            damage,
+            region: Some(region),
+            ..DamageHit::default()
+        }
+    }
+
+    #[test]
+    fn self_kills_and_team_kills_are_not_opening_duels_or_kills() {
+        // Round 1: 1 falls to their death, 6 kills 2, 3 kills teammate 4.
+        let mut ex = match_with(10, vec![kill(101_000, 1, 1), kill(102_000, 6, 2), kill(104_000, 3, 4)]);
+        // 3's first hit is the round's first contact, 1.049 s after the barrier
+        // (1.0 s once rounded); 3's Q went out at 1.02 s, before it.
+        ex.fields.damage = vec![hit(101_549, 3, 7, 30.0, 0), hit(104_000, 3, 4, 50.0, 1)];
+        ex.fields.casts.push(AbilityCast {
+            player: "p3".into(),
+            slot: 4,
+            round: 1,
+            cast_time_s: 1.02,
+            location_cm: None,
+            seen_ms: 101_520,
+        });
+        let g = Game::new(ex);
+        let catalog = Catalog::builtin();
+        let a = Analysis::new(&g, &catalog);
+        let r = |p: u32| round_facts(&a, p).remove(1);
+
+        assert!(!r(1).first_death, "a fall isn't a lost opening duel");
+        assert!(r(2).first_death);
+        assert_eq!(r(2).team_first_kill, Some(false));
+        assert!(r(6).first_kill);
+        let three = r(3);
+        assert_eq!(three.kills, 0, "a team kill isn't a kill");
+        assert_eq!((three.damage_dealt, three.hits_head, three.hits_body), (30.0, 0, 1));
+        assert_eq!(three.first_contact_s, Some(1.0));
+        assert_eq!(three.casts_before_contact, 1);
+    }
+
+    #[test]
+    fn no_clutch_with_a_player_of_unknown_team() {
+        // Round 1: 2 to 5 die, leaving 1 against all five.
+        let deaths: Vec<_> = (2..=5).map(|v| kill(100_000 + v * 1000, 6, v)).collect();
+        let g = Game::new(match_with(10, deaths.clone()));
+        let catalog = Catalog::builtin();
+        assert_eq!(round_facts(&Analysis::new(&g, &catalog), 1)[1].clutch_vs, Some(5));
+        // An 11th player who never fights and has no positions could be alive on either side.
+        let g = Game::new(match_with(11, deaths));
+        assert_eq!(round_facts(&Analysis::new(&g, &catalog), 1)[1].clutch_vs, None);
+    }
 
     #[test]
     fn buy_types_from_the_loadout_and_spend() {

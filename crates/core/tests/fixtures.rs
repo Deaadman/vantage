@@ -127,6 +127,14 @@ fn corrupt_replay_is_reported_once() {
     let demos = data.join("demos");
     std::fs::create_dir_all(&demos).unwrap();
     std::fs::write(demos.join("corrupt.vrf"), (0u8..=200).collect::<Vec<u8>>()).unwrap();
+    // Scan leaves just-changed replays for later, as they may still be downloading.
+    let an_hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(demos.join("corrupt.vrf"))
+        .unwrap()
+        .set_modified(an_hour_ago)
+        .unwrap();
     let catalog = Catalog::builtin();
     let mut store = Store::open(&data.join("vantage.db")).unwrap();
     let mut opts = ScanOptions {

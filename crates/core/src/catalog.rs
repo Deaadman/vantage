@@ -327,6 +327,9 @@ fn get_json<T: for<'de> Deserialize<'de>>(endpoint: &str) -> Result<T> {
     let url = format!("{API_BASE}/{endpoint}");
     let mut resp = ureq::get(&url)
         .header("User-Agent", concat!("vantage/", env!("CARGO_PKG_VERSION")))
+        .config()
+        .timeout_global(Some(std::time::Duration::from_secs(60)))
+        .build()
         .call()
         .with_context(|| format!("GET {url}"))?;
     let text = resp

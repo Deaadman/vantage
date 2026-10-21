@@ -96,7 +96,7 @@ fn match_review(shift: u32) -> vantage_core::MatchReview {
         let mut d = sample::death(round, "A Rubble");
         d.first_death_of_round = true;
         d.context.casts_last_5s = 0;
-        d.nearest_teammates.clear();
+        d.nearest_teammates[0].dist_m = 30.0;
         d.minimap_uv = Some(uv[k]);
         deaths.push(d);
     }
@@ -381,6 +381,8 @@ fn launch_and_review(shell: &mut Shell<Vantage>, review: ReviewData) -> Vec<(Vec
 #[test]
 #[ignore = "redraws docs/images: run scripts/redraw-docs-images.ps1"]
 fn redraw_docs_images() {
+    // Times as written (UTC), so every machine draws the same pictures.
+    vantage_core::time::set_fixed_offset(Some(0));
     let out_dir = std::env::var_os("DOCS_IMAGES").map(PathBuf::from).unwrap_or_else(|| {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")

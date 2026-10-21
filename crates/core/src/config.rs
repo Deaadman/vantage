@@ -20,6 +20,9 @@ pub struct Config {
     pub auto_update: Option<bool>,
     /// `false` stops the shell watching the replay folder for new downloads.
     pub watch: Option<bool>,
+    /// Whether the terminal has a light background; unset asks the terminal,
+    /// which Windows Terminal can't answer.
+    pub light: Option<bool>,
     /// `true` keeps each raw vrfkit export (about 45 MB a match) after a scan.
     pub keep_raw: Option<bool>,
     /// Your rank, e.g. `Gold 2`, set by you: replays carry no rank.

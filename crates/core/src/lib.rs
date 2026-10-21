@@ -16,6 +16,7 @@ pub mod deaths;
 pub mod export;
 pub mod facts;
 pub mod fields;
+pub mod files;
 pub mod game;
 pub mod habits;
 pub mod install;
