@@ -1,4 +1,4 @@
-//! Agent, map, weapon and season data from valorant-api.com, cached as
+//! Agent, map, weapon, season and game mode data from valorant-api.com, cached as
 //! `catalog.json`. Response shapes were checked against the live API on
 //! 2026-10-20 (game version 13.08).
 //!
@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::agents::BUILTIN_AGENTS;
+use crate::modes::BUILTIN_MODES;
 
 pub const CATALOG_SCHEMA_VERSION: u32 = 2;
 const API_BASE: &str = "https://valorant-api.com/v1";
@@ -28,6 +29,9 @@ pub struct Catalog {
     pub weapons: Vec<Weapon>,
     pub gear: Vec<Gear>,
     pub seasons: Vec<Season>,
+    /// Missing from caches synced before modes were added; the built-in table covers them.
+    #[serde(default)]
+    pub modes: Vec<GameMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,6 +146,13 @@ pub struct Season {
     pub parent_uuid: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameMode {
+    pub name: String,
+    /// Asset folder under `/Game`, e.g. `GameModes/Bomb`; matches replay class paths.
+    pub asset_folder: String,
+}
+
 /// How a catalog was obtained, for one-line status messages.
 pub enum CatalogSource {
     Cache,
@@ -254,6 +265,27 @@ impl Catalog {
     pub fn weapon(&self, uuid: &str) -> Option<&Weapon> {
         self.weapons.iter().find(|w| w.uuid.eq_ignore_ascii_case(uuid))
     }
+
+    /// The mode whose assets live in `folder` (from [`crate::modes::game_state_folder`]):
+    /// [`crate::modes::STANDARD_LABEL`] for the standard mode, else the synced
+    /// name, else the built-in one, else the folder's last part.
+    pub fn mode_name(&self, folder: &str) -> String {
+        if folder.eq_ignore_ascii_case(crate::modes::STANDARD_FOLDER) {
+            return crate::modes::STANDARD_LABEL.to_owned();
+        }
+        self.modes
+            .iter()
+            .find(|m| m.asset_folder.eq_ignore_ascii_case(folder))
+            .map(|m| m.name.as_str())
+            .or_else(|| {
+                BUILTIN_MODES
+                    .iter()
+                    .find(|(f, _)| f.eq_ignore_ascii_case(folder))
+                    .map(|(_, name)| *name)
+            })
+            .unwrap_or_else(|| crate::modes::fallback_name(folder))
+            .to_owned()
+    }
 }
 
 impl MapInfo {
@@ -312,6 +344,7 @@ pub fn fetch() -> Result<Catalog> {
     let weapons: Envelope<Vec<RawWeapon>> = get_json("weapons")?;
     let gear: Envelope<Vec<RawGear>> = get_json("gear")?;
     let seasons: Envelope<Vec<RawSeason>> = get_json("seasons")?;
+    let modes: Envelope<Vec<RawMode>> = get_json("gamemodes")?;
     Ok(Catalog::from_raw(
         Some(crate::time::now_rfc3339()),
         version.data,
@@ -320,6 +353,7 @@ pub fn fetch() -> Result<Catalog> {
         weapons.data,
         gear.data,
         seasons.data,
+        modes.data,
     ))
 }
 
@@ -481,7 +515,15 @@ struct RawSeason {
     parent_uuid: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawMode {
+    display_name: String,
+    asset_path: Option<String>,
+}
+
 impl Catalog {
+    #[allow(clippy::too_many_arguments)]
     fn from_raw(
         fetched_at: Option<String>,
         version: RawVersion,
@@ -490,6 +532,7 @@ impl Catalog {
         weapons: Vec<RawWeapon>,
         gear: Vec<RawGear>,
         seasons: Vec<RawSeason>,
+        modes: Vec<RawMode>,
     ) -> Self {
         Catalog {
             schema_version: CATALOG_SCHEMA_VERSION,
@@ -588,6 +631,15 @@ impl Catalog {
                     parent_uuid: s.parent_uuid.map(|p| p.to_ascii_lowercase()),
                 })
                 .collect(),
+            modes: modes
+                .into_iter()
+                .filter_map(|m| {
+                    Some(GameMode {
+                        asset_folder: asset_folder(m.asset_path.as_deref()?),
+                        name: m.display_name,
+                    })
+                })
+                .collect(),
         }
     }
 }
@@ -655,6 +707,11 @@ mod tests {
         "assetPath":"ShooterGame/Content/Gear/HeavyArmor_PrimaryAsset","shopData":{"cost":1000}}]}"#;
     const SEASONS: &str = r#"{"status":200,"data":[{"uuid":"3737c391-497a-6e82-aeb5-cc9f701f72e2","displayName":"V26",
         "title":null,"type":null,"startTime":"2026-06-24T00:00:00Z","endTime":"2027-01-06T00:00:00Z","parentUuid":null,"assetPath":""}]}"#;
+    const MODES: &str = r#"{"status":200,"data":[
+        {"uuid":"96bd3920-4f36-d026-2b28-c683eb0bcac5","displayName":"Standard","duration":"30 - 40 min",
+         "assetPath":"ShooterGame/Content/GameModes/Bomb/BombGameMode_PrimaryAsset"},
+        {"uuid":"e921d1e6-416b-c31f-1291-74930c330b7b","displayName":"Team Deathmatch","duration":"9 min",
+         "assetPath":"ShooterGame/Content/GameModes/HURM/HURM_PrimaryAsset"}]}"#;
     const VERSION: &str =
         r#"{"status":200,"data":{"manifestId":"D80C","branch":"release-13.08","version":"13.08.00.5698904"}}"#;
 
@@ -674,6 +731,7 @@ mod tests {
             serde_json::from_value::<Envelope<Vec<RawSeason>>>(p(SEASONS))
                 .unwrap()
                 .data,
+            serde_json::from_value::<Envelope<Vec<RawMode>>>(p(MODES)).unwrap().data,
         )
     }
 
@@ -711,6 +769,15 @@ mod tests {
         assert_eq!(c.gear[0].class_prefix.as_deref(), Some("HeavyArmor"));
         let item = crate::items::identify("/Game/Equippables/Guns/Rifles/AK/AssaultRifle_AK.AssaultRifle_AK_C", &c);
         assert_eq!((item.name.as_str(), item.cost), ("Vandal", Some(2900)));
+        assert_eq!(c.mode_name("GameModes/HURM"), "Team Deathmatch");
+        // The API's "Standard" is relabelled with the queues it covers.
+        assert_eq!(c.mode_name("GameModes/Bomb"), "Comp/Unrated/Premier");
+        // Not synced: the built-in table, then the folder's own name.
+        assert_eq!(
+            c.mode_name("GameModes/_Development/Swiftplay_EndOfRoundCredits"),
+            "Swiftplay"
+        );
+        assert_eq!(c.mode_name("GameModes/Brand_New"), "Brand_New");
         // Round trip through the cache format.
         let back: Catalog = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.maps.len(), 2);
@@ -766,6 +833,14 @@ mod tests {
         let mut no_spawns = ascent.clone();
         no_spawns.callouts.clear();
         assert_eq!(no_spawns.attacker_turns(), 0);
+    }
+
+    #[test]
+    fn caches_from_before_modes_still_load() {
+        let mut json: serde_json::Value = serde_json::to_value(Catalog::builtin()).unwrap();
+        json.as_object_mut().unwrap().remove("modes");
+        let c: Catalog = serde_json::from_value(json).unwrap();
+        assert_eq!(c.mode_name("GameModes/Bomb"), "Comp/Unrated/Premier");
     }
 
     #[test]

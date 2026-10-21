@@ -14,6 +14,10 @@ pub struct MatchContext {
     pub match_id: String,
     pub map_url: Option<String>,
     pub map_name: Option<String>,
+    /// Game mode, e.g. `Swiftplay`. Competitive, Unrated and Premier share
+    /// `Comp/Unrated/Premier`: the replay doesn't say which queue it was.
+    #[serde(default)]
+    pub mode: Option<String>,
     pub replay_build: String,
     /// Set when the build is outside, or at the edge of, what vrfkit verified.
     pub build_note: Option<String>,
@@ -116,6 +120,7 @@ impl MatchContext {
             match_id: m.match_id.clone(),
             map_url: m.map_path.clone(),
             map_name: map.map(|mp| mp.name.clone()),
+            mode: game.mode_folder().map(|f| catalog.mode_name(f)),
             replay_build: m.replay_build.clone(),
             build_note,
             played_at: m.timestamp_ticks.map(|t| rfc3339_utc(ue_ticks_to_unix(t))),

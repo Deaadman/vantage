@@ -229,6 +229,8 @@ pub(crate) struct MatchInfo {
     pub about: String,
     /// `Ascent`, for completing `--map`.
     pub map: String,
+    /// `Swiftplay`, for completing `/matches <mode>`.
+    pub mode: Option<String>,
 }
 
 /// Values for the command menu: matches, maps and habits.
@@ -243,6 +245,7 @@ impl Completer for Completions {
             (_, Some("--match")) => self.match_items(word, ""),
             (_, Some("--map")) => self.map_items(word, ""),
             ("focus", None) if args.is_empty() => habit_items(word),
+            ("matches", None) if args.is_empty() => self.mode_items(word),
             // A bare command offers what it is about, then its flags.
             ("review", None) if args.is_empty() && word.is_empty() => self.match_items("", "--match "),
             ("plan", None) if args.is_empty() && word.is_empty() => self.map_items("", "--map "),
@@ -254,25 +257,21 @@ impl Completer for Completions {
 impl Completions {
     /// Maps with stored matches, most played first.
     fn map_items(&self, prefix: &str, value_prefix: &str) -> Vec<Suggestion> {
-        let mut counts: Vec<(String, usize)> = Vec::new();
-        for m in self.matches.iter().filter(|m| m.map != "?") {
-            match counts.iter_mut().find(|(name, _)| *name == m.map) {
-                Some((_, n)) => *n += 1,
-                None => counts.push((m.map.clone(), 1)),
-            }
-        }
-        counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        let prefix = prefix.to_lowercase();
-        counts
+        let maps = self.matches.iter().map(|m| m.map.as_str()).filter(|m| *m != "?");
+        most_played(maps)
             .into_iter()
-            .filter(|(name, _)| name.to_lowercase().starts_with(&prefix))
-            .map(|(name, n)| {
-                Suggestion::new(
-                    format!("{value_prefix}{name}"),
-                    name,
-                    format!("{n} match{}", if n == 1 { "" } else { "es" }),
-                )
-            })
+            .filter(|(name, _)| name.to_lowercase().starts_with(&prefix.to_lowercase()))
+            .map(|(name, n)| Suggestion::new(format!("{value_prefix}{name}"), name, match_count(n)))
+            .collect()
+    }
+
+    /// Modes with stored matches, most played first. What gets typed is one
+    /// short word (`Comp`, `SpikeRush`); the menu shows the full name.
+    fn mode_items(&self, prefix: &str) -> Vec<Suggestion> {
+        most_played(self.matches.iter().filter_map(|m| m.mode.as_deref()))
+            .into_iter()
+            .filter(|(name, _)| crate::mode_fits(name, prefix))
+            .map(|(name, n)| Suggestion::new(crate::mode_word(&name, prefix), name, match_count(n)))
             .collect()
     }
 
@@ -290,6 +289,23 @@ impl Completions {
             })
             .collect()
     }
+}
+
+/// Each name once with how many matches have it, most first.
+fn most_played<'a>(names: impl Iterator<Item = &'a str>) -> Vec<(String, usize)> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for name in names {
+        match counts.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((name.to_owned(), 1)),
+        }
+    }
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    counts
+}
+
+fn match_count(n: usize) -> String {
+    format!("{n} match{}", if n == 1 { "" } else { "es" })
 }
 
 fn habit_items(prefix: &str) -> Vec<Suggestion> {
@@ -928,18 +944,22 @@ fn matches(data_dir: &Path) -> Vec<MatchInfo> {
                 .as_deref()
                 .map(crate::short_when)
                 .unwrap_or_else(|| "?".into());
-            let about = match &m.agent {
+            let mut about = match &m.agent {
                 Some(a) => {
                     let (res, _) = crate::review_view::result_style(m.won, m.lost);
                     format!("{a} · {res} {}–{}", m.won, m.lost)
                 }
                 None => "you aren't in this one".into(),
             };
+            if let Some(mode) = &m.mode {
+                about.push_str(&format!(" · {mode}"));
+            }
             MatchInfo {
                 id: m.id,
                 label: format!("{when}  {map:<6}"),
                 about,
                 map,
+                mode: m.mode,
             }
         })
         .collect()
@@ -1061,17 +1081,18 @@ mod tests {
     #[test]
     fn completes_matches_maps_and_habits() {
         let cmds = CommandInfo::from_clap(&Cli::command());
-        let m = |id: &str, label: &str, map: &str| MatchInfo {
+        let m = |id: &str, label: &str, map: &str, mode: &str| MatchInfo {
             id: id.into(),
             label: label.into(),
             about: "Sova · won 13–8".into(),
             map: map.into(),
+            mode: Some(mode.into()),
         };
         let completions = Completions {
             matches: vec![
-                m("aaaa1111-0000", "2026-10-19  Ascent", "Ascent"),
-                m("bbbb2222-0000", "2026-10-18  Lotus", "Lotus"),
-                m("cccc3333-0000", "2026-10-17  Lotus", "Lotus"),
+                m("aaaa1111-0000", "2026-10-19  Ascent", "Ascent", "Spike Rush"),
+                m("bbbb2222-0000", "2026-10-18  Lotus", "Lotus", "Comp/Unrated/Premier"),
+                m("cccc3333-0000", "2026-10-17  Lotus", "Lotus", "Comp/Unrated/Premier"),
             ],
         };
         let ctx = Context {
@@ -1090,6 +1111,12 @@ mod tests {
         assert_eq!(suggest("/plan ", &ctx).items[0].description, "2 matches");
         assert_eq!(values("/plan --map lo"), ["Lotus"]);
         assert_eq!(values("/review --match b"), ["bbbb2222"]);
+        // `/matches` offers the modes played, most first, as one short word each, then its flag.
+        assert_eq!(values("/matches "), ["Comp", "SpikeRush", "--all"]);
+        assert_eq!(suggest("/matches ", &ctx).items[0].label, "Comp/Unrated/Premier");
+        assert_eq!(values("/matches sp"), ["SpikeRush"]);
+        assert_eq!(values("/matches prem"), ["Premier"]);
+        assert_eq!(values("/matches unr"), ["Unrated"]);
         assert!(values("/focus ").contains(&"untraded".to_owned()));
         assert!(values("/focus unt").iter().all(|v| v.starts_with("unt")));
     }

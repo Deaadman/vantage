@@ -15,7 +15,7 @@ Type `/` to see the commands. Keep typing to filter them, and press Tab to compl
 | `/focus` | Pick one habit to work on. |
 | `/plan` | A game plan for one map. See [Map plans and your rank](plan-and-rank.md). |
 | `/rank` | What wins games at your rank, and how you compare. |
-| `/matches` | Your matches, newest first. Add `--all` for more than 10. |
+| `/matches` | Your matches, newest first, with each one's mode. Add `--all` for more than 10. Add a mode to see only that mode, e.g. `/matches swiftplay` or `/matches comp`. Competitive, Unrated and Premier share the label Comp/Unrated/Premier, because a replay doesn't record its queue, so `comp`, `unrated` and `premier` all show those matches. |
 | `/scan` | Look for new replays now. Add `--retry-failed` to try failed replays again. |
 | `/settings` | Your rank, folders, AI review and other settings. See [Settings and updates](settings.md). |
 | `/logs` | Open the folder of session logs, to attach one to a bug report. |
@@ -48,6 +48,7 @@ Every command also works straight from the terminal, without the `/`. For exampl
 vantage review
 vantage plan --map Lotus
 vantage matches --all
+vantage matches swiftplay
 ```
 
 `vantage review` and `vantage plan` print as text, so you can save or share them.

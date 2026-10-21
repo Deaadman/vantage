@@ -78,11 +78,13 @@ enum Command {
     },
     /// What wins games at your rank, and how you compare
     Rank,
-    /// Your matches, newest first
+    /// Your matches and their modes, newest first
     Matches {
         /// Show every match, not just the newest 10
         #[arg(long)]
         all: bool,
+        /// Only one mode, e.g. comp, unrated, premier, swiftplay or spike
+        mode: Option<String>,
     },
     /// Look for new replays now
     Scan {
@@ -230,7 +232,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
                 outln!("  - {t}");
             }
         }
-        Command::Matches { all } => print_matches(&data_dir, all)?,
+        Command::Matches { all, mode } => print_matches(&data_dir, all, mode.as_deref())?,
         Command::Scan {
             demos_dir,
             keep_raw,
@@ -848,12 +850,27 @@ pub(crate) fn my_matches(data_dir: &Path) -> Vec<MyMatch> {
     Store::open(&db).and_then(|s| s.my_matches(&me)).unwrap_or_default()
 }
 
-/// `/matches`: the newest matches under a heading for their day.
-fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
-    let matches = my_matches(data_dir);
+/// `/matches`: the newest matches under a heading for their day, each with
+/// its mode. `mode` keeps the matches it fits (see [`mode_fits`]).
+fn print_matches(data_dir: &Path, all: bool, mode: Option<&str>) -> Result<()> {
+    let mut matches = my_matches(data_dir);
     if matches.is_empty() {
         outln!("No matches yet. Download one in the client and it shows up here.");
         return Ok(());
+    }
+    if let Some(want) = mode.map(str::trim) {
+        let mut played: Vec<String> = matches.iter().filter_map(|m| m.mode.clone()).collect();
+        played.sort();
+        played.dedup();
+        matches.retain(|m| m.mode.as_deref().is_some_and(|x| mode_fits(x, want)));
+        if matches.is_empty() {
+            if played.is_empty() {
+                outln!("No {want} matches.");
+            } else {
+                outln!("No {want} matches. You've played {}.", played.join(", "));
+            }
+            return Ok(());
+        }
     }
     let shown = if all {
         matches.len()
@@ -887,7 +904,11 @@ fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
         if let Some(agent) = &m.agent {
             let (res, color) = review_view::result_style(m.won, m.lost);
             row.push((Kind::Out, format!("{agent:<10}")));
-            row.push((Kind::Paint(color, true), format!("{res} {}–{}", m.won, m.lost)));
+            let result = format!("{res} {}–{}", m.won, m.lost);
+            row.push((Kind::Paint(color, true), format!("{result:<10}")));
+        }
+        if let Some(mode) = &m.mode {
+            row.push((Kind::Dim, format!("  {mode}")));
         }
         out::row(row);
     }
@@ -903,6 +924,36 @@ fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// A mode name as `/matches <mode>` compares it: lower case, letters and
+/// digits only, so `spikerush`, `SpikeRush` and `"Spike Rush"` are the same.
+pub(crate) fn mode_key(mode: &str) -> String {
+    mode.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Whether `/matches want` picks `mode`: `want` starts the name, or one of
+/// its `/` parts, so `comp`, `unrated` and `premier` find `Comp/Unrated/Premier`.
+pub(crate) fn mode_fits(mode: &str, want: &str) -> bool {
+    let want = mode_key(want);
+    std::iter::once(mode)
+        .chain(mode.split('/'))
+        .any(|part| mode_key(part).starts_with(&want))
+}
+
+/// The one word to type for `mode`: the `/` part `typed` starts (else the
+/// first), without spaces. `Comp/Unrated/Premier` -> `Comp`, or `Premier`
+/// after `pre`; `Spike Rush` -> `SpikeRush`.
+pub(crate) fn mode_word(mode: &str, typed: &str) -> String {
+    let typed = mode_key(typed);
+    let part = mode
+        .split('/')
+        .find(|part| mode_key(part).starts_with(&typed))
+        .unwrap_or_else(|| mode.split('/').next().unwrap_or(mode));
+    part.replace(' ', "")
 }
 
 /// `vantage review` outside the shell: the Debrief as text.
