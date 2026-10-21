@@ -90,9 +90,9 @@ enum UpdateNote {
 impl UpdateNote {
     fn text(self) -> (Color, &'static str) {
         match self {
-            UpdateNote::Available => (YELLOW, "Update available! /update installs it"),
+            UpdateNote::Available => (YELLOW, "Update available! /update to install it"),
             UpdateNote::Installed => (ACCENT, "Update available! Restart to apply"),
-            UpdateNote::Failed => (YELLOW, "Update failed · /update tries again"),
+            UpdateNote::Failed => (RED, "Update failed · /update to try again"),
         }
     }
 }
@@ -451,10 +451,10 @@ impl App {
             if Config::load(&dir).is_ok_and(|c| c.me.is_none()) {
                 detect_me(&dir);
             }
-            // The newest stored match gets the focus check.
+            // The newest stored match gets a line of its own.
             let newest = crate::my_matches(&dir).into_iter().find(|m| stored.contains(&m.id));
             if let Some(m) = newest {
-                crate::focus_check(&dir, &m.id);
+                crate::new_match(&dir, &m.id);
             }
             Flow::Continue
         });
@@ -517,6 +517,10 @@ impl App {
                     )),
                 }
                 self.refresh();
+                dirty = true;
+            }
+            // A list the settings panel is fetching.
+            if self.settings.as_mut().is_some_and(SettingsPanel::busy) {
                 dirty = true;
             }
             if self.job.is_none() && self.watch.last_poll.elapsed() >= WATCH_EVERY {
@@ -1106,6 +1110,9 @@ fn notices(data_dir: &Path, update: bool) -> Vec<(Color, String)> {
     if Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()).is_err() {
         out.push((RED, "Replay reader not installed · /update installs it".to_owned()));
     }
+    if vantage_core::clips::ffmpeg().is_none() {
+        out.push((RED, "Screenshot tool not installed · /update installs it".to_owned()));
+    }
     if !update
         && let Ok(c) = Catalog::load(&paths::catalog_path(data_dir))
         && let Some(v) = c.game_version.as_deref().filter(|v| check_game_version(v).is_some())
@@ -1115,9 +1122,6 @@ fn notices(data_dir: &Path, update: bool) -> Vec<(Color, String)> {
             YELLOW,
             format!("VALORANT v{patch} isn't supported · wait for an update"),
         ));
-    }
-    if !cfg.demos_dir().is_some_and(|d| d.is_dir()) {
-        out.push((YELLOW, "No replays found".to_owned()));
     }
     out
 }
@@ -1161,9 +1165,7 @@ fn launch(data_dir: &Path) {
         }
     }
     let cfg = Config::load(data_dir).unwrap_or_default();
-    if let Err(e) = Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()) {
-        outln!("The replay reader isn't set up yet: {e:#}");
-        dim("/update installs it, then /scan reads your replays.");
+    if Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()).is_err() {
         return;
     }
     match cfg.demos_dir() {
@@ -1185,7 +1187,6 @@ fn launch(data_dir: &Path) {
     if cfg.rank.is_some() && !crate::my_matches(data_dir).is_empty() {
         outln!();
         crate::focus_line(data_dir);
-        dim("  /review for your newest match · /plan before you queue");
     }
 }
 
@@ -1487,14 +1488,17 @@ mod tests {
         let msgs = || {
             vec![
                 (ACCENT, "Update available! Restart to apply".to_owned()),
-                (YELLOW, "No replays found".to_owned()),
+                (
+                    YELLOW,
+                    "VALORANT v13.10 isn't supported · wait for an update".to_owned(),
+                ),
             ]
             .into_iter()
         };
         let wide = text(&status_right(Row::new(), msgs(), 140));
-        assert!(wide.contains("Restart to apply") && wide.contains("No replays"));
+        assert!(wide.contains("Restart to apply") && wide.contains("isn't supported"));
         let narrow = text(&status_right(Row::new(), msgs(), 45));
-        assert!(narrow.contains("Restart to apply") && !narrow.contains("No replays"));
+        assert!(narrow.contains("Restart to apply") && !narrow.contains("isn't supported"));
     }
 
     #[test]

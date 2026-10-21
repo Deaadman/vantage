@@ -269,6 +269,37 @@ impl MapInfo {
             .map(|c| (c, (c.pos_cm[0] - pos_cm[0]).hypot(c.pos_cm[1] - pos_cm[1])))
             .min_by(|a, b| a.1.total_cmp(&b.1))
     }
+
+    /// Quarter turns clockwise that put the attackers' spawn at the bottom of
+    /// the minimap, so the map reads the way attackers walk it. valorant-api.com's
+    /// images face different ways (Ascent's attackers start on the right, Lotus's
+    /// at the bottom); 0 when the map has no spawn callouts.
+    pub fn attacker_turns(&self) -> u8 {
+        let spawn = |side: &str| {
+            self.callouts
+                .iter()
+                .find(|c| c.super_region == side && c.region == "Spawn")
+                .and_then(|c| self.uv(c.pos_cm))
+        };
+        let (Some(attack), Some(defense)) = (spawn("Attacker Side"), spawn("Defender Side")) else {
+            return 0;
+        };
+        // From the defenders' spawn to the attackers': the turn that points it most downward.
+        let mut dir = [attack[0] - defense[0], attack[1] - defense[1]];
+        let mut best = (0, dir[1]);
+        for k in 1..4 {
+            dir = [-dir[1], dir[0]];
+            if dir[1] > best.1 {
+                best = (k, dir[1]);
+            }
+        }
+        best.0
+    }
+}
+
+/// A minimap position after `turns` quarter turns clockwise.
+pub fn turn_uv(uv: [f64; 2], turns: u8) -> [f64; 2] {
+    (0..turns % 4).fold(uv, |[u, v], _| [1.0 - v, u])
 }
 
 // ---------------------------------------------------------------- fetching
@@ -694,6 +725,44 @@ mod tests {
         let (callout, d) = lotus.nearest_callout([7944.0, 5708.0, 402.0]).unwrap();
         assert_eq!(callout.label(), "A Site");
         assert!(d < 300.0);
+    }
+
+    #[test]
+    fn maps_turn_so_attackers_start_at_the_bottom() {
+        // The two spawns as valorant-api.com places them on Ascent's minimap
+        // (attackers right, defenders left) and on Lotus's (attackers already at the bottom).
+        let map = |attack: [f64; 2], defense: [f64; 2]| MapInfo {
+            uuid: String::new(),
+            name: String::new(),
+            map_url: String::new(),
+            minimap_image: None,
+            // The identity, with the axes crossed: u = y, v = x.
+            projection: Some(Projection {
+                x_multiplier: 1.0,
+                y_multiplier: 1.0,
+                x_scalar_to_add: 0.0,
+                y_scalar_to_add: 0.0,
+            }),
+            callouts: [("Attacker Side", attack), ("Defender Side", defense)]
+                .into_iter()
+                .map(|(side, [u, v])| Callout {
+                    region: "Spawn".into(),
+                    super_region: side.into(),
+                    pos_cm: [v, u, 0.0],
+                })
+                .collect(),
+        };
+        let ascent = map([0.82, 0.57], [0.13, 0.43]);
+        assert_eq!(ascent.attacker_turns(), 1);
+        let [_, v] = turn_uv([0.82, 0.57], ascent.attacker_turns());
+        assert!(v > 0.75, "attackers end up at the bottom");
+        assert_eq!(map([0.51, 0.82], [0.58, 0.22]).attacker_turns(), 0);
+        assert_eq!(map([0.47, 0.13], [0.5, 0.9]).attacker_turns(), 2);
+        assert_eq!(map([0.14, 0.59], [0.97, 0.57]).attacker_turns(), 3);
+        assert_eq!(turn_uv([0.2, 0.1], 4), [0.2, 0.1]);
+        let mut no_spawns = ascent.clone();
+        no_spawns.callouts.clear();
+        assert_eq!(no_spawns.attacker_turns(), 0);
     }
 
     #[test]

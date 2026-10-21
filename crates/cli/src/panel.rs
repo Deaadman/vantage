@@ -260,13 +260,33 @@ pub fn rank_color(rank: Option<&str>) -> Color {
 
 /// The minimap in half blocks, `rows_h` rows tall and twice that many
 /// columns, with marks on it. Each cell is one pixel wide and two tall.
+/// It's turned so the attackers' spawn is at the bottom.
 pub struct MapCells {
     cells: Vec<Vec<(Style, String)>>,
     n: usize,
+    /// Quarter turns clockwise from the image, for placing marks.
+    turns: u8,
+}
+
+/// An `n`×`n` image of pixels turned `turns` quarter turns clockwise.
+fn turn_pixels(px: &[[u8; 4]], n: usize, turns: u8) -> Vec<[u8; 4]> {
+    let mut out = px.to_vec();
+    for _ in 0..turns % 4 {
+        let src = out.clone();
+        for y in 0..n {
+            for x in 0..n {
+                // The pixel turned to (x, y) came from (y, n - 1 - x).
+                out[y * n + x] = src[(n - 1 - x) * n + y];
+            }
+        }
+    }
+    out
 }
 
 impl MapCells {
     pub fn new(px: &[[u8; 4]], n: usize, map: Option<&MapInfo>) -> Self {
+        let turns = map.map_or(0, MapInfo::attacker_turns);
+        let px = &turn_pixels(px, n, turns);
         let rows_h = n / 2;
         let opaque = |p: [u8; 4]| p[3] > 60;
         let dim = |p: [u8; 4]| Color::Rgb {
@@ -296,7 +316,7 @@ impl MapCells {
                     .collect()
             })
             .collect();
-        let mut m = MapCells { cells, n };
+        let mut m = MapCells { cells, n, turns };
         // Site letters for orientation.
         if let Some(map) = map
             && let Some(p) = map.projection
@@ -309,7 +329,9 @@ impl MapCells {
         m
     }
 
+    /// `ch` at a minimap position (`uv` on the image as it comes, before turning).
     pub fn mark(&mut self, uv: [f64; 2], fg: Color, ch: &str) {
+        let uv = vantage_core::catalog::turn_uv(uv, self.turns);
         let (c, r) = ((uv[0] * self.n as f64) as isize, (uv[1] * self.n as f64 / 2.0) as isize);
         if c < 0 || r < 0 || c as usize >= self.n || r as usize >= self.cells.len() {
             return;
@@ -368,4 +390,27 @@ impl MapCache {
 /// Map rows for a body `h` tall beside a legend `legend_w` wide.
 pub fn map_rows_h(w: usize, h: usize, legend_w: usize) -> usize {
     h.min(w.saturating_sub(legend_w + 8) / 2).max(4)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marks_turn_with_the_map() {
+        // One lit pixel on a 4x4 map, at column 3, row 0 (top right).
+        let n = 4;
+        let mut px = vec![[0, 0, 0, 0]; n * n];
+        px[3] = [255, 255, 255, 255];
+        for turns in 0..4 {
+            let turned = turn_pixels(&px, n, turns);
+            let lit = turned.iter().position(|p| p[3] == 255).unwrap();
+            let [u, v] = vantage_core::catalog::turn_uv([3.5 / 4.0, 0.5 / 4.0], turns);
+            assert_eq!(
+                (lit % n, lit / n),
+                ((u * n as f64) as usize, (v * n as f64) as usize),
+                "{turns} turns"
+            );
+        }
+    }
 }

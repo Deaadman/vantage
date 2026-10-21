@@ -109,6 +109,45 @@ pub fn ensure_vrfkit(layout: &Layout) -> Result<bool> {
     result.map(|()| true)
 }
 
+/// The winget package install.ps1 and `/update` install ffmpeg from.
+pub const FFMPEG_PACKAGE: &str = "Gyan.FFmpeg";
+
+/// Installs ffmpeg with winget unless it is already found. True when it installed.
+pub fn ensure_ffmpeg() -> Result<bool> {
+    if crate::clips::ffmpeg().is_some() {
+        return Ok(false);
+    }
+    let mut cmd = std::process::Command::new("winget");
+    cmd.args([
+        "install",
+        "--id",
+        FFMPEG_PACKAGE,
+        "--exact",
+        "--silent",
+        "--accept-source-agreements",
+        "--accept-package-agreements",
+    ]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: winget's progress would draw over the shell.
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd
+        .output()
+        .context("couldn't run winget to install ffmpeg; install it with `winget install Gyan.FFmpeg`")?;
+    if !out.status.success() || crate::clips::ffmpeg().is_none() {
+        let said = String::from_utf8_lossy(&out.stdout);
+        let last = said
+            .lines()
+            .map(str::trim)
+            .rfind(|l| !l.is_empty())
+            .unwrap_or("no output");
+        bail!("winget couldn't install ffmpeg ({last})");
+    }
+    Ok(true)
+}
+
 /// Makes `bin\vantage.exe` a copy of `src`. A launcher that is running
 /// cannot be overwritten, so it is renamed aside first.
 fn place_launcher(layout: &Layout, src: &Path) -> Result<()> {

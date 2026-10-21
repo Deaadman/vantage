@@ -4,8 +4,9 @@
 #
 # Downloads the release's vantage.exe, checks it against the release
 # manifest, and runs `vantage install`, which copies it to
-# %LOCALAPPDATA%\vantage and fetches the vrfkit release it pins. The bin
-# folder is added to your user PATH. After that Vantage updates itself.
+# %LOCALAPPDATA%\vantage and fetches the vrfkit release it pins. ffmpeg,
+# which takes the screenshots, comes from winget if it isn't installed. The
+# bin folder is added to your user PATH. After that Vantage updates itself.
 #
 # Set VANTAGE_VERSION to a release tag (for example v0.1.0) to install that
 # release instead of the latest.
@@ -68,6 +69,19 @@ try {
     # Vantage copies itself into place and fetches vrfkit.
     & $download install
     if ($LASTEXITCODE -ne 0) { throw 'vantage install failed' }
+
+    # ffmpeg takes the screenshots of your deaths from your clips. Without it
+    # Vantage still works, and its status bar says /update installs it.
+    $wingetLinks = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\ffmpeg.exe'
+    if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue) -and -not (Test-Path $wingetLinks)) {
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Host '  Installing ffmpeg for screenshots (winget)'
+            winget install --id Gyan.FFmpeg --exact --silent --accept-source-agreements --accept-package-agreements | Out-Null
+            if ($LASTEXITCODE -ne 0) { Write-Host '  ffmpeg could not be installed; /update tries again' }
+        } else {
+            Write-Host '  winget was not found, so ffmpeg was not installed; /update tries again'
+        }
+    }
 
     Write-Host ''
     Write-Host 'Run `vantage` to start. Open a new terminal first if it is not found.'

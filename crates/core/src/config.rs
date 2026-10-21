@@ -24,7 +24,7 @@ pub struct Config {
     pub keep_raw: Option<bool>,
     /// Your rank, e.g. `Gold 2`, set by you: replays carry no rank.
     pub rank: Option<String>,
-    /// The habit every new match checks first, by slug (see `habits`).
+    /// The habit every debrief checks, by slug (see `habits`).
     pub focus: Option<String>,
     /// Where your clip app saves VALORANT clips.
     pub clips_dir: Option<PathBuf>,

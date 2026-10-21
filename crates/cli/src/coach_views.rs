@@ -188,7 +188,9 @@ impl PlanPanel {
         if let Some(r) = rank {
             let adv = ranks::advice(ranks::band(r));
             b.push(vec![]);
-            b.push(heading(&format!("At {}", adv.label), None));
+            let mut at: Row = vec![(Style::default().bold(), "  At ".into())];
+            at.extend(ranks_in_colour(adv.label, Style::default().bold()));
+            b.push(at);
             for (t, why) in adv.wins.iter().take(3) {
                 b.extend(bullet("•", ACCENT, &format!("{t}. {why}"), w));
             }
@@ -275,6 +277,9 @@ fn side(p: &SidePlan, attack: bool, w: usize) -> Vec<Row> {
 
 // -------------------------------------------------------------- /habits
 
+/// The habit names' column.
+const NAME_W: usize = 40;
+
 pub struct HabitsPanel {
     progress: Vec<Progress>,
     focus: &'static str,
@@ -319,10 +324,7 @@ impl HabitsPanel {
             KeyCode::Enter => {
                 if let Some(p) = self.progress.get(self.sel) {
                     self.focus = p.habit.slug;
-                    self.flash = Some(format!(
-                        "{} is now your focus. Every new match checks it first.",
-                        p.habit.name
-                    ));
+                    self.flash = Some(format!("{} is now your focus. Every debrief checks it.", p.habit.name));
                     return CoachAction::Focus(p.habit.slug);
                 }
             }
@@ -343,19 +345,22 @@ impl HabitsPanel {
             Style::fg(GREY),
             format!(
                 "    {}{}{}lately",
-                pad("habit", 32),
+                pad("habit", NAME_W),
                 pad(&format!("last {n}"), 10),
                 pad("now", 20)
             ),
         )]];
         for (i, p) in self.progress.iter().enumerate() {
+            if i == 0 || self.progress[i - 1].habit.group != p.habit.group {
+                b.push(heading(p.habit.group, Some(GREY)));
+            }
             let on = i == self.sel;
             let c = trend_color(p.trend);
             let base = if on { Style::fg(ACCENT) } else { Style::default() };
             let mut row: Row = vec![
                 (
                     base,
-                    format!("{}{}", if on { "  ❯ " } else { "    " }, pad(p.habit.name, 32)),
+                    format!("{}{}", if on { "  ❯ " } else { "    " }, pad(p.habit.name, NAME_W)),
                 ),
                 (Style::fg(c), pad(&spark(&p.values), 10)),
                 (base, pad(&p.now, 20)),
@@ -369,10 +374,7 @@ impl HabitsPanel {
         if let Some(p) = self.progress.get(self.sel) {
             b.push(vec![]);
             b.push(rule_line(w));
-            b.push(vec![
-                (Style::default().bold(), format!("    {}", p.habit.name)),
-                (Style::fg(GREY), format!("  · {} lately", p.trend.lately())),
-            ]);
+            b.push(vec![]);
             b.extend(field("What it is", p.habit.what, w, Style::default()));
             b.extend(field("Why it matters", p.habit.why, w, Style::default()));
             b.extend(field("Practise", p.habit.drill, w, Style::fg(GREEN)));
@@ -390,6 +392,25 @@ impl HabitsPanel {
             "↑↓ select · Enter: make it your focus · Esc closes · better = your last 3 matches beat the ones before",
         )
     }
+}
+
+/// `Gold and Platinum` with each rank in its own colour.
+fn ranks_in_colour(text: &str, base: Style) -> Row {
+    text.split_inclusive(' ')
+        .map(|word| {
+            let tier = word.trim_end();
+            match ranks::colour(tier) {
+                Some(c) => (
+                    Style {
+                        fg: Some(crate::panel::rgb(c)),
+                        ..base
+                    },
+                    word.to_owned(),
+                ),
+                None => (base, word.to_owned()),
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------- /rank
@@ -492,7 +513,10 @@ impl RankPanel {
                     }
                     b.push(vec![]);
                 }
-                b.push(heading(&format!("To reach {next}"), None));
+                b.push(vec![
+                    (Style::default().bold(), "  To reach ".into()),
+                    (Style::fg(rank_color(Some(&next))).bold(), next.clone()),
+                ]);
                 let text = match band {
                     Band::Low => "Work on stopping before you shoot and on keeping your crosshair at head height, and the first deaths will drop.".to_owned(),
                     Band::Mid => format!(

@@ -115,6 +115,9 @@ fn walk(dir: &Path, depth: usize, only_valorant: bool, out: &mut Vec<Clip>) {
 pub struct Matched {
     pub path: PathBuf,
     pub before_end_s: f64,
+    /// How long the clip is, from an MP4 or MOV header.
+    pub length_s: Option<f64>,
+    pub bytes: Option<u64>,
 }
 
 /// Unix seconds of each death: `played_at` (RFC 3339) plus the match time.
@@ -139,9 +142,64 @@ pub fn match_deaths(deaths_unix: &[f64], clips: &[Clip]) -> Vec<Option<Matched>>
             Some(Matched {
                 path: c.path.clone(),
                 before_end_s: c.saved_unix - t,
+                length_s: mp4_length(&c.path),
+                bytes: std::fs::metadata(&c.path).ok().map(|m| m.len()),
             })
         })
         .collect()
+}
+
+/// A clip's length from its `moov/mvhd` box (MP4 and MOV; other formats give `None`).
+pub fn mp4_length(path: &Path) -> Option<f64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let end = f.metadata().ok()?.len();
+    let (moov, moov_len) = find_box(&mut f, 0, end, b"moov")?;
+    let (mvhd, _) = find_box(&mut f, moov, moov + moov_len, b"mvhd")?;
+    f.seek(SeekFrom::Start(mvhd)).ok()?;
+    let mut b = [0u8; 32];
+    f.read_exact(&mut b).ok()?;
+    // Version 1 has 64-bit times: version and flags, created, modified, then the scale and duration.
+    let (scale, duration) = if b[0] == 1 {
+        (
+            u32::from_be_bytes(b[20..24].try_into().ok()?),
+            u64::from_be_bytes(b[24..32].try_into().ok()?),
+        )
+    } else {
+        (
+            u32::from_be_bytes(b[12..16].try_into().ok()?),
+            u64::from(u32::from_be_bytes(b[16..20].try_into().ok()?)),
+        )
+    };
+    (scale > 0).then(|| duration as f64 / f64::from(scale))
+}
+
+/// The first `kind` box between `start` and `stop`: its body's offset and length.
+fn find_box(f: &mut std::fs::File, start: u64, stop: u64, kind: &[u8; 4]) -> Option<(u64, u64)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut at = start;
+    while at + 8 <= stop {
+        f.seek(SeekFrom::Start(at)).ok()?;
+        let mut head = [0u8; 16];
+        f.read_exact(&mut head[..8]).ok()?;
+        let mut size = u64::from(u32::from_be_bytes(head[..4].try_into().ok()?));
+        let mut body = at + 8;
+        if size == 1 {
+            f.read_exact(&mut head[8..16]).ok()?;
+            size = u64::from_be_bytes(head[8..16].try_into().ok()?);
+            body += 8;
+        } else if size == 0 {
+            size = stop - at;
+        }
+        if size < body - at {
+            return None;
+        }
+        if &head[4..8] == kind {
+            return Some((body, at + size - body));
+        }
+        at += size;
+    }
+    None
 }
 
 /// `2026-10-19T21:04:11Z` to unix seconds.
@@ -201,12 +259,17 @@ impl ShotStyle {
 /// Seconds before the death of each moment taken.
 const MOMENTS_S: [f64; 3] = [3.0, 1.0, 0.0];
 
-/// `ffmpeg.exe` on PATH or in `%LOCALAPPDATA%\vantage\ffmpeg`.
+/// `ffmpeg.exe` on PATH, where winget links it, or in `%LOCALAPPDATA%\vantage\ffmpeg`.
+/// winget's links folder is checked by name: a PATH change only reaches
+/// terminals opened after the install.
 pub fn ffmpeg() -> Option<PathBuf> {
     let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        dirs.push(PathBuf::from(local).join("Microsoft").join("WinGet").join("Links"));
+    }
     if let Ok(root) = crate::paths::install_root() {
         dirs.push(root.join("ffmpeg"));
         dirs.push(root.join("ffmpeg").join("bin"));

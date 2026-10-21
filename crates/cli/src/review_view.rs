@@ -1,7 +1,7 @@
 //! The `/review` panel, drawn over the whole screen until Esc: the debrief
-//! of one match in plain English. Tabs: Debrief, Fixes, Moments, Rounds,
-//! Map, then Clips and Screenshots (your clip app's clips matched to your
-//! deaths) and the optional AI review. Rounds count from 1, as in the game.
+//! of one match in plain English. Tabs: Debrief, Fixes, Map, then Clips and
+//! Screenshots (your clip app's clips matched to your deaths) and the
+//! optional AI review. Rounds count from 1, as in the game.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -9,10 +9,10 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::Color;
 use vantage_core::ai::{self, Saved};
-use vantage_core::analysis::Side;
 use vantage_core::coach::{list_and, plural};
 use vantage_core::habits::{self, Check};
 
+use crate::coach_views::trend_color;
 use crate::panel::{
     Item, MapCache, bullet, field, frame, heading, is_close, list_rows, map_rows_h, pad, para, rule_line, scrolled,
     step, step_of, steps, tab_key,
@@ -21,19 +21,12 @@ use crate::shell::{ACCENT, GREY, RED, Row, Style, YELLOW, spike, wrap};
 use crate::{ClipFolder, Clips, ReviewData};
 
 pub const GREEN: Color = Color::Rgb { r: 120, g: 200, b: 120 };
-const TABS: [&str; 8] = [
-    "Debrief",
-    "Fixes",
-    "Moments",
-    "Rounds",
-    "Map",
-    "Clips",
-    "Screenshots",
-    "AI",
-];
-const T_CLIPS: usize = 5;
-const T_SHOTS: usize = 6;
-const T_AI: usize = 7;
+const TABS: [&str; 6] = ["Debrief", "Fixes", "Map", "Clips", "Screenshots", "AI"];
+const T_FIXES: usize = 1;
+const T_MAP: usize = 2;
+const T_CLIPS: usize = 3;
+const T_SHOTS: usize = 4;
+const T_AI: usize = 5;
 const LEGEND_W: usize = 44;
 
 pub enum ReviewAction {
@@ -50,7 +43,6 @@ pub struct ReviewPanel {
     tab: usize,
     sel: usize,
     scroll: usize,
-    round: usize,
     death: usize,
     clip_pick: usize,
     /// The AI tab shows the format and the raw answer.
@@ -68,7 +60,6 @@ impl ReviewPanel {
             tab: 0,
             sel: 0,
             scroll: 0,
-            round: 0,
             death: 0,
             clip_pick: 0,
             json: false,
@@ -144,7 +135,7 @@ impl ReviewPanel {
             return ReviewAction::None;
         }
         if self.tab == T_AI {
-            if ch == Some('a') {
+            if is_run(&key) {
                 return self.run_ai();
             }
             if ch == Some('j') && self.data.ai.is_some() {
@@ -158,40 +149,30 @@ impl ReviewPanel {
             }
         }
         let n = match self.tab {
-            0 => d.fixes.len().min(3),
-            1 => d.fixes.len(),
-            2 => d.moments.len(),
-            3 => d.rounds.len(),
-            4 | T_CLIPS => d.deaths.len(),
+            T_FIXES => d.fixes.len(),
+            T_MAP | T_CLIPS => d.deaths.len(),
             T_AI => self.data.ai.as_ref().map_or(0, |a| a.output.findings.len()),
             _ => 0,
         };
         let by = step_of(&key);
         if by != 0 {
             match self.tab {
-                3 => step(&mut self.round, by, n),
-                4 => step(&mut self.death, by, n),
+                0 => self.scroll = (self.scroll as isize + by).max(0) as usize,
+                T_MAP => step(&mut self.death, by, n),
                 _ => step(&mut self.sel, by, n),
             }
         } else if key.code == KeyCode::Enter {
             match self.tab {
-                0 => self.tab = 1,
-                1 => {
-                    if let Some(r) = d.fixes.get(self.sel).and_then(|f| f.rounds.first()) {
-                        self.round = d.rounds.iter().position(|x| x.round == *r).unwrap_or(0);
-                        self.tab = 3;
-                    }
-                }
-                2 => {
-                    if let Some(m) = d.moments.get(self.sel) {
-                        self.round = d.rounds.iter().position(|x| x.round == m.round).unwrap_or(0);
-                        self.tab = 3;
-                    }
-                }
-                3 => {
-                    if let Some(i) = d.rounds.get(self.round).and_then(|r| r.death) {
+                0 => self.tab = T_FIXES,
+                T_FIXES => {
+                    // The fix's first death, on the map.
+                    if let Some(i) = d
+                        .fixes
+                        .get(self.sel)
+                        .and_then(|f| d.deaths.iter().position(|x| f.rounds.contains(&x.round)))
+                    {
                         self.death = i;
-                        self.tab = 4;
+                        self.tab = T_MAP;
                     }
                 }
                 T_CLIPS | T_SHOTS => {
@@ -249,28 +230,24 @@ impl ReviewPanel {
         let body_h = h.saturating_sub(7).max(1);
         let body = match self.tab {
             0 => self.debrief(w, body_h),
-            1 => self.fixes(w, body_h),
-            2 => self.moments(w, body_h),
-            3 => self.rounds(w, body_h),
-            4 => self.map(w, body_h),
+            T_FIXES => self.fixes(w, body_h),
+            T_MAP => self.map(w, body_h),
             T_CLIPS => self.clips(w, body_h),
             T_SHOTS => self.shots(w, body_h),
             _ => self.ai_tab(w, body_h),
         };
         let clips_set = matches!(self.data.clips, Clips::Set { .. });
         let what = match self.tab {
-            0 => "↑↓ select · Enter: the full fix",
-            1 => "↑↓ select · Enter: its rounds",
-            2 => "↑↓ select · Enter: the round",
-            3 => "↑↓ select · Enter: on the map",
-            4 => "↑↓ step through deaths",
-            T_CLIPS if clips_set => "↑↓ select · Enter: the screenshots",
-            T_CLIPS => "↑↓ choose · Enter picks · change it later in /settings",
-            T_SHOTS => "o opens the folder · Enter: the AI review",
-            _ if self.data.ai.is_some() && self.json => "↑↓ scroll · j: back to the review",
-            _ if self.data.ai.is_some() => "↑↓ select · j: the format and saved answer",
-            _ if self.data.ai_provider.is_some() => "a: run the AI review",
-            _ => "connect an AI in /settings → Config",
+            0 => "",
+            T_FIXES => "↑↓ select · Enter: on the map · ",
+            T_MAP => "↑↓ step through deaths · ",
+            T_CLIPS if clips_set => "↑↓ select · Enter: the screenshots · ",
+            T_CLIPS => "↑↓ choose · Enter picks · change it later in /settings · ",
+            T_SHOTS => "o opens the folder · Enter: the AI review · ",
+            _ if self.data.ai.is_some() && self.json => "↑↓ scroll · j: back to the review · ",
+            _ if self.data.ai.is_some() => "↑↓ select · j: the format and saved answer · ",
+            _ if self.data.ai_provider.is_some() => "Ctrl+Enter: run the AI review · ",
+            _ => "connect an AI in /settings → Config · ",
         };
         frame(
             w,
@@ -278,14 +255,14 @@ impl ReviewPanel {
             self.title(),
             Some((&TABS, self.tab)),
             body,
-            &format!("←→ or 1-8 tabs · {what} · Esc closes"),
+            &format!("←→ or 1-{} tabs · {what}Esc closes", TABS.len()),
         )
     }
 
-    fn flash_rows(&self, b: &mut Vec<Row>) {
+    fn flash_rows(&self, b: &mut Vec<Row>, w: usize) {
         if let Some(f) = &self.flash {
             b.push(vec![]);
-            b.push(vec![(Style::fg(YELLOW), format!("  ◆ {f}"))]);
+            b.extend(notice(f, w));
         }
     }
 
@@ -296,7 +273,7 @@ impl ReviewPanel {
         b.push(vec![]);
         let top: Vec<_> = d.fixes.iter().take(3).collect();
         if top.is_empty() {
-            b.push(heading("Nothing to fix first", Some(GREEN)));
+            b.push(heading("No issues found", Some(GREEN)));
             b.extend(para(
                 "No mistake repeated enough in this match to call it a pattern.",
                 4,
@@ -304,33 +281,21 @@ impl ReviewPanel {
                 Style::fg(GREY),
             ));
         } else {
+            let how_many = ["the one", "the two", "the three"][top.len() - 1];
             b.push(vec![
-                (Style::fg(YELLOW).bold(), "  Fix first".into()),
-                (Style::fg(GREY), "  the three that cost you the most rounds".into()),
+                (Style::fg(YELLOW).bold(), "  Issues found".into()),
+                (Style::fg(GREY), format!(" · {how_many} that cost you the most rounds")),
             ]);
-            self.sel = self.sel.min(top.len() - 1);
-            b.extend(list_rows(
-                top.iter()
-                    .enumerate()
-                    .map(|(i, f)| Item::new(format!("{}  {} ", i + 1, pad(&f.title, 50))).tail(&f.cost, GREY))
-                    .collect(),
-                self.sel,
-                top.len(),
-            ));
-            let f = top[self.sel];
-            b.push(vec![]);
-            b.push(rule_line(w));
-            b.push(vec![(Style::default().bold(), format!("    {}", f.title))]);
-            b.extend(para(&f.short, 4, w, Style::default()));
-            for (i, p) in wrap(&f.try_short, w.saturating_sub(12).max(10)).into_iter().enumerate() {
+            for (i, f) in top.iter().enumerate() {
                 b.push(vec![
-                    (
-                        Style::fg(GREEN).bold(),
-                        if i == 0 { "    Try  ".into() } else { "         ".into() },
-                    ),
-                    (Style::default(), p),
+                    (Style::default(), format!("    {}  {} ", i + 1, pad(&f.title, 50))),
+                    (Style::fg(GREY), f.cost.clone()),
                 ]);
             }
+            b.push(vec![(
+                Style::fg(GREY),
+                "    To see more details, go to the Fixes tab.".into(),
+            )]);
         }
         if !d.keep.is_empty() {
             b.push(vec![]);
@@ -341,11 +306,17 @@ impl ReviewPanel {
         }
         if let Some(c) = &self.data.focus {
             b.push(vec![]);
-            b.push(vec![
+            let mut row: Row = vec![
                 (Style::fg(YELLOW), "  ◆ ".into()),
                 (Style::default(), format!("Your focus, {}: ", c.habit.name)),
                 (Style::default().bold(), focus_result(c)),
-            ]);
+            ];
+            if let Some(p) = self.data.focus_trend.as_ref().filter(|p| !p.values.is_empty()) {
+                let c = trend_color(p.trend);
+                row.push((Style::fg(c), format!("  {}", habits::spark(&p.values))));
+                row.push((Style::fg(c).bold(), format!("  {}", p.trend.lately())));
+            }
+            b.push(row);
         }
         for n in &self.data.notes {
             b.push(vec![]);
@@ -358,7 +329,7 @@ impl ReviewPanel {
         let d = &self.data.debrief;
         if d.fixes.is_empty() {
             return para(
-                "Nothing repeated enough in this match to make a fix of it. See the Moments tab for single rounds.",
+                "Nothing repeated enough in this match to make a fix of it.",
                 2,
                 w,
                 Style::fg(GREY),
@@ -377,155 +348,14 @@ impl ReviewPanel {
         let f = &d.fixes[self.sel];
         b.push(vec![]);
         b.push(rule_line(w));
-        b.push(vec![(Style::default().bold(), format!("    {}", f.title))]);
+        b.push(vec![]);
         b.extend(field("What happened", &f.happened, w, Style::default()));
+        b.push(vec![]);
         b.extend(field("Why it costs", &f.why, w, Style::default()));
+        b.push(vec![]);
         b.extend(steps("Try this", &f.tries, w));
+        b.push(vec![]);
         b.extend(field("Next match", &f.check, w, Style::fg(ACCENT)));
-        b.truncate(h);
-        b
-    }
-
-    fn moments(&mut self, w: usize, h: usize) -> Vec<Row> {
-        let d = &self.data.debrief;
-        let mut b: Vec<Row> = vec![
-            vec![(
-                Style::fg(GREY),
-                "  The deaths that decided a round, and what would have been better".into(),
-            )],
-            vec![],
-        ];
-        if d.moments.is_empty() {
-            b.extend(para(
-                "None of your deaths in lost rounds fits a pattern worth calling out.",
-                4,
-                w,
-                Style::fg(GREY),
-            ));
-            return b;
-        }
-        self.sel = self.sel.min(d.moments.len() - 1);
-        b.extend(list_rows(
-            d.moments
-                .iter()
-                .map(|m| {
-                    Item::new(format!(
-                        "{}{} ",
-                        pad(&format!("R{}", m.round), 5),
-                        pad(&m.situation, 38)
-                    ))
-                    .tail(format!("→ {}", m.better), GREY)
-                })
-                .collect(),
-            self.sel,
-            d.moments.len(),
-        ));
-        let m = &d.moments[self.sel];
-        b.push(vec![]);
-        b.push(rule_line(w));
-        b.push(vec![(
-            Style::default().bold(),
-            format!("    Round {}: {}", m.round, m.situation),
-        )]);
-        b.extend(para(&m.text, 4, w, Style::default()));
-        b.truncate(h);
-        b
-    }
-
-    fn rounds(&mut self, w: usize, h: usize) -> Vec<Row> {
-        let d = &self.data.debrief;
-        if d.rounds.is_empty() {
-            return vec![vec![(
-                Style::fg(GREY),
-                "  No rounds were stored for this match.".into(),
-            )]];
-        }
-        self.round = self.round.min(d.rounds.len() - 1);
-        let items: Vec<Item> = d
-            .rounds
-            .iter()
-            .map(|x| {
-                let death = x.death.map(|i| &d.deaths[i]);
-                let kills = if x.kills > 0 {
-                    plural(x.kills as usize, "kill")
-                } else {
-                    String::new()
-                };
-                let what = match death {
-                    Some(dd) => format!(
-                        "{}{} got you at {}",
-                        if kills.is_empty() {
-                            String::new()
-                        } else {
-                            format!("{kills}, then ")
-                        },
-                        dd.killer,
-                        dd.place.as_deref().unwrap_or("?")
-                    ),
-                    None if x.kills > 0 => format!("{kills}, survived"),
-                    None => "survived".into(),
-                };
-                let tag = match death {
-                    Some(dd) if dd.fix.is_some() => format!("fix {}", dd.fix.unwrap_or(0) + 1),
-                    Some(dd) if dd.moment.is_some() => "moment".into(),
-                    _ => String::new(),
-                };
-                Item::new(format!(
-                    "{:>2}  {}{} {} {} ",
-                    x.round,
-                    pad(side_word(x.side), 8),
-                    pad(won_word(x.won), 5),
-                    pad(&x.buy, 9),
-                    pad(&what, 44)
-                ))
-                .tail(tag, YELLOW)
-            })
-            .collect();
-        let rd = &d.rounds[self.round];
-        let mut detail: Vec<Row> = vec![
-            rule_line(w),
-            vec![(
-                Style::default().bold(),
-                format!("    Round {} · {} · {}", rd.round, side_word(rd.side), won_word(rd.won)),
-            )],
-        ];
-        let buy = match rd.buy.as_str() {
-            "save" => "a save".to_owned(),
-            "pistol" => "pistols".to_owned(),
-            "eco" => "an eco".to_owned(),
-            b => format!("a {b}"),
-        };
-        let mut story = vec![format!("You were on {} with {buy}.", side_word(rd.side))];
-        if rd.kills > 0 {
-            story.push(format!("You got {}.", plural(rd.kills as usize, "kill")));
-        }
-        let death = rd.death.map(|i| &d.deaths[i]);
-        story.push(death.map_or_else(|| "You survived the round.".into(), |dd| dd.sentence()));
-        detail.extend(para(&story.join(" "), 4, w, Style::default()));
-        if let Some(fi) = death.and_then(|dd| dd.fix) {
-            detail.extend(para(
-                &format!("Part of fix {}: {}.", fi + 1, d.fixes[fi].title),
-                4,
-                w,
-                Style::fg(YELLOW),
-            ));
-        }
-        if let Some(mi) = death.and_then(|dd| dd.moment) {
-            detail.extend(para(
-                &format!("Better: {}.", d.moments[mi].better),
-                4,
-                w,
-                Style::fg(GREEN),
-            ));
-        }
-        let list_h = h.saturating_sub(detail.len() + 2).min(d.rounds.len()).max(3);
-        let mut b = vec![vec![(
-            Style::fg(GREY),
-            "    rnd  side    result buy       what happened".to_owned(),
-        )]];
-        b.extend(list_rows(items, self.round, list_h));
-        b.push(vec![]);
-        b.extend(detail);
         b.truncate(h);
         b
     }
@@ -634,7 +464,7 @@ impl ReviewPanel {
                 ] {
                     b.extend(bullet("•", ACCENT, t, w));
                 }
-                self.flash_rows(&mut b);
+                self.flash_rows(&mut b, w);
             }
             Clips::Set { dir, per_death, .. } => {
                 let have = per_death.iter().filter(|c| c.is_some()).count();
@@ -652,45 +482,55 @@ impl ReviewPanel {
                     return b;
                 }
                 self.sel = self.sel.min(d.deaths.len() - 1);
-                let items = d
+                let deaths: Vec<String> = d
                     .deaths
                     .iter()
-                    .zip(per_death)
-                    .map(|(x, c)| {
-                        let what = format!("{} at {}", x.killer, x.place.as_deref().unwrap_or("?"));
-                        let it = Item::new(format!("{}{}", pad(&format!("R{}", x.round), 5), pad(&what, 26)));
+                    .map(|x| format!("{} at {}", x.killer, x.place.as_deref().unwrap_or("?")))
+                    .collect();
+                let names: Vec<String> = per_death
+                    .iter()
+                    .map(|c| {
+                        c.as_ref()
+                            .and_then(|m| m.path.file_name())
+                            .map(|f| f.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                let width =
+                    |v: &[String], min: usize| v.iter().map(|s| s.chars().count() + 2).max().unwrap_or(0).max(min);
+                let death_w = width(&deaths, 20);
+                // The clip column takes what's left, for long file names.
+                let clip_w = width(&names, 38).min(w.saturating_sub(death_w + 30).max(12));
+                b.push(vec![(
+                    Style::fg(GREY),
+                    format!(
+                        "    {:>3}  {}{}{:>6}  {:>8}",
+                        "rnd",
+                        pad("death", death_w),
+                        pad("clip", clip_w),
+                        "length",
+                        "size"
+                    ),
+                )]);
+                let items = deaths
+                    .iter()
+                    .zip(&names)
+                    .zip(d.deaths.iter().zip(per_death))
+                    .map(|((what, name), (x, c))| {
+                        let it = Item::new(format!("{:>3}  {}", x.round, pad(what, death_w)));
                         match c {
-                            Some(m) => it.tail(
-                                format!(
-                                    "✓ {}",
-                                    m.path
-                                        .file_name()
-                                        .map(|f| f.to_string_lossy().into_owned())
-                                        .unwrap_or_default()
-                                ),
-                                GREEN,
-                            ),
+                            Some(m) => Item::new(format!(
+                                "{}{}{:>6}  {:>8}",
+                                it.text,
+                                pad(&clip_name(name, clip_w - 2), clip_w),
+                                m.length_s.map_or_else(|| "?".into(), clip_length),
+                                m.bytes.map_or_else(|| "?".into(), clip_size)
+                            )),
                             None => it.tail("no clip", GREY),
                         }
                     })
                     .collect();
-                b.extend(list_rows(items, self.sel, h.saturating_sub(6).max(3)));
-                let x = &d.deaths[self.sel];
-                let text = match &per_death[self.sel] {
-                    Some(m) => format!(
-                        "Round {}: {} The clip was saved {:.0} seconds after this death.",
-                        x.round,
-                        x.sentence(),
-                        m.before_end_s
-                    ),
-                    None => format!(
-                        "Round {}: no clip was saved within {:.0} seconds of this death, so it's left out.",
-                        x.round,
-                        vantage_core::clips::MATCH_WINDOW_S
-                    ),
-                };
-                b.push(vec![]);
-                b.extend(para(&text, 4, w, Style::fg(GREY)));
+                b.extend(list_rows(items, self.sel, h.saturating_sub(3).max(3)));
             }
         }
         b.truncate(h);
@@ -775,19 +615,8 @@ impl ReviewPanel {
                 b.push(vec![]);
                 b.extend(para(e, 2, w, Style::fg(YELLOW)));
             }
-            b.push(vec![]);
-            b.extend(para(
-                if self.data.ai_provider.is_some() {
-                    "The AI tab sends these with the match when you run the AI review."
-                } else {
-                    "Connect an AI in /settings and the AI tab can review these for you."
-                },
-                2,
-                w,
-                Style::fg(ACCENT),
-            ));
         }
-        self.flash_rows(&mut b);
+        self.flash_rows(&mut b, w);
         b.truncate(h);
         b
     }
@@ -883,10 +712,10 @@ impl ReviewPanel {
                     Style::default(),
                 ));
                 b.push(vec![]);
-                b.push(vec![(Style::fg(GREEN).bold(), "    Press a to run it".into())]);
+                b.push(vec![(Style::fg(GREEN).bold(), "    Press Ctrl+Enter to run it".into())]);
             }
         }
-        self.flash_rows(&mut b);
+        self.flash_rows(&mut b, w);
         b.truncate(h);
         b
     }
@@ -896,20 +725,17 @@ impl ReviewPanel {
         let saved = crate::short_when(&s.meta.saved_at);
         let mut b: Vec<Row> = vec![vec![
             (Style::fg(ACCENT).bold(), "  AI review".into()),
-            (
-                Style::fg(GREY),
-                format!(" · {} · saved {saved} · can't be rerun", s.meta.provider),
-            ),
+            (Style::fg(GREY), format!(" · {} · saved {saved}", s.meta.provider)),
         ]];
         b.extend(para(&o.summary, 4, w, Style::default()));
         b.push(vec![]);
         if let Some(f) = &self.flash {
-            b.push(vec![(Style::fg(YELLOW), format!("  ◆ {f}"))]);
+            b.extend(notice(f, w));
             b.push(vec![]);
         }
         b.push(vec![
-            (Style::fg(YELLOW).bold(), "  What it saw".into()),
-            (Style::fg(GREY), "  in the screenshots, most costly first".into()),
+            (Style::fg(YELLOW).bold(), "  What it found".into()),
+            (Style::fg(GREY), " · in the screenshots, most costly first".into()),
         ]);
         self.sel = self.sel.min(o.findings.len().saturating_sub(1));
         b.extend(list_rows(
@@ -926,7 +752,7 @@ impl ReviewPanel {
         if let Some(f) = o.findings.get(self.sel) {
             b.push(vec![]);
             b.push(rule_line(w));
-            b.push(vec![(Style::default().bold(), format!("    {}", f.title))]);
+            b.push(vec![]);
             let rounds: Vec<String> = f.rounds.iter().map(u32::to_string).collect();
             b.extend(field(
                 "Rounds",
@@ -1013,18 +839,20 @@ impl ClipFolder {
     }
 }
 
-/// `2 times this match. Better than before.`
+/// `2 times this match.`
 pub fn focus_result(c: &Check) -> String {
     let Some(n) = c.this_match else {
         return "this match couldn't tell.".into();
     };
-    let this = match c.habit.slug {
-        "moving" => format!("{} on the move this match", habits::describe("moving", n)),
-        "crosshair" => format!("{} this match", habits::describe("crosshair", n)),
-        _ if n == 0.0 => "not once this match".to_owned(),
-        _ => format!("{} this match", plural(n as usize, "time")),
-    };
-    format!("{this}. {}", c.verdict())
+    let slug = c.habit.slug;
+    match slug {
+        "moving" => format!("{} on the move this match.", habits::describe(slug, n)),
+        "crosshair" | "bodies" | "rotation" => format!("{} this match.", habits::describe(slug, n)),
+        "buy-sync" if n == 0.0 => "in sync every round this match.".to_owned(),
+        "buy-sync" => format!("{} out of sync this match.", plural(n as usize, "round")),
+        _ if n == 0.0 => "not once this match.".to_owned(),
+        _ => format!("{} this match.", plural(n as usize, "time")),
+    }
 }
 
 pub fn result_style(won: usize, lost: usize) -> (&'static str, Color) {
@@ -1035,18 +863,51 @@ pub fn result_style(won: usize, lost: usize) -> (&'static str, Color) {
     }
 }
 
-fn side_word(s: Option<Side>) -> &'static str {
-    match s {
-        Some(Side::Attack) => "attack",
-        Some(Side::Defense) => "defense",
-        None => "?",
+/// Ctrl+Enter, which runs the AI review.
+fn is_run(key: &KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Enter | KeyCode::Char('\n'))
+}
+
+/// `  ◆ text`, wrapped under itself.
+fn notice(text: &str, w: usize) -> Vec<Row> {
+    wrap(text, w.saturating_sub(8).max(10))
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| {
+            vec![(
+                Style::fg(YELLOW),
+                format!("{}{p}", if i == 0 { "  ◆ " } else { "    " }),
+            )]
+        })
+        .collect()
+}
+
+/// A file name cut to `n` characters, with `…` where it was cut.
+fn clip_name(name: &str, n: usize) -> String {
+    if name.chars().count() <= n {
+        return name.to_owned();
+    }
+    let mut s: String = name.chars().take(n.saturating_sub(1)).collect();
+    s.push('…');
+    s
+}
+
+/// `30s`, or `1m 05s`.
+fn clip_length(s: f64) -> String {
+    let s = s.round() as u64;
+    if s < 60 {
+        format!("{s}s")
+    } else {
+        format!("{}m {:02}s", s / 60, s % 60)
     }
 }
 
-fn won_word(w: Option<bool>) -> &'static str {
-    match w {
-        Some(true) => "won",
-        Some(false) => "lost",
-        None => "?",
+/// `48.2 MB`.
+fn clip_size(bytes: u64) -> String {
+    let mb = bytes as f64 / (1024.0 * 1024.0);
+    if mb >= 1024.0 {
+        format!("{:.1} GB", mb / 1024.0)
+    } else {
+        format!("{mb:.1} MB")
     }
 }

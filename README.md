@@ -33,30 +33,35 @@ Type `/` to see the commands, or `/help` for an overview and the keyboard shortc
 | `/review` | The debrief for a match (your newest by default, `--match` for another) |
 | `/plan` | A game plan for one map: where you win, where you lose, and what to do on each side (`--map Lotus`, default the map you play most) |
 | `/habits` | The mistakes you keep making, and which are getting better |
-| `/focus` | Picks one habit to work on (`/focus untraded`). Every new match checks it first |
+| `/focus` | Picks one habit to work on (`/focus untraded`). Every debrief shows how you did on it |
 | `/rank` | What wins games at your rank, and how you compare with the players in your games |
 | `/matches` | Your matches, newest first (`--all` for more than 10) |
 | `/scan` | Looks for new replays now (`--retry-failed` tries failed replays again) |
-| `/settings` | Versions and setup (Status), and your rank, replay folder, clip folder, focus, AI review and updates (Config) |
+| `/settings` | Versions and setup (Status), and your rank, focus, AI review and model, folders and updates (Config) |
 
 Each one also works as a plain command, for example `vantage review --match <id>`. Add `--help` to any of them for its flags. Outside the shell, `vantage review` and `vantage plan` print as text.
 
 ### Reviewing a match
 
-`/review` has eight tabs:
+`/review` has six tabs:
 
-- **Debrief**: how the match went in a few lines, and what to keep doing.
-- **Fixes**: the three mistakes that cost you the most rounds, each with the rounds behind it and what to try instead.
-- **Moments**: the fights that decided rounds, won and lost.
-- **Rounds**: one line per round, and the detail for the selected round.
-- **Map**: the minimap in the terminal with your deaths and your best and worst spots.
-- **Clips**: your clips matched to your deaths. Vantage finds the folder of Medal, NVIDIA ShadowPlay, Xbox Game Bar, AMD Adrenalin, Outplayed or SteelSeries Moments, or you can type your own.
-- **Screenshots**: a screenshot of the seconds before each death, taken from its clip. These need ffmpeg (`winget install ffmpeg`) and are saved in `Pictures\Vantage\Clips`.
-- **AI**: optional. An AI looks at the screenshots for what the replay can't show, like where you stood and where your crosshair was. It uses Claude, ChatGPT or Gemini with your own API key, or Ollama running on your PC. Each match is reviewed once, and the answer is saved.
+- **Debrief**: how the match went in a few lines, the issues that cost you the most rounds, what to keep doing, and your focus with its trend.
+- **Fixes**: those issues in full, each with the rounds behind it and what to try instead.
+- **Map**: the minimap in the terminal with your deaths and your best and worst spots, turned so the attackers start at the bottom.
+- **Clips**: your clips matched to your deaths, with each clip's length and size. Vantage finds the folder of Medal, NVIDIA ShadowPlay, Xbox Game Bar, AMD Adrenalin, Outplayed or SteelSeries Moments, or you can type your own.
+- **Screenshots**: a screenshot of the seconds before each death, taken from its clip with ffmpeg, saved in `Pictures\Vantage\Clips`. The installer gets ffmpeg through winget; if it's missing, the status bar says so and `/update` installs it.
+- **AI**: optional. An AI looks at the screenshots for what the replay can't show, like where you stood and where your crosshair was. It uses Claude, ChatGPT or Gemini with your own API key, or Ollama running on your PC; pick the model in `/settings`. Ctrl+Enter runs it. Each match is reviewed once, and the answer is saved.
 
 ### Habits
 
-`/habits` counts eight habits in every match: dying where nobody can trade, going in first with no ability, shooting while moving, a crosshair too low, peeking again after a kill, dying with your ult ready, reloading in the open, and fighting rounds that are lost. It shows which are getting better. Pick one with `/focus`, and each new match tells you how you did on it.
+`/habits` counts sixteen habits in every match, in four groups:
+
+- **Positioning**: dying where nobody can trade, being caught looking the wrong way, holding spots enemies can shoot through, pushing out on defense, and peeking again after a kill.
+- **Utility**: going in first with no ability, dying with abilities unused, dying with your ult ready, and rotating late.
+- **Aim**: shooting while moving, a crosshair too low, aiming at bodies, and reloading in the open.
+- **Rounds and economy**: fighting rounds that are lost, peeking after the plant, and buying out of sync with your team.
+
+It shows which are getting better. Pick one with `/focus`, and every debrief tells you how you did on it.
 
 ## Updates
 
@@ -68,7 +73,7 @@ Run `vantage update` to update straight away. To turn off the background check, 
 
 Everything stays on your machine in `%LOCALAPPDATA%\vantage\data` (`--data-dir` or `VANTAGE_DATA_DIR` to move it): the config, a SQLite database of match facts, and 4 Hz movement tracks. Raw replay exports are deleted once processed, and screenshots are saved in `Pictures\Vantage\Clips`.
 
-The network calls are the valorant-api.com catalog for agent and map names, and downloads of Vantage and vrfkit releases from GitHub. If you turn on AI review with Claude, ChatGPT or Gemini, the match's facts and its screenshots are sent to that provider when you ask for a review. Your API key stays in `config.toml`. Ollama runs on your PC and sends nothing.
+The network calls are the valorant-api.com catalog for agent and map names, downloads of Vantage and vrfkit releases from GitHub, and ffmpeg from winget when it's missing. If you turn on AI review with Claude, ChatGPT or Gemini, picking a model asks that provider for its list, and the match's facts and its screenshots are sent to it when you ask for a review. Your API key stays in `config.toml`. Ollama runs on your PC and sends nothing.
 
 ## Reporting bugs
 

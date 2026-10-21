@@ -73,7 +73,7 @@ enum Command {
     },
     /// The mistakes you keep making, and which are getting better
     Habits,
-    /// Pick one habit to work on; every new match checks it
+    /// Pick one habit to work on; every debrief checks it
     Focus {
         /// The habit to focus on (leave it out to see your current focus)
         habit: Option<String>,
@@ -206,8 +206,11 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
         Command::Habits => {
             let (progress, focus, _) = load_habits(&data_dir)?;
             for p in progress {
+                if habits::HABITS.iter().find(|h| h.group == p.habit.group).map(|h| h.slug) == Some(p.habit.slug) {
+                    outln!("{}", p.habit.group);
+                }
                 outln!(
-                    "{:<34}{:<10}{:<22}{}{}",
+                    "  {:<40}{:<10}{:<22}{}{}",
                     p.habit.name,
                     habits::spark(&p.values),
                     p.now,
@@ -413,13 +416,13 @@ fn map_and_minimap(
 pub struct ClipFolder {
     pub name: String,
     pub about: String,
-    /// VALORANT clips found (`None`: not counted, like the Videos scan).
+    /// VALORANT clips found (`None`: not counted).
     pub found: Option<usize>,
     /// `None`: type the path yourself.
     pub path: Option<PathBuf>,
 }
 
-/// The clip apps' folders, the Videos scan, and a folder of your own.
+/// The clip apps' folders, and a folder of your own.
 pub fn clip_folders() -> Vec<ClipFolder> {
     let mut out: Vec<ClipFolder> = clips::apps()
         .into_iter()
@@ -434,14 +437,6 @@ pub fn clip_folders() -> Vec<ClipFolder> {
             path: Some(a.dir),
         })
         .collect();
-    if let Some(v) = clips::videos_dir() {
-        out.push(ClipFolder {
-            name: "Scan my Videos folder".into(),
-            about: format!("looks for VALORANT clips anywhere in {}", v.display()),
-            found: None,
-            path: Some(v),
-        });
-    }
     out.push(ClipFolder {
         name: "Another folder…".into(),
         about: "type the path to your clips".into(),
@@ -471,6 +466,8 @@ pub enum Clips {
 pub struct ReviewData {
     pub debrief: Debrief,
     pub focus: Option<habits::Check>,
+    /// The focus over the matches up to this one, for its trend.
+    pub focus_trend: Option<habits::Progress>,
     pub notes: Vec<String>,
     pub map: Option<catalog::MapInfo>,
     pub minimap: std::result::Result<Minimap, String>,
@@ -516,7 +513,11 @@ pub(crate) fn load_review(data_dir: &Path, match_id: Option<String>) -> Result<R
         .iter()
         .position(|r| r.context.match_id == id)
         .map_or(mine.len(), |i| i + 1);
-    let focus = habits::check(habits::focus(cfg.focus.as_deref()), &mine[..upto]);
+    let focus_habit = habits::focus(cfg.focus.as_deref());
+    let focus = habits::check(focus_habit, &mine[..upto]);
+    let focus_trend = habits::progress(&mine[..upto])
+        .into_iter()
+        .find(|p| p.habit.slug == focus_habit.slug);
     let (map, minimap) = map_and_minimap(data_dir, &review);
     let clips = match &cfg.clips_dir {
         None => Clips::NotSet(clip_folders()),
@@ -529,6 +530,7 @@ pub(crate) fn load_review(data_dir: &Path, match_id: Option<String>) -> Result<R
         ai_provider: cfg.ai.as_deref().and_then(ai::provider),
         debrief,
         focus,
+        focus_trend,
         notes,
         map,
         minimap,
@@ -557,8 +559,7 @@ fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
         match clips::ffmpeg() {
             None => {
                 shot_error = Some(
-                    "Screenshots need ffmpeg, which isn't installed. Install it (winget install ffmpeg) and open this review again."
-                        .into(),
+                    "The screenshot tool isn't installed, so there are no screenshots. /update installs it.".into(),
                 )
             }
             Some(ff) => {
@@ -705,7 +706,6 @@ fn focus_cmd(data_dir: &Path, habit: Option<String>) -> Result<()> {
     let slugs = habits::HABITS.iter().map(|h| h.slug).collect::<Vec<_>>().join(", ");
     let Some(want) = habit else {
         focus_line(data_dir);
-        out::emit(Kind::Dim, format!("  To switch, type /focus and pick a habit: {slugs}"));
         return Ok(());
     };
     let h =
@@ -716,13 +716,13 @@ fn focus_cmd(data_dir: &Path, habit: Option<String>) -> Result<()> {
         (Kind::Paint(shell::YELLOW, true), "◆ ".into()),
         (Kind::Out, "Your focus is now ".into()),
         (Kind::Bold, h.name.into()),
-        (Kind::Out, ". After each match, Vantage checks it first.".into()),
+        (Kind::Out, ".".into()),
     ]);
     out::emit(Kind::Dim, format!("  What to do: {}", h.drill));
     Ok(())
 }
 
-/// `◆ Your focus: Dying where nobody can trade  ▃▂▂▁  getting better`
+/// `◆ Your focus: Dying where nobody can trade  ▃▂▂▁  getting better`, and how to switch.
 pub(crate) fn focus_line(data_dir: &Path) {
     let cfg = Config::load(data_dir).unwrap_or_default();
     let focus = habits::focus(cfg.focus.as_deref());
@@ -743,10 +743,11 @@ pub(crate) fn focus_line(data_dir: &Path) {
         row.push((Kind::Paint(c, true), format!("  {}", p.trend.lately())));
     }
     out::row(row);
+    out::emit(Kind::Dim, "  To switch, type /focus and pick a habit.".into());
 }
 
-/// After a new match: the focus first, then the top fix and what went well.
-pub(crate) fn focus_check(data_dir: &Path, match_id: &str) {
+/// After a new match: how it went, and where to see more.
+pub(crate) fn new_match(data_dir: &Path, match_id: &str) {
     let Ok(d) = load_review(data_dir, Some(match_id.to_owned())) else {
         return;
     };
@@ -764,52 +765,7 @@ pub(crate) fn focus_check(data_dir: &Path, match_id: &str) {
             format!(" · {}, {}", plural(b.kills, "kill"), plural(b.deaths_n, "death")),
         ),
     ]);
-    if let Some(c) = &d.focus {
-        outln!();
-        out::row(vec![
-            (Kind::Paint(shell::YELLOW, true), "◆ Focus check: ".into()),
-            (Kind::Bold, c.habit.name.into()),
-        ]);
-        out::row(vec![
-            (Kind::Dim, format!("  {:<14}", "This match")),
-            (Kind::Bold, review_view::focus_result(c)),
-        ]);
-        if c.streak >= 2 {
-            out::row(vec![
-                (Kind::Dim, format!("  {:<14}", "Lately")),
-                (
-                    Kind::Paint(review_view::GREEN, true),
-                    format!("at or under your usual {} matches in a row", c.streak),
-                ),
-            ]);
-        }
-        if let Some(f) = b.fixes.iter().find(|f| f.habit == Some(c.habit.slug)) {
-            out::row(vec![
-                (Kind::Dim, format!("  {:<14}", "Try")),
-                (Kind::Out, f.try_short.clone()),
-            ]);
-        }
-    }
-    if !b.fixes.is_empty() || !b.keep.is_empty() {
-        outln!();
-        out::row(vec![(Kind::Bold, "Also this match".into())]);
-        if let Some(f) = b.fixes.first() {
-            out::row(vec![
-                (Kind::Paint(shell::YELLOW, true), "  ! ".into()),
-                (Kind::Out, f.title.clone()),
-            ]);
-        }
-        if let Some(k) = b.keep.first() {
-            out::row(vec![
-                (Kind::Paint(review_view::GREEN, true), "  + ".into()),
-                (Kind::Out, k.clone()),
-            ]);
-        }
-    }
-    out::emit(
-        Kind::Dim,
-        "  /review for the full debrief, your clips and the AI review".into(),
-    );
+    out::emit(Kind::Dim, "  /review for the full debrief".into());
 }
 
 const WEEKDAYS: [&str; 7] = [
@@ -934,7 +890,6 @@ fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
             ),
         );
     }
-    out::emit(Kind::Dim, "/review then pick a match from the list to open it".into());
     Ok(())
 }
 
@@ -954,7 +909,7 @@ fn print_review(d: &ReviewData) {
     outln!();
     outln!("{}", b.summary);
     outln!();
-    outln!("Fix first");
+    outln!("Issues found");
     for (i, f) in b.fixes.iter().take(3).enumerate() {
         outln!("  {}. {} ({})", i + 1, f.title, f.cost);
         outln!("     {}", f.short);
@@ -1005,11 +960,17 @@ fn startup_check(data_dir: &Path) {
     }
 }
 
-/// `vantage update`: installs the newest release, or repairs vrfkit when up to date.
+/// `vantage update`: installs ffmpeg if it's missing, then the newest
+/// release, or repairs vrfkit when up to date.
 fn update_cmd(data_dir: &Path) -> Result<()> {
     let layout = Layout::new()?;
     if std::env::current_exe().is_ok_and(|e| layout.contains(&e)) {
         install::cleanup(&layout, VERSION);
+    }
+    match install::ensure_ffmpeg() {
+        Ok(true) => outln!("installed ffmpeg, which takes the screenshots"),
+        Ok(false) => {}
+        Err(e) => out::emit(Kind::Warn, format!("{e:#}")),
     }
     let manifest = update::latest().context("checking for updates failed")?;
     if !install::is_newer(&manifest.version, VERSION) {

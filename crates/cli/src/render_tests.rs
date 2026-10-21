@@ -54,7 +54,8 @@ fn review_data(clips: Clips, ai: Option<ai::Saved>) -> ReviewData {
     let r = match_review();
     ReviewData {
         debrief: coach::debrief(&r, &[]),
-        focus: habits::check(habits::focus(None), &[r.clone(), r]),
+        focus: habits::check(habits::focus(None), &[r.clone(), r.clone()]),
+        focus_trend: habits::progress(&[r.clone(), r]).into_iter().next(),
         notes: vec!["the replay was cut short".into()],
         map: None,
         minimap: Err("no minimap in tests".into()),
@@ -117,6 +118,8 @@ fn review_tabs_fit() {
                 (i % 2 == 0).then(|| Matched {
                     path: format!("VALORANT 2026.10.19 - 21.0{i}.10.mp4").into(),
                     before_end_s: 12.0,
+                    length_s: Some(30.0),
+                    bytes: Some(50_544_640),
                 })
             })
             .collect(),
@@ -131,7 +134,7 @@ fn review_tabs_fit() {
         review_data(set(), Some(saved())),
     ] {
         let mut p = ReviewPanel::new(data);
-        for tab in 0..8 {
+        for tab in 0..6 {
             for (w, h) in SIZES {
                 check(&format!("review tab {tab}"), &p.rows(w, h), w, h);
             }
@@ -141,7 +144,7 @@ fn review_tabs_fit() {
             p.key(key(KeyCode::Right));
         }
         // The AI tab's format view.
-        p.key(key(KeyCode::Char('8')));
+        p.key(key(KeyCode::Char('6')));
         p.key(key(KeyCode::Char('j')));
         for (w, h) in SIZES {
             check("review ai json", &p.rows(w, h), w, h);
@@ -198,7 +201,7 @@ fn settings_fit() {
     }
     p.key(key(KeyCode::Right));
     // Every setting, and every picker opened.
-    for _ in 0..9 {
+    for _ in 0..10 {
         p.key(key(KeyCode::Enter));
         for (w, h) in SIZES {
             let rows = p.rows(w, h);
@@ -219,7 +222,7 @@ fn real_data_panels_open_and_fit() {
     };
     for m in crate::my_matches(&dir) {
         let mut p = ReviewPanel::new(crate::load_review(&dir, Some(m.id.clone())).unwrap());
-        for tab in 0..8 {
+        for tab in 0..6 {
             p.key(key(KeyCode::Char(char::from(b'1' + tab as u8))));
             for (w, h) in SIZES {
                 check(&format!("{} tab {tab}", m.id), &p.rows(w, h), w, h);

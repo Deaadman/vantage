@@ -3,6 +3,7 @@
 //! `vantage settings` prints the Status tab.
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::Color;
@@ -38,11 +39,18 @@ pub fn status_groups(data_dir: &Path) -> StatusGroups {
         None => vec![piece(Kind::Warn, "Unranked")],
     };
     let account = match &cfg.me {
-        Some(me) => vec![piece(Kind::Out, me[..me.len().min(8)].to_owned())],
+        Some(me) => vec![piece(Kind::Out, me.clone())],
         None => vec![piece(Kind::Warn, "Not found yet")],
     };
     let ai = match cfg.ai.as_deref().and_then(ai::provider) {
-        Some(p) => vec![piece(Kind::Out, p.name)],
+        Some(p) => vec![piece(
+            Kind::Out,
+            format!(
+                "{} · {}",
+                p.name,
+                ai::model_name(ai::chosen_model(p, cfg.ai_model.as_deref()))
+            ),
+        )],
         None => vec![piece(Kind::Dim, "Off")],
     };
     let db = paths::db_path(data_dir);
@@ -109,36 +117,55 @@ pub fn print_status(data_dir: &Path) {
     }
 }
 
-/// One line of the Config tab, in alphabetical order.
+/// One line of the Config tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Setting {
-    Ai,
-    AutoUpdate,
-    ClipFolder,
-    Focus,
     Rank,
-    ReplayFolder,
-    Shots,
-    Watch,
+    Focus,
     Account,
+    Ai,
+    AiModel,
+    Shots,
+    ReplayFolder,
+    ClipFolder,
+    Watch,
+    AutoUpdate,
 }
 
-const SETTINGS: [Setting; 9] = [
-    Setting::Ai,
-    Setting::AutoUpdate,
-    Setting::ClipFolder,
-    Setting::Focus,
-    Setting::Rank,
-    Setting::ReplayFolder,
-    Setting::Shots,
-    Setting::Watch,
-    Setting::Account,
+/// The Config tab grouped like Status: choices, then folders, then on/off switches.
+const GROUPS: [&[Setting]; 3] = [
+    &[
+        Setting::Rank,
+        Setting::Focus,
+        Setting::Account,
+        Setting::Ai,
+        Setting::AiModel,
+        Setting::Shots,
+    ],
+    &[Setting::ReplayFolder, Setting::ClipFolder],
+    &[Setting::Watch, Setting::AutoUpdate],
 ];
+/// Every setting, and the blank rows between the groups.
+const SETTING_ROWS: usize = 12;
+
+/// The settings shown, group by group: the AI model only once an AI is picked.
+fn shown(cfg: &Config) -> Vec<Vec<Setting>> {
+    GROUPS
+        .iter()
+        .map(|g| {
+            g.iter()
+                .copied()
+                .filter(|s| *s != Setting::AiModel || cfg.ai.as_deref().and_then(ai::provider).is_some())
+                .collect()
+        })
+        .collect()
+}
 
 impl Setting {
     fn label(self) -> &'static str {
         match self {
             Setting::Ai => "AI review",
+            Setting::AiModel => "AI model",
             Setting::AutoUpdate => "Automatic updates",
             Setting::ClipFolder => "Clip folder",
             Setting::Focus => "Focus habit",
@@ -160,11 +187,18 @@ impl Setting {
     }
 }
 
-/// A list of values to pick one from: (value, name, about).
+/// One value to pick: (value, name, about).
+type Choice = (String, String, String);
+
+/// A list of values to pick one from.
 struct Picker {
     setting: Setting,
     options: Vec<(String, String, String)>,
     sel: usize,
+    /// The AI's models, while they're being fetched: who is asked, and the answer.
+    loading: Option<(&'static str, Receiver<Vec<Choice>>)>,
+    /// Why the list couldn't be fetched; the models offered are a fallback.
+    note: Option<String>,
 }
 
 /// Text being typed in place of a value: a path, or a masked API key.
@@ -175,6 +209,9 @@ struct Field {
     /// The AI provider the key is for; the text shows as dots.
     provider: Option<&'static ai::Provider>,
 }
+
+/// "Another model": type its id.
+const OTHER_MODEL: &str = "";
 
 pub enum SettingsAction {
     None,
@@ -284,7 +321,10 @@ impl SettingsPanel {
                     None => (String::new(), f.name, "type the path".into()),
                 })
                 .collect(),
-            Setting::Focus => habits::HABITS.iter().map(|h| o(h.slug, h.name, "")).collect(),
+            Setting::Focus => habits::HABITS
+                .iter()
+                .map(|h| o(h.slug, h.name, &h.group.to_lowercase()))
+                .collect(),
             Setting::Rank => ranks::all()
                 .into_iter()
                 .map(|r| (r.clone(), r, String::new()))
@@ -305,6 +345,11 @@ impl SettingsPanel {
     fn current(&self, setting: Setting, cfg: &Config) -> Option<String> {
         match setting {
             Setting::Ai => Some(cfg.ai.clone().unwrap_or_else(|| "off".into())),
+            Setting::AiModel => cfg
+                .ai
+                .as_deref()
+                .and_then(ai::provider)
+                .map(|p| ai::chosen_model(p, cfg.ai_model.as_deref()).to_owned()),
             Setting::ClipFolder => cfg.clips_dir.as_ref().map(|p| p.display().to_string()),
             Setting::Focus => Some(habits::focus(cfg.focus.as_deref()).slug.to_owned()),
             Setting::Rank => cfg.rank.clone(),
@@ -337,11 +382,81 @@ impl SettingsPanel {
             self.edit(setting, text, None);
             return SettingsAction::None;
         }
+        if setting == Setting::AiModel {
+            return self.pick_model(&cfg);
+        }
         let options = self.options(setting);
         let cur = self.current(setting, &cfg);
         let sel = options.iter().position(|o| Some(&o.0) == cur.as_ref()).unwrap_or(0);
-        self.picker = Some(Picker { setting, options, sel });
+        self.picker = Some(Picker {
+            setting,
+            options,
+            sel,
+            loading: None,
+            note: None,
+        });
         SettingsAction::None
+    }
+
+    /// The AI model picker: the provider's models, fetched in the background.
+    fn pick_model(&mut self, cfg: &Config) -> SettingsAction {
+        let Some(p) = cfg.ai.as_deref().and_then(ai::provider) else {
+            return SettingsAction::None;
+        };
+        let (tx, rx) = mpsc::channel();
+        let key = cfg.ai_key.clone();
+        std::thread::spawn(move || {
+            let (models, note) = match ai::models(p, key.as_deref()) {
+                Ok(m) => (m, None),
+                Err(e) => (ai::fallback_models(p), Some(format!("{e:#}"))),
+            };
+            let mut options: Vec<(String, String, String)> =
+                models.into_iter().map(|m| (m.id, m.name, m.about)).collect();
+            options.push((
+                OTHER_MODEL.into(),
+                "Another model".into(),
+                if p.local {
+                    "type a name to pull".into()
+                } else {
+                    "type its model ID".into()
+                },
+            ));
+            if let Some(n) = note {
+                options.insert(0, (String::from("\u{0}note"), n, String::new()));
+            }
+            let _ = tx.send(options);
+        });
+        self.picker = Some(Picker {
+            setting: Setting::AiModel,
+            options: vec![],
+            sel: 0,
+            loading: Some((p.name, rx)),
+            note: None,
+        });
+        SettingsAction::None
+    }
+
+    /// True while a list is being fetched, so the shell keeps drawing.
+    pub fn busy(&mut self) -> bool {
+        let Some((_, rx)) = self.picker.as_ref().and_then(|p| p.loading.as_ref()) else {
+            return false;
+        };
+        let got = match rx.try_recv() {
+            Ok(options) => Some(options),
+            Err(mpsc::TryRecvError::Empty) => return true,
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        };
+        let cur = self.current(Setting::AiModel, &self.config());
+        let p = self.picker.as_mut().expect("checked");
+        p.loading = None;
+        if let Some(mut options) = got {
+            if options.first().is_some_and(|o| o.0 == "\u{0}note") {
+                p.note = Some(options.remove(0).1);
+            }
+            p.sel = options.iter().position(|o| Some(&o.0) == cur.as_ref()).unwrap_or(0);
+            p.options = options;
+        }
+        true
     }
 
     /// Text pasted while a field is open goes into it.
@@ -360,11 +475,13 @@ impl SettingsPanel {
                 "off" => self.save(|c| {
                     c.ai = None;
                     c.ai_key = None;
+                    c.ai_model = None;
                 }),
                 id => match ai::provider(id) {
                     Some(p) if p.local => self.save(|c| {
                         c.ai = Some(p.id.into());
                         c.ai_key = None;
+                        c.ai_model = None;
                     }),
                     Some(p) => {
                         self.edit(setting, String::new(), Some(p));
@@ -384,6 +501,11 @@ impl SettingsPanel {
                 SettingsAction::None
             }
             Setting::ClipFolder => self.save(|c| c.clips_dir = Some(PathBuf::from(value))),
+            Setting::AiModel if value == OTHER_MODEL => {
+                self.edit(setting, String::new(), None);
+                SettingsAction::None
+            }
+            Setting::AiModel => self.save(|c| c.ai_model = Some(value)),
             Setting::Focus => self.save(|c| c.focus = Some(value)),
             Setting::Rank => self.save(|c| c.rank = Some(value)),
             Setting::Shots => self.save(|c| c.shots = Some(value)),
@@ -406,9 +528,15 @@ impl SettingsPanel {
                     }
                     if let Some(p) = provider {
                         return self.save(|c| {
+                            if c.ai.as_deref() != Some(p.id) {
+                                c.ai_model = None;
+                            }
                             c.ai = Some(p.id.into());
                             c.ai_key = Some(text);
                         });
+                    }
+                    if setting == Setting::AiModel {
+                        return self.save(|c| c.ai_model = Some(text));
                     }
                     let path = std::path::absolute(&text).unwrap_or_else(|_| PathBuf::from(&text));
                     if setting == Setting::ClipFolder {
@@ -442,6 +570,12 @@ impl SettingsPanel {
             return SettingsAction::None;
         }
         if let Some(p) = &mut self.picker {
+            if p.loading.is_some() {
+                if close || key.code == KeyCode::Left {
+                    self.picker = None;
+                }
+                return SettingsAction::None;
+            }
             match key.code {
                 KeyCode::Up => p.sel = p.sel.saturating_sub(1),
                 KeyCode::Down => p.sel = (p.sel + 1).min(p.options.len().saturating_sub(1)),
@@ -469,12 +603,17 @@ impl SettingsPanel {
             }
             _ if self.tab != 1 => {}
             KeyCode::Up => self.sel = self.sel.saturating_sub(1),
-            KeyCode::Down => self.sel = (self.sel + 1).min(SETTINGS.len() - 1),
+            KeyCode::Down => self.sel += 1,
             KeyCode::Home => self.sel = 0,
-            KeyCode::End => self.sel = SETTINGS.len() - 1,
-            KeyCode::Enter | KeyCode::Char(' ') => return self.act(SETTINGS[self.sel]),
+            KeyCode::End => self.sel = usize::MAX,
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let all: Vec<Setting> = shown(&self.config()).concat();
+                self.sel = self.sel.min(all.len() - 1);
+                return self.act(all[self.sel]);
+            }
             _ => {}
         }
+        self.sel = self.sel.min(shown(&self.config()).concat().len() - 1);
         SettingsAction::None
     }
 
@@ -515,6 +654,8 @@ impl SettingsPanel {
         } else if let Some(f) = &self.field {
             if f.provider.is_some() {
                 "Paste the key · it stays on this computer · Enter saves · Esc cancels"
+            } else if f.setting == Setting::AiModel {
+                "Type the model's name · Enter saves · Esc cancels"
             } else {
                 "Type the path · Enter saves · Esc cancels"
             }
@@ -525,7 +666,7 @@ impl SettingsPanel {
         };
         let bottom: Vec<Row> = vec![vec![], vec![(Style::fg(GREY), format!("  {hint}"))]];
         // As tall as the Config tab can get with a picker open, so switching tabs keeps the height.
-        let needed = status.len().max(SETTINGS.len() + PICK_ROWS + 4);
+        let needed = status.len().max(SETTING_ROWS + PICK_ROWS + 4);
         let body_h = needed.min(h.saturating_sub(top.len() + bottom.len())).max(1);
         let mut body = if self.tab == 0 { status } else { config };
         // Keep the open picker in view on a short screen.
@@ -542,14 +683,32 @@ impl SettingsPanel {
     fn config_rows(&mut self) -> Vec<Row> {
         let cfg = self.config();
         let mut rows: Vec<Row> = Vec::new();
-        for (i, setting) in SETTINGS.iter().copied().enumerate() {
-            let on = i == self.sel;
+        let mut i = 0;
+        for (g, group) in shown(&cfg).into_iter().enumerate() {
+            if g > 0 {
+                rows.push(vec![]);
+            }
+            for setting in group {
+                self.setting_rows(&mut rows, setting, i == self.sel, &cfg);
+                i += 1;
+            }
+        }
+        if let Some(e) = &self.error {
+            rows.push(vec![]);
+            rows.push(vec![(Style::fg(RED), format!("    {e}"))]);
+        }
+        rows
+    }
+
+    /// One setting's row, and its picker when open.
+    fn setting_rows(&self, rows: &mut Vec<Row>, setting: Setting, on: bool, cfg: &Config) {
+        {
             let base = if on { Style::fg(ACCENT) } else { Style::default() };
             let mut row: Row = vec![
                 (base, if on { "  ❯ " } else { "    " }.into()),
                 (base, pad(setting.label(), LABEL_W)),
             ];
-            match (&self.field, setting.switch(&cfg)) {
+            match (&self.field, setting.switch(cfg)) {
                 (Some(f), _) if on && f.setting == setting => {
                     let shown: Vec<char> = if f.provider.is_some() {
                         vec!['•'; f.buf.len()]
@@ -569,7 +728,7 @@ impl SettingsPanel {
                     ));
                 }
                 _ => {
-                    let (style, value) = value(setting, &cfg);
+                    let (style, value) = value(setting, cfg);
                     row.push((if on && style == Style::default() { base } else { style }, value));
                     row.push((Style::fg(GREY), " ›".into()));
                 }
@@ -577,6 +736,22 @@ impl SettingsPanel {
             rows.push(row);
             if let Some(p) = self.picker.as_ref().filter(|p| p.setting == setting) {
                 let indent = " ".repeat(LABEL_W + 4);
+                if let Some((who, _)) = &p.loading {
+                    rows.push(vec![(Style::fg(GREY), format!("{indent}Asking {who} for its models…"))]);
+                    return;
+                }
+                if let Some(n) = &p.note {
+                    let why: String = if n.chars().count() > 76 {
+                        n.chars().take(75).chain(std::iter::once('…')).collect()
+                    } else {
+                        n.clone()
+                    };
+                    rows.push(vec![(
+                        Style::fg(YELLOW),
+                        format!("{indent}Couldn't get the list, so these are the usual ones:"),
+                    )]);
+                    rows.push(vec![(Style::fg(GREY), format!("{indent}{why}"))]);
+                }
                 if p.options.is_empty() {
                     rows.push(vec![(
                         Style::fg(GREY),
@@ -591,10 +766,13 @@ impl SettingsPanel {
                     .unwrap_or(0)
                     .max(LABEL_W);
                 let first = p.sel.saturating_sub(4).min(p.options.len().saturating_sub(PICK_ROWS));
+                // A row says how many are above, so one fewer option shows.
+                let shown = if first > 0 { PICK_ROWS - 1 } else { PICK_ROWS };
+                let first = if first > 0 { (first + 1).min(p.sel) } else { 0 };
                 if first > 0 {
                     rows.push(vec![(Style::fg(GREY), format!("{indent}↑ {first} more"))]);
                 }
-                for (j, (_, name, about)) in p.options.iter().enumerate().skip(first).take(PICK_ROWS) {
+                for (j, (_, name, about)) in p.options.iter().enumerate().skip(first).take(shown) {
                     let pon = j == p.sel;
                     let name_style = if setting == Setting::Rank {
                         let s = Style::fg(rank_color(Some(name)));
@@ -614,17 +792,12 @@ impl SettingsPanel {
                         (Style::fg(GREY), about.clone()),
                     ]);
                 }
-                let below = p.options.len().saturating_sub(first + PICK_ROWS);
+                let below = p.options.len().saturating_sub(first + shown);
                 if below > 0 {
                     rows.push(vec![(Style::fg(GREY), format!("{indent}↓ {below} more"))]);
                 }
             }
         }
-        if let Some(e) = &self.error {
-            rows.push(vec![]);
-            rows.push(vec![(Style::fg(RED), format!("    {e}"))]);
-        }
-        rows
     }
 }
 
@@ -651,6 +824,13 @@ fn value(setting: Setting, cfg: &Config) -> (Style, String) {
         Setting::ClipFolder => match &cfg.clips_dir {
             Some(d) => (Style::default(), d.display().to_string()),
             None => unset("Not set"),
+        },
+        Setting::AiModel => match cfg.ai.as_deref().and_then(ai::provider) {
+            Some(p) => (
+                Style::default(),
+                ai::model_name(ai::chosen_model(p, cfg.ai_model.as_deref())),
+            ),
+            None => (Style::default(), String::new()),
         },
         Setting::Focus => (Style::default(), habits::focus(cfg.focus.as_deref()).name.into()),
         Setting::Rank => match &cfg.rank {
@@ -695,14 +875,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_are_in_alphabetical_order_with_your_account_last() {
-        let labels: Vec<String> = SETTINGS[..SETTINGS.len() - 1]
-            .iter()
-            .map(|s| s.label().to_lowercase())
-            .collect();
-        let mut sorted = labels.clone();
-        sorted.sort();
-        assert_eq!(labels, sorted);
+    fn settings_are_grouped_and_the_ai_model_shows_once_an_ai_is_picked() {
+        let labels = |cfg: &Config| -> Vec<Vec<&str>> {
+            shown(cfg)
+                .iter()
+                .map(|g| g.iter().map(|s| s.label()).collect())
+                .collect()
+        };
+        let mut cfg = Config::default();
+        assert_eq!(
+            labels(&cfg),
+            [
+                vec![
+                    "Rank",
+                    "Focus habit",
+                    "Your account",
+                    "AI review",
+                    "Screenshots per death"
+                ],
+                vec!["Replay folder", "Clip folder"],
+                vec!["Watch the replay folder", "Automatic updates"],
+            ]
+        );
+        cfg.ai = Some("anthropic".into());
+        assert_eq!(labels(&cfg)[0][4], "AI model");
+        assert_eq!(
+            SETTING_ROWS,
+            GROUPS.iter().map(|g| g.len()).sum::<usize>() + GROUPS.len() - 1
+        );
     }
 
     #[test]

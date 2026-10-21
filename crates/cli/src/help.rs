@@ -50,10 +50,7 @@ const GENERAL: &[(bool, &str)] = &[
         false,
         "  /habits names the mistakes you keep making and shows which are getting better.",
     ),
-    (
-        false,
-        "  /focus picks one of them to work on. Every new match checks it first.",
-    ),
+    (false, "  /focus picks one of them to work on. Every debrief checks it."),
     (false, ""),
     (true, "Keys"),
     (false, "  Enter            run the line, or the highlighted command"),

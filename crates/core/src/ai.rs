@@ -65,6 +65,177 @@ pub fn provider(id: &str) -> Option<&'static Provider> {
     PROVIDERS.iter().find(|p| p.id == id)
 }
 
+/// A model to pick for a provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Model {
+    /// What the API calls it, and `config.toml` stores.
+    pub id: String,
+    pub name: String,
+    pub about: String,
+}
+
+/// Claude's models when its list can't be fetched (no key yet, or offline).
+const CLAUDE_MODELS: [&str; 4] = [
+    "claude-fable-5-1",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+];
+
+/// A model's name as people say it: `claude-sonnet-5-5` is `Sonnet 5.5`.
+/// Other providers' ids are their names.
+pub fn model_name(id: &str) -> String {
+    let Some(rest) = id.strip_prefix("claude-") else {
+        return id.to_owned();
+    };
+    let mut parts = rest.split('-').filter(|p| p.len() < 8);
+    let Some(family) = parts.next() else {
+        return id.to_owned();
+    };
+    let mut name: String = family.chars().take(1).flat_map(char::to_uppercase).collect();
+    name.push_str(&family[family.chars().next().map_or(0, char::len_utf8)..]);
+    let version: Vec<&str> = parts.collect();
+    if !version.is_empty() {
+        name.push(' ');
+        name.push_str(&version.join("."));
+    }
+    name
+}
+
+/// The model `config.toml` asks for, or the provider's default.
+pub fn chosen_model<'a>(p: &'a Provider, configured: Option<&'a str>) -> &'a str {
+    configured.map(str::trim).filter(|m| !m.is_empty()).unwrap_or(p.model)
+}
+
+/// The models `p` offers, from its own list so new ones show up without an
+/// update: the ones that can read images, and for Ollama, those on this PC.
+pub fn models(p: &Provider, key: Option<&str>) -> Result<Vec<Model>> {
+    let key = key.unwrap_or_default();
+    let model = |id: &str, name: String, about: String| Model {
+        id: id.to_owned(),
+        name,
+        about: if id == p.model {
+            format!("{about} · the default").trim_start_matches(" · ").to_owned()
+        } else {
+            about
+        },
+    };
+    let mut out: Vec<Model> = match p.id {
+        "anthropic" => {
+            if key.is_empty() {
+                return Ok(fallback_models(p));
+            }
+            let v = get(
+                "https://api.anthropic.com/v1/models?limit=100",
+                &[("x-api-key", key), ("anthropic-version", "2023-06-01")],
+            )?;
+            v["data"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|m| m["id"].as_str())
+                .map(|id| model(id, model_name(id), id.to_owned()))
+                .collect()
+        }
+        "openai" => {
+            let auth = format!("Bearer {key}");
+            let v = get("https://api.openai.com/v1/models", &[("authorization", &auth)])?;
+            let skip = [
+                "audio",
+                "realtime",
+                "tts",
+                "transcribe",
+                "image",
+                "search",
+                "embedding",
+                "instruct",
+            ];
+            let mut ids: Vec<&str> = v["data"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|m| m["id"].as_str())
+                .filter(|id| id.starts_with("gpt-") && !skip.iter().any(|s| id.contains(s)))
+                .collect();
+            ids.sort_unstable_by(|a, b| b.cmp(a));
+            ids.into_iter()
+                .map(|id| model(id, id.to_owned(), String::new()))
+                .collect()
+        }
+        "gemini" => {
+            let v = get(
+                "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
+                &[("x-goog-api-key", key)],
+            )?;
+            v["models"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|m| {
+                    m["supportedGenerationMethods"]
+                        .as_array()
+                        .is_some_and(|a| a.iter().any(|x| x == "generateContent"))
+                })
+                .filter_map(|m| {
+                    let id = m["name"].as_str()?.trim_start_matches("models/");
+                    id.starts_with("gemini").then(|| {
+                        let name = m["displayName"].as_str().unwrap_or(id).to_owned();
+                        model(id, name, id.to_owned())
+                    })
+                })
+                .collect()
+        }
+        "ollama" => {
+            let v = get(&format!("{OLLAMA}/api/tags"), &[]).map_err(|_| anyhow!("Ollama isn't running on this PC"))?;
+            let mut out = Vec::new();
+            for m in v["models"].as_array().into_iter().flatten() {
+                let Some(id) = m["name"].as_str() else { continue };
+                // Only models that can read the screenshots.
+                let show = post(&format!("{OLLAMA}/api/show"), &[], &json!({"model": id}))?;
+                if !show["capabilities"]
+                    .as_array()
+                    .is_some_and(|c| c.iter().any(|x| x == "vision"))
+                {
+                    continue;
+                }
+                let gb = m["size"].as_f64().unwrap_or(0.0) / 1e9;
+                out.push(model(id, id.to_owned(), format!("{gb:.1} GB · installed")));
+            }
+            if out.is_empty() {
+                bail!(
+                    "no model on this PC can read screenshots. `ollama pull {}` gets one",
+                    p.model
+                );
+            }
+            out
+        }
+        other => bail!("unknown AI provider {other}"),
+    };
+    if out.is_empty() {
+        out = fallback_models(p);
+    }
+    Ok(out)
+}
+
+/// The models to offer when the provider's list can't be fetched.
+pub fn fallback_models(p: &Provider) -> Vec<Model> {
+    let ids: Vec<&str> = match p.id {
+        "anthropic" => CLAUDE_MODELS.to_vec(),
+        _ => vec![p.model],
+    };
+    ids.into_iter()
+        .map(|id| Model {
+            id: id.to_owned(),
+            name: model_name(id),
+            about: if id == p.model {
+                format!("{id} · the default")
+            } else {
+                id.to_owned()
+            },
+        })
+        .collect()
+}
+
 /// The categories a finding may use: what only screenshots can show, then the habits.
 pub const CATEGORIES: [(&str, &str); 12] = [
     ("exposure", "two angles"),
@@ -313,7 +484,7 @@ pub fn run(
         (Some(what), None) => bail!("No {what} set. Add it in /settings → Config → AI review."),
         (_, k) => k,
     };
-    let model = model.filter(|m| !m.trim().is_empty()).unwrap_or(provider.model);
+    let model = chosen_model(provider, model);
     let images: Vec<String> = shots
         .iter()
         .map(|s| {
@@ -364,6 +535,32 @@ fn post(url: &str, headers: &[(&str, &str)], body: &Value) -> Result<Value> {
         .http_status_as_error(false)
         .build()
         .send(body.to_string())
+        .map_err(|e| anyhow!("couldn't reach {}: {e}", host(url)))?;
+    let status = resp.status().as_u16();
+    let text = resp.body_mut().read_to_string().context("reading the answer")?;
+    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    if !(200..300).contains(&status) {
+        let msg = v
+            .pointer("/error/message")
+            .or_else(|| v.pointer("/error"))
+            .and_then(Value::as_str)
+            .map_or_else(|| text.chars().take(200).collect(), str::to_owned);
+        bail!("{} answered {status}: {msg}", host(url));
+    }
+    Ok(v)
+}
+
+fn get(url: &str, headers: &[(&str, &str)]) -> Result<Value> {
+    let mut req = ureq::get(url);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let mut resp = req
+        .config()
+        .timeout_global(Some(Duration::from_secs(15)))
+        .http_status_as_error(false)
+        .build()
+        .call()
         .map_err(|e| anyhow!("couldn't reach {}: {e}", host(url)))?;
     let status = resp.status().as_u16();
     let text = resp.body_mut().read_to_string().context("reading the answer")?;
@@ -502,6 +699,20 @@ fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_names() {
+        assert_eq!(model_name("claude-sonnet-5-5"), "Sonnet 5.5");
+        assert_eq!(model_name("claude-fable-5-1"), "Fable 5.1");
+        assert_eq!(model_name("claude-sonnet-4-5-20250929"), "Sonnet 4.5");
+        assert_eq!(model_name("gpt-5"), "gpt-5");
+        let claude = provider("anthropic").unwrap();
+        assert_eq!(chosen_model(claude, None), "claude-sonnet-5-5");
+        assert_eq!(chosen_model(claude, Some("claude-opus-5-5")), "claude-opus-5-5");
+        let offline = fallback_models(claude);
+        assert_eq!(offline.len(), 4);
+        assert_eq!(offline[2].about, "claude-sonnet-5-5 · the default");
+    }
 
     #[test]
     fn encodes_base64() {
