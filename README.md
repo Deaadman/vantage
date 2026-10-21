@@ -6,7 +6,7 @@ Vantage is a VALORANT coach that reads your replays. After each match it shows w
 
 It runs on your PC and never touches the game or the Riot client.
 
-![A match debrief in Vantage](docs/images/review-debrief.svg)
+![Vantage opening, reading a new replay, then /review going through its six tabs](docs/images/launch.gif)
 
 ## Install
 

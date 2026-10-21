@@ -119,12 +119,12 @@ When Vantage checks for updates and `main` names a newer vrfkit, it downloads it
 
 ## The pictures in the docs
 
-The pictures in `docs/images` are Vantage's real screens, drawn from made-up matches and saved as SVG. When you change a screen the docs show, redraw them:
+The pictures in `docs/images` are Vantage's real screens, drawn from made-up matches and saved as SVG. The README's `launch.gif` is the same screens, played in order. When you change a screen the docs show, redraw them:
 
 ```powershell
 .\scripts\redraw-docs-images.ps1
 ```
 
-It runs the ignored test `redraw_docs_images` in [`crates/cli/src/docs_pictures.rs`](../crates/cli/src/docs_pictures.rs), which rewrites all 14 pictures, then lists the ones that changed. Look over those before you commit. It needs the internet, for the map catalog and Lotus's minimap. Set `DOCS_IMAGES=<folder>` to write the pictures somewhere else.
+It runs the ignored test `redraw_docs_images` in [`crates/cli/src/docs_pictures.rs`](../crates/cli/src/docs_pictures.rs), which rewrites all 14 pictures and the GIF, then lists the ones that changed. Look over those before you commit. It needs the internet, for the map catalog and Lotus's minimap. Set `DOCS_IMAGES=<folder>` to write the pictures somewhere else.
 
 To add a picture, draw its screen in that test, then use it in a page as `![What it shows](images/<name>.svg)`.

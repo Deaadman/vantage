@@ -1,5 +1,6 @@
 //! Redraws the pictures in `docs/images`: the real screens, on made-up
-//! matches, written as SVG. Ignored by `cargo test`; run
+//! matches, written as SVG, and the README's GIF of a launch and a review.
+//! Ignored by `cargo test`; run
 //! `scripts/redraw-docs-images.ps1` after changing a screen the docs show.
 //! It needs the network for the map catalog and Lotus's minimap.
 
@@ -274,6 +275,12 @@ fn clips() -> Clips {
 /// lines up whatever monospace font the viewer has. `subs` replace this PC's
 /// paths and user name with made-up ones.
 fn svg(rows: &[Row], subs: &[(String, String)]) -> String {
+    svg_rows(rows, subs, false)
+}
+
+/// [`svg`], keeping the blank rows at the bottom when `full`, so every frame
+/// of a GIF is the same size.
+fn svg_rows(rows: &[Row], subs: &[(String, String)], full: bool) -> String {
     const CW: f64 = 8.4;
     const LH: usize = 18;
     const PAD: usize = 16;
@@ -285,7 +292,7 @@ fn svg(rows: &[Row], subs: &[(String, String)]) -> String {
     };
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
     let mut rows: Vec<&Row> = rows.iter().collect();
-    while rows.last().is_some_and(|r| r.iter().all(|(_, t)| t.trim().is_empty())) {
+    while !full && rows.last().is_some_and(|r| r.iter().all(|(_, t)| t.trim().is_empty())) {
         rows.pop();
     }
     let (w, h) = ((W as f64 * CW) as usize + 2 * PAD, rows.len() * LH + 2 * PAD);
@@ -332,6 +339,80 @@ fn svg(rows: &[Row], subs: &[(String, String)]) -> String {
     }
     out.push("</svg>".into());
     out.join("\n") + "\n"
+}
+
+// ---------------------------------------------------------------- GIF
+
+/// Screens as a looping GIF, each shown for its centiseconds. The SVGs are
+/// drawn with this PC's fonts; a screen the same as the one before only
+/// lengthens it.
+fn gif(frames: &[(Vec<Row>, u16)], subs: &[(String, String)], path: &Path) {
+    use resvg::{tiny_skia, usvg};
+    let mut opt = usvg::Options::default();
+    opt.fontdb_mut().load_system_fonts();
+    let mut merged: Vec<(String, u16)> = Vec::new();
+    for (rows, cs) in frames {
+        let svg = svg_rows(rows, subs, true);
+        match merged.last_mut() {
+            Some((last, total)) if *last == svg => *total += cs,
+            _ => merged.push((svg, *cs)),
+        }
+    }
+    let mut encoder = None;
+    for (svg, cs) in merged {
+        let tree = usvg::Tree::from_str(&svg, &opt).unwrap();
+        let size = tree.size().to_int_size();
+        let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height()).unwrap();
+        resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+        let (w, h) = (size.width() as u16, size.height() as u16);
+        let enc = encoder.get_or_insert_with(|| {
+            let mut e = gif::Encoder::new(std::fs::File::create(path).unwrap(), w, h, &[]).unwrap();
+            e.set_repeat(gif::Repeat::Infinite).unwrap();
+            e
+        });
+        let mut frame = gif::Frame::from_rgba_speed(w, h, &mut pixmap.take(), 10);
+        frame.delay = cs;
+        enc.write_frame(&frame).unwrap();
+    }
+}
+
+/// Launch: the logo plays while the scan runs, the scan finds a match, then
+/// `/review` is typed and each tab shown in turn.
+fn launch_and_review(app: &mut App, review: ReviewData) -> Vec<(Vec<Row>, u16)> {
+    let mut frames = Vec::new();
+    launched(app);
+    let scanned = std::mem::take(&mut app.transcript);
+    for tick in 0..logo::FRAMES as u32 + 12 {
+        let mut top = header(Some("Gold 2"));
+        if let Item::Header { logo, .. } = &mut top {
+            *logo = (tick as usize).min(logo::FRAMES - 1);
+        }
+        app.transcript = vec![top];
+        app.job = Some(Job {
+            label: "Checking for new replays".into(),
+            started: Instant::now() - TICK * tick - TICK / 2,
+            handle: std::thread::spawn(|| Flow::Continue),
+        });
+        frames.push((screen(app), 8));
+    }
+    app.job = None;
+    app.transcript = scanned;
+    frames.push((screen(app), 150));
+    for c in "/review".chars() {
+        app.editor.insert_str(&c.to_string());
+        frames.push((screen(app), 12));
+    }
+    frames.push((screen(app), 60));
+    app.editor = Editor::new(vec![]);
+    app.panel = Some(Panel::Review(ReviewPanel::new(review)));
+    for tab in '1'..='6' {
+        if let Some(Panel::Review(p)) = &mut app.panel {
+            p.key(key(KeyCode::Char(tab)));
+        }
+        frames.push((screen(app), if tab == '6' { 400 } else { 250 }));
+    }
+    app.panel = None;
+    frames
 }
 
 // ---------------------------------------------------------------- the pictures
@@ -490,10 +571,13 @@ fn redraw_docs_images() {
     ))));
     pictures.push(("rank", screen(&mut app)));
 
+    let frames = launch_and_review(&mut app, review(Some(saved())));
+
     std::fs::create_dir_all(&out_dir).unwrap();
     for (name, rows) in &pictures {
         std::fs::write(out_dir.join(format!("{name}.svg")), svg(rows, &subs)).unwrap();
     }
+    gif(&frames, &subs, &out_dir.join("launch.gif"));
     let _ = std::fs::remove_dir_all(&base);
     eprintln!("redrew {} pictures in {}", pictures.len(), out_dir.display());
 }
