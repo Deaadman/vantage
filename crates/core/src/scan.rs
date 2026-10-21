@@ -222,7 +222,8 @@ fn export_and_store(
 
     let game = Game::new(export);
     // Deathmatch and other modes without the spike and two teams aren't reviewed.
-    if let Some(reason) = game.unsupported_mode() {
+    let mode = game.mode_folder().map(|f| catalog.mode_name(f));
+    if let Some(reason) = game.unsupported_mode_named(mode.as_deref()) {
         store.log_file(file, size, "unsupported", &reason, &vrfkit.version)?;
         return Ok(Outcome::Unsupported { reason });
     }

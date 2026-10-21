@@ -20,6 +20,14 @@ See docs/development.md, "Releasing". CI checks this file's format.
 
 ## [Unreleased]
 
+### Added
+
+- `/matches` shows each match's mode, such as Comp/Unrated/Premier, Swiftplay or Spike Rush, and `/matches comp` or `/matches swiftplay` lists just one mode.
+
+### Changed
+
+- When a replay can't be reviewed, the scan says which mode it was, such as Team Deathmatch.
+
 ## [1.0.0] - 2026-10-21
 
 ### Added

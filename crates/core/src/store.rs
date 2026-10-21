@@ -13,7 +13,7 @@ use crate::export::MatchReview;
 use crate::game::Game;
 use crate::time::now_rfc3339;
 
-pub const STORE_SCHEMA_VERSION: i64 = 3;
+pub const STORE_SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -108,6 +108,26 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 ";
 
+/// Schema 4: `matches.mode`. SQLite has no `ADD COLUMN IF NOT EXISTS`, so a
+/// file whose version row lags its tables is checked first. Matches stored
+/// earlier have no raw export to read the mode from, so it's guessed from the
+/// rounds: Swiftplay ends by round 9, a standard match lasts at least 13
+/// unless a team surrenders.
+fn add_mode_column(conn: &Connection) -> Result<()> {
+    let has_mode = conn
+        .prepare("SELECT 1 FROM pragma_table_info('matches') WHERE name = 'mode'")?
+        .exists([])?;
+    if !has_mode {
+        conn.execute_batch("ALTER TABLE matches ADD COLUMN mode TEXT")?;
+        conn.execute(
+            "UPDATE matches SET mode = CASE WHEN rounds BETWEEN 1 AND 9 THEN 'Swiftplay' ELSE ?1 END
+             WHERE rounds > 0",
+            [crate::modes::STANDARD_LABEL],
+        )?;
+    }
+    Ok(())
+}
+
 /// (match_id, played_at, map name or path)
 pub type MatchRow = (String, Option<String>, Option<String>);
 
@@ -192,6 +212,9 @@ impl Store {
         }
         if version < 3 {
             tx.execute_batch(SCHEMA_V3)?;
+        }
+        if version < 4 {
+            add_mode_column(&tx)?;
         }
         tx.execute(
             "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)
@@ -279,8 +302,8 @@ impl Store {
         )?;
         tx.execute(
             "INSERT INTO matches (match_id, source_file, source_size, replay_build, map_url, map_name, played_at,
-                                  duration_ms, rounds, vrfkit_version, processed_at, context_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                  duration_ms, rounds, vrfkit_version, processed_at, context_json, mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 ctx.match_id,
                 source_file,
@@ -294,6 +317,7 @@ impl Store {
                 vrfkit_version,
                 now_rfc3339(),
                 serde_json::to_string(&ctx)?,
+                ctx.mode,
             ],
         )?;
         for team in &ctx.teams {
@@ -469,7 +493,7 @@ impl Store {
     /// (agent, score and K/D are missing when they weren't in it).
     pub fn my_matches(&self, subject: &str) -> Result<Vec<MyMatch>> {
         let mut stmt = self.conn.prepare(
-            "SELECT m.match_id, m.played_at, COALESCE(m.map_name, m.map_url), p.agent, p.kills, p.deaths,
+            "SELECT m.match_id, m.played_at, COALESCE(m.map_name, m.map_url), m.mode, p.agent, p.kills, p.deaths,
                 (SELECT COUNT(*) FROM round_facts r WHERE r.match_id = m.match_id AND r.subject = ?1
                     AND json_extract(r.fact_json, '$.won') = 1),
                 (SELECT COUNT(*) FROM round_facts r WHERE r.match_id = m.match_id AND r.subject = ?1
@@ -483,11 +507,12 @@ impl Store {
                     id: r.get(0)?,
                     played_at: r.get(1)?,
                     map: r.get(2)?,
-                    agent: r.get(3)?,
-                    kills: r.get::<_, Option<i64>>(4)?.map(|v| v as usize),
-                    deaths: r.get::<_, Option<i64>>(5)?.map(|v| v as usize),
-                    won: r.get::<_, i64>(6)? as usize,
-                    lost: r.get::<_, i64>(7)? as usize,
+                    mode: r.get(3)?,
+                    agent: r.get(4)?,
+                    kills: r.get::<_, Option<i64>>(5)?.map(|v| v as usize),
+                    deaths: r.get::<_, Option<i64>>(6)?.map(|v| v as usize),
+                    won: r.get::<_, i64>(7)? as usize,
+                    lost: r.get::<_, i64>(8)? as usize,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -523,6 +548,8 @@ pub struct MyMatch {
     pub played_at: Option<String>,
     /// Map name, or its path when the catalog didn't know it.
     pub map: Option<String>,
+    /// Game mode, e.g. `Comp/Unrated/Premier` or `Swiftplay`.
+    pub mode: Option<String>,
     pub agent: Option<String>,
     pub kills: Option<usize>,
     pub deaths: Option<usize>,
@@ -636,11 +663,52 @@ mod tests {
     }
 
     #[test]
+    fn upgrading_guesses_the_mode_of_stored_matches() {
+        let path = std::env::temp_dir().join(format!("vantage-store-modes-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        // A schema 3 file with a Swiftplay-length, a full-length and a roundless match.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(SCHEMA_V2).unwrap();
+        conn.execute_batch(SCHEMA_V3).unwrap();
+        conn.execute_batch(
+            "INSERT INTO meta VALUES ('schema_version', '3');
+             INSERT INTO matches VALUES ('swift', 'a.vrf', 1, 'b', NULL, NULL, NULL, 0, 8, 'v', 'now', '{}');
+             INSERT INTO matches VALUES ('full', 'b.vrf', 1, 'b', NULL, NULL, NULL, 0, 24, 'v', 'now', '{}');
+             INSERT INTO matches VALUES ('none', 'c.vrf', 1, 'b', NULL, NULL, NULL, 0, 0, 'v', 'now', '{}');",
+        )
+        .unwrap();
+        drop(conn);
+        let modes = |s: &Store| -> Vec<(String, Option<String>)> {
+            s.my_matches("me")
+                .unwrap()
+                .into_iter()
+                .map(|m| (m.id, m.mode))
+                .collect()
+        };
+        let s = Store::open(&path).unwrap();
+        let want = vec![
+            ("full".to_owned(), Some("Comp/Unrated/Premier".to_owned())),
+            ("none".to_owned(), None),
+            ("swift".to_owned(), Some("Swiftplay".to_owned())),
+        ];
+        assert_eq!(modes(&s), want);
+        drop(s);
+        // A crash after the column but before the version was raised.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute("UPDATE meta SET value = '3' WHERE key = 'schema_version'", [])
+            .unwrap();
+        drop(conn);
+        assert_eq!(modes(&Store::open(&path).unwrap()), want);
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
     fn an_unreadable_review_is_skipped() {
         let s = Store::open_in_memory().unwrap();
         s.conn
             .execute_batch(
-                "INSERT INTO matches VALUES ('m1', 'a.vrf', 1, 'b', NULL, NULL, '2026-01-01', 0, 0, 'v', 'now', '{}');
+                "INSERT INTO matches VALUES ('m1', 'a.vrf', 1, 'b', NULL, NULL, '2026-01-01', 0, 0, 'v', 'now', '{}', NULL);
                  INSERT INTO reviews VALUES ('m1', 'me', '{not json');",
             )
             .unwrap();

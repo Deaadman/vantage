@@ -22,6 +22,7 @@ pub mod habits;
 pub mod install;
 pub mod items;
 pub mod minimap;
+pub mod modes;
 pub mod paths;
 pub mod plan;
 pub mod ranks;
