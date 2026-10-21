@@ -1,21 +1,16 @@
 # Publishes the release install.ps1 and the updater download: push a tag like
-# 0.1.0 (no v prefix; the app adds one when it shows a version) that matches
+# 1.0.0 (no v prefix; the app adds one when it shows a version) that matches
 # the version in crates/cli/Cargo.toml. Every release carries
 # vantage-windows-x64.exe and manifest.json (version, file, SHA-256, and the
 # what's-new notes). The version's section of CHANGELOG.md is both the
 # release's description and those notes; the release stops if it has none.
-#
-# Disabled while Vantage is in development: pushes to main and tags start
-# nothing, and the job below only publishes from a tag. To turn it on,
-# replace the `on:` block with the commented one below.
 
 name: Release
 
 on:
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
   workflow_dispatch:
-# on:
-#   push:
-#     tags: ["[0-9]+.[0-9]+.[0-9]+*"]
 
 permissions:
   contents: write

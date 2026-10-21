@@ -20,6 +20,8 @@ See docs/development.md, "Releasing". CI checks this file's format.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-21
+
 ### Added
 
 - Debriefs that show why you died and the three things that cost you the most rounds.
@@ -28,4 +30,5 @@ See docs/development.md, "Releasing". CI checks this file's format.
 - /release-notes shows what's new in each version.
 - /tui default runs Vantage in your terminal's own scrollback, so its output stays after you quit; /tui fullscreen goes back.
 
-[Unreleased]: https://github.com/Deaadman/vantage/commits/main
+[Unreleased]: https://github.com/Deaadman/vantage/compare/1.0.0...HEAD
+[1.0.0]: https://github.com/Deaadman/vantage/releases/tag/1.0.0
