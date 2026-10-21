@@ -134,7 +134,7 @@ fn scan_one(
     // The header check costs ~50 ms and spares a doomed full export.
     match vrfkit.inspect_build(vrf) {
         Ok(build) => {
-            if let BuildSupport::Unsupported(reason) = check_build(&build) {
+            if let BuildSupport::Unsupported(reason) = check_build(&build, &vrfkit.decodes) {
                 store.log_file(file, size, "unsupported", &reason, &vrfkit.version)?;
                 return Ok(Outcome::Unsupported { reason });
             }
@@ -191,7 +191,7 @@ fn export_and_store(
     let export = Export::load(raw)?;
 
     let mut warnings = Vec::new();
-    if let BuildSupport::Unsupported(s) = check_build(&export.manifest.replay_build) {
+    if let BuildSupport::Unsupported(s) = check_build(&export.manifest.replay_build, &vrfkit.decodes) {
         bail!("{s}");
     }
     if store.has_match(&export.manifest.match_id)? {

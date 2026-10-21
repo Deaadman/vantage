@@ -4,7 +4,7 @@
 #
 # Downloads the release's vantage.exe, checks it against the release
 # manifest, and runs `vantage install`, which copies it to
-# %LOCALAPPDATA%\vantage and fetches the vrfkit release it pins. ffmpeg,
+# %LOCALAPPDATA%\vantage and fetches the vrfkit release it uses. ffmpeg,
 # which takes the screenshots, comes from winget if it isn't installed. The
 # bin folder is added to your user PATH. After that Vantage updates itself.
 #

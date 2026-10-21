@@ -5,3 +5,4 @@
 !/tests/fixtures/public/*.vrf
 export.md
 deaths.jsonl
+/notes/

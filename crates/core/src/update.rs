@@ -6,8 +6,12 @@
 //!  "vrfkit": {"tag": "v0.4.0", "notes": ["What's new in the vrfkit it pins"]}}
 //! ```
 //!
-//! `notes` and `vrfkit` are optional, written at release time; an update
-//! saves them so the first launch of the new version can say what's new.
+//! `notes` and `vrfkit` are optional, written at release time from
+//! CHANGELOG.md and vrfkit.json; an update saves them so the first launch of
+//! the new version can say what's new.
+//!
+//! vrfkit also updates on its own: `latest_pin` reads `vrfkit.json` from
+//! `main`, and `install::update_vrfkit` switches to a newer release it names.
 //!
 //! An update downloads the new exe into `versions\<version>`, checks its hash,
 //! and runs it as `vantage install --update`: the new version installs
@@ -23,6 +27,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::install::{self, Layout};
+use crate::vrfkit::Pin;
 
 pub const REPO: &str = "Deaadman/vantage";
 pub const PLATFORM: &str = "windows-x64";
@@ -75,7 +80,10 @@ impl WhatsNew {
         let w = WhatsNew {
             version: manifest.version.clone(),
             notes: manifest.notes.clone(),
-            vrfkit: manifest.vrfkit.clone().filter(|v| v.tag != crate::vrfkit::PINNED.tag),
+            vrfkit: manifest
+                .vrfkit
+                .clone()
+                .filter(|v| install::is_newer(&v.tag, &crate::vrfkit::active().tag)),
         };
         if let Ok(json) = serde_json::to_string_pretty(&w) {
             let _ = std::fs::write(Self::path(data_dir), json);
@@ -138,6 +146,43 @@ pub fn latest() -> Result<Manifest> {
         bail!("{url} names no usable version ({:?})", manifest.version);
     }
     Ok(manifest)
+}
+
+/// Where vrfkit releases are downloaded from; a pin naming anywhere else is refused.
+const VRFKIT_DOWNLOADS: &str = "https://github.com/yakisoba0728/vrfkit/releases/download/";
+
+/// The vrfkit `main` names in `vrfkit.json`: merging a change to it updates
+/// vrfkit everywhere, without a Vantage release.
+pub fn latest_pin() -> Result<Pin> {
+    let (url, any_host) = match override_base() {
+        Some(base) => (format!("{base}/vrfkit.json"), true),
+        None => (
+            format!("https://raw.githubusercontent.com/{REPO}/main/vrfkit.json"),
+            false,
+        ),
+    };
+    let mut resp = install::http_get(&url)?;
+    let text = resp
+        .body_mut()
+        .read_to_string()
+        .with_context(|| format!("reading {url}"))?;
+    let pin: Pin = serde_json::from_str(&text).with_context(|| format!("parsing {url}"))?;
+    check_pin(&pin, any_host).with_context(|| format!("{url} names an unusable vrfkit"))?;
+    Ok(pin)
+}
+
+fn check_pin(pin: &Pin, any_host: bool) -> Result<()> {
+    let hex = |h: &str| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit());
+    if !hex(&pin.zip_sha256) || !hex(&pin.exe_sha256) {
+        bail!("its hashes aren't SHA-256");
+    }
+    if !any_host && !pin.zip_url.starts_with(VRFKIT_DOWNLOADS) {
+        bail!("{} isn't a vrfkit release download", pin.zip_url);
+    }
+    if pin.decodes().newest == 0 {
+        bail!("its builds {:?} aren't versions", pin.builds);
+    }
+    Ok(())
 }
 
 /// Where a release's file is downloaded from: the tag's own URL, so a release
@@ -229,5 +274,56 @@ mod tests {
         .unwrap();
         assert_eq!(m.asset().unwrap().file, "vantage-windows-x64.exe");
         assert!(file_url(&m, "x.exe").ends_with("/releases/download/0.2.0/x.exe") || override_base().is_some());
+    }
+
+    #[test]
+    fn reads_the_notes_the_release_workflow_writes() {
+        // As .github/workflows/release.yml writes it from CHANGELOG.md, with no vrfkit notes.
+        let m: Manifest = serde_json::from_str(
+            r#"{
+                "version": "0.2.0",
+                "platforms": {"windows-x64": {"file": "vantage-windows-x64.exe", "sha256": "ab"}},
+                "notes": ["Habits are grouped – four groups.", "One more."],
+                "vrfkit": {"tag": "v0.3.0", "notes": []}
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(m.notes, ["Habits are grouped – four groups.", "One more."]);
+        let v = m.vrfkit.as_ref().unwrap();
+        assert_eq!((v.tag.as_str(), v.notes.len()), ("v0.3.0", 0));
+
+        // Saved for the next launch: the vrfkit notes only when the update brings a newer one.
+        let dir = std::env::temp_dir().join(format!("vantage-whats-new-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        WhatsNew::save(&dir, &m);
+        let w = WhatsNew::take(&dir, "0.2.0").unwrap();
+        assert_eq!(w.notes, m.notes);
+        assert_eq!(
+            w.vrfkit.is_some(),
+            install::is_newer(&v.tag, &crate::vrfkit::active().tag)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checks_a_pin_before_using_it() {
+        let good = crate::vrfkit::bundled().clone();
+        assert!(check_pin(&good, false).is_ok());
+        let elsewhere = Pin {
+            zip_url: "https://example.com/vrfkit.zip".into(),
+            ..good.clone()
+        };
+        assert!(check_pin(&elsewhere, false).is_err());
+        assert!(check_pin(&elsewhere, true).is_ok());
+        let short = Pin {
+            exe_sha256: "abc".into(),
+            ..good.clone()
+        };
+        assert!(check_pin(&short, false).is_err());
+        let no_builds = Pin {
+            builds: ["?".into(), "?".into()],
+            ..good
+        };
+        assert!(check_pin(&no_builds, false).is_err());
     }
 }

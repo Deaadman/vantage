@@ -2,8 +2,8 @@
 //! scan with the real vrfkit, store, rescan, detect `me`, render exports and
 //! trends, and report a corrupt file.
 //!
-//! Needs vrfkit v0.3.0: `$VANTAGE_VRFKIT`, else `vrfkit.exe` on PATH. Skips
-//! (passes with a note) without it.
+//! Needs the vrfkit `vrfkit.json` names: `$VANTAGE_VRFKIT`, else `vrfkit.exe`
+//! on PATH. Skips (passes with a note) without it.
 
 use std::path::PathBuf;
 
@@ -55,7 +55,7 @@ fn fixtures_are_the_pinned_files() {
 #[test]
 fn scan_public_fixtures() {
     let Some(vrfkit) = vrfkit() else {
-        eprintln!("skipping: set VANTAGE_VRFKIT to vrfkit.exe v0.3.0");
+        eprintln!("skipping: set VANTAGE_VRFKIT to the vrfkit.exe vrfkit.json names");
         return;
     };
     let data = temp_dir("fixtures");
@@ -120,7 +120,7 @@ fn scan_public_fixtures() {
 #[test]
 fn corrupt_replay_is_reported_once() {
     let Some(vrfkit) = vrfkit() else {
-        eprintln!("skipping: set VANTAGE_VRFKIT to vrfkit.exe v0.3.0");
+        eprintln!("skipping: set VANTAGE_VRFKIT to the vrfkit.exe vrfkit.json names");
         return;
     };
     let data = temp_dir("corrupt");

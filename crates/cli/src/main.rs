@@ -33,7 +33,7 @@ use vantage_core::ranks;
 use vantage_core::scan::{Outcome, ScanOptions, scan};
 use vantage_core::store::{MyMatch, Store};
 use vantage_core::update;
-use vantage_core::vrfkit::{PINNED, Vrfkit};
+use vantage_core::vrfkit::{self, Vrfkit};
 use vantage_core::{Catalog, MatchReview, ai};
 
 /// This build's version; updates compare against it.
@@ -110,7 +110,7 @@ enum Command {
     #[command(hide = true)]
     Sync,
     // Hidden: the shell updates in the background on launch.
-    /// Download and install the newest Vantage and the vrfkit it needs (restart to use it).
+    /// Download and install the newest vrfkit and Vantage (a new Vantage needs a restart).
     #[command(hide = true)]
     Update,
     /// Install this exe and its vrfkit into %LOCALAPPDATA%\vantage (install.ps1 runs this).
@@ -957,7 +957,11 @@ fn startup_check(data_dir: &Path) {
     let Ok(cat) = Catalog::load(&paths::catalog_path(data_dir)) else {
         return;
     };
-    if let Some(msg) = cat.game_version.as_deref().and_then(check_game_version) {
+    if let Some(msg) = cat
+        .game_version
+        .as_deref()
+        .and_then(|v| check_game_version(v, &vrfkit::active().decodes()))
+    {
         errln!("note: {msg}");
     }
 }
@@ -977,11 +981,22 @@ fn update_cmd(data_dir: &Path) -> Result<()> {
         Ok(false) => {}
         Err(e) => out::emit(Kind::Warn, format!("{e:#}")),
     }
+    // vrfkit updates on its own, from vrfkit.json on main.
+    let new_vrfkit =
+        update::latest_pin().and_then(|pin| Ok(install::update_vrfkit(&layout, &pin, VERSION)?.then_some(pin)));
+    match new_vrfkit {
+        Ok(Some(pin)) => {
+            shell::vrfkit_news(&pin).into_iter().for_each(out::row);
+            out::emit(Kind::Dim, "/scan reads the replays it couldn't before.".into());
+        }
+        Ok(None) => {}
+        Err(e) => out::emit(Kind::Warn, format!("couldn't update vrfkit: {e:#}")),
+    }
     let manifest = update::latest().context("checking for updates failed")?;
     if !install::is_newer(&manifest.version, VERSION) {
         update::State::record(data_dir, format!("up to date ({VERSION})"));
         if install::ensure_vrfkit(&layout)? {
-            outln!("installed vrfkit {}", PINNED.tag);
+            outln!("installed vrfkit {}", vrfkit::active().tag);
         }
         outln!("{APP_NAME} is up to date (v{VERSION})");
         return Ok(());
@@ -1024,7 +1039,7 @@ fn install_cmd(data_dir: &Path, quiet: bool) -> Result<()> {
         return Ok(());
     }
     if installed.vrfkit_downloaded {
-        outln!("installed vrfkit {} (SHA-256 verified)", PINNED.tag);
+        outln!("installed vrfkit {} (SHA-256 verified)", vrfkit::active().tag);
     }
     outln!("installed {APP_NAME} v{VERSION} to {}", layout.launcher().display());
     let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d == layout.bin()));

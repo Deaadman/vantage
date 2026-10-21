@@ -2,7 +2,8 @@
 //!
 //! - `versions\<version>\vantage.exe`: every installed version.
 //! - `bin\vantage.exe`: a copy of the current one; `bin` is on PATH.
-//! - `vrfkit\<tag>\vrfkit.exe`: the vrfkit release each version pins.
+//! - `vrfkit\<tag>\vrfkit.exe`: vrfkit releases, with `vrfkit\pin.json`
+//!   naming the one in use once a vrfkit update has installed one.
 //!
 //! A version installs itself (`vantage install`): it copies itself into
 //! `versions`, fetches its vrfkit, and swaps the copy in `bin`. Windows lets a
@@ -17,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-use crate::vrfkit::{PINNED, sha256_file};
+use crate::vrfkit::{Pin, Vrfkit, sha256_file};
 
 /// Installed versions and vrfkit releases kept besides the current one.
 const KEEP_OLDER: usize = 1;
@@ -74,7 +75,7 @@ pub struct Installed {
 }
 
 /// Installs `exe` (the running binary, version `version`): copies it into
-/// `versions`, makes sure its pinned vrfkit is there, points `bin` at it and
+/// `versions`, makes sure the vrfkit in use is there, points `bin` at it and
 /// removes old versions.
 pub fn install(layout: &Layout, version: &str, exe: &Path) -> Result<Installed> {
     let target = layout.version_exe(version);
@@ -87,22 +88,48 @@ pub fn install(layout: &Layout, version: &str, exe: &Path) -> Result<Installed> 
     Ok(Installed { vrfkit_downloaded })
 }
 
-/// Downloads and verifies the pinned vrfkit unless it is already installed.
+/// Downloads and verifies the vrfkit in use unless it is already installed.
 /// True when it downloaded.
 pub fn ensure_vrfkit(layout: &Layout) -> Result<bool> {
-    let exe = layout.vrfkit_exe(PINNED.tag);
-    if exe.is_file() && sha256_file(&exe)? == PINNED.exe_sha256 {
+    fetch_vrfkit(layout, &crate::vrfkit::active())
+}
+
+/// Installs `pin`'s vrfkit and switches to it, when it's newer than the one
+/// in use and Vantage `vantage` reads its output. It must start before
+/// Vantage switches; the one before stays installed. True when it switched.
+pub fn update_vrfkit(layout: &Layout, pin: &Pin, vantage: &str) -> Result<bool> {
+    let current = crate::vrfkit::active();
+    if !is_newer(&pin.tag, &current.tag) || is_newer(&pin.min_vantage, vantage) {
+        return Ok(false);
+    }
+    fetch_vrfkit(layout, pin)?;
+    if !Vrfkit::starts(&layout.vrfkit_exe(&pin.tag)) {
+        bail!(
+            "vrfkit {} doesn't start on this PC, so Vantage keeps using {}",
+            pin.tag,
+            current.tag
+        );
+    }
+    pin.save(layout)?;
+    prune(&layout.root.join("vrfkit"), &pin.tag);
+    Ok(true)
+}
+
+/// Downloads and verifies `pin`'s vrfkit unless it is already installed.
+fn fetch_vrfkit(layout: &Layout, pin: &Pin) -> Result<bool> {
+    let exe = layout.vrfkit_exe(&pin.tag);
+    if exe.is_file() && sha256_file(&exe)?.eq_ignore_ascii_case(&pin.exe_sha256) {
         return Ok(false);
     }
     let dir = exe.parent().expect("vrfkit_exe has a parent");
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let zip_path = dir.join("download.zip");
-    download(PINNED.zip_url, &zip_path)?;
+    download(&pin.zip_url, &zip_path)?;
     let result = (|| {
-        check_sha256(&zip_path, PINNED.zip_sha256, "the vrfkit release ZIP")?;
+        check_sha256(&zip_path, &pin.zip_sha256, "the vrfkit release ZIP")?;
         let partial = dir.join("vrfkit.exe.partial");
         extract_file(&zip_path, "vrfkit.exe", &partial)?;
-        check_sha256(&partial, PINNED.exe_sha256, "vrfkit.exe")?;
+        check_sha256(&partial, &pin.exe_sha256, "vrfkit.exe")?;
         fs::rename(&partial, &exe).with_context(|| format!("moving vrfkit into {}", exe.display()))
     })();
     let _ = fs::remove_file(&zip_path);
@@ -177,7 +204,7 @@ pub fn cleanup(layout: &Layout, current: &str) {
         }
     }
     prune(&layout.versions(), current);
-    prune(&layout.root.join("vrfkit"), PINNED.tag);
+    prune(&layout.root.join("vrfkit"), &crate::vrfkit::active().tag);
 }
 
 /// Removes subdirectories of `dir` except `keep` and the `KEEP_OLDER` highest

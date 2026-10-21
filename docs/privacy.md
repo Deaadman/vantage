@@ -24,7 +24,7 @@ To keep your data somewhere else, start Vantage with `--data-dir <folder>`, or s
 ## What goes over the internet
 
 - Agent, map and weapon names, and the minimap pictures, from [valorant-api.com](https://valorant-api.com), once a day
-- New versions of Vantage and vrfkit, from GitHub
+- New versions of Vantage and vrfkit, from GitHub, when Vantage opens and every few hours while it stays open
 - ffmpeg, from winget, if it's missing
 
 Nothing about your matches is sent anywhere, unless you turn on AI review.

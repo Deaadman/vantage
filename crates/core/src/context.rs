@@ -55,7 +55,7 @@ impl MatchContext {
     pub fn new(game: &Game, catalog: &Catalog) -> Self {
         let m = &game.export.manifest;
         let map = m.map_path.as_deref().and_then(|p| catalog.map_by_url(p));
-        let build_note = match check_build(&m.replay_build) {
+        let build_note = match check_build(&m.replay_build, &crate::vrfkit::active().decodes()) {
             BuildSupport::Supported => None,
             BuildSupport::Unsupported(s) => Some(s),
         };

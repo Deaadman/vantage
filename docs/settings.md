@@ -35,7 +35,9 @@ Vantage asks the AI for its list of models, so new ones show up without a Vantag
 
 ## Updates
 
-Vantage updates itself. Each time you open it, it checks for a new version and installs it in the background. The bottom of the screen says "Update available! Restart to apply" when it's ready, and the next launch uses it. The first launch after an update shows what's new.
+Vantage updates itself. Each time you open it, and every few hours while it's open, it checks for a new version and installs it in the background. The bottom of the screen says "Update available! Restart to apply" when it's ready, and the next launch uses it. The first launch after an update shows what's new.
+
+vrfkit, which reads your replays, updates the same way but needs no restart. When a new VALORANT patch comes out, a vrfkit that reads it usually follows within days. Vantage installs it, says what's new, and reads any replays the old one couldn't.
 
 - To update straight away, type `/update`.
 - To stop updating in the background, turn off **Automatic updates** in `/settings`. You can also set the environment variable `VANTAGE_DISABLE_AUTOUPDATER=1`. `/update` still works either way.

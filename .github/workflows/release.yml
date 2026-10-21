@@ -1,7 +1,9 @@
 # Publishes the release install.ps1 and the updater download: push a tag like
 # 0.1.0 (no v prefix; the app adds one when it shows a version) that matches
 # the version in crates/cli/Cargo.toml. Every release carries
-# vantage-windows-x64.exe and manifest.json (version, file, SHA-256).
+# vantage-windows-x64.exe and manifest.json (version, file, SHA-256, and the
+# what's-new notes). The version's section of CHANGELOG.md is both the
+# release's description and those notes; the release stops if it has none.
 #
 # Disabled while Vantage is in development: pushes to main and tags start
 # nothing, and the job below only publishes from a tag. To turn it on,
@@ -42,6 +44,10 @@ jobs:
             throw "tag $env:GITHUB_REF_NAME does not match crates/cli version $version"
           }
 
+      - name: Read the release notes from CHANGELOG.md
+        shell: pwsh
+        run: ./scripts/release-notes.ps1 -Version $env:GITHUB_REF_NAME -OutDir notes
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
@@ -53,14 +59,19 @@ jobs:
           Copy-Item target/release/vantage.exe $env:ASSET
           $version = $env:GITHUB_REF_NAME
           $hash = (Get-FileHash -Algorithm SHA256 $env:ASSET).Hash.ToLowerInvariant()
-          $manifest = @{
+          $whatsNew = Get-Content -Raw notes/whats-new.json | ConvertFrom-Json
+          $manifest = [ordered]@{
             version = $version
             platforms = @{ 'windows-x64' = @{ file = $env:ASSET; sha256 = $hash } }
+            notes = @($whatsNew.notes)
+            vrfkit = [ordered]@{ tag = $whatsNew.vrfkit.tag; notes = @($whatsNew.vrfkit.notes) }
           }
-          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding ascii manifest.json
+          # UTF-8 without a BOM, so notes keep characters like dashes and accents.
+          [IO.File]::WriteAllText("$PWD/manifest.json", ($manifest | ConvertTo-Json -Depth 4))
 
       - name: Publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME $env:ASSET manifest.json --title $env:GITHUB_REF_NAME --generate-notes --verify-tag
+        # The changelog section first, then GitHub's generated notes (merged PRs and the full changelog link).
+        run: gh release create $env:GITHUB_REF_NAME $env:ASSET manifest.json --title $env:GITHUB_REF_NAME --notes-file notes/release-notes.md --generate-notes --verify-tag

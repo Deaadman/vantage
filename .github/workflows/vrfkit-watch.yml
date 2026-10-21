@@ -1,0 +1,65 @@
+# Once a day, looks for a new vrfkit release. When there is one, it points
+# vrfkit.json at it (scripts/vrfkit-bump.ps1 checks the download against
+# GitHub's record of it), opens a pull request, and starts CI on that branch,
+# which runs every test with the new vrfkit. Merging the pull request sends
+# the new vrfkit to every install on its next update check; closing it skips
+# that release.
+#
+# Needs "Allow GitHub Actions to create and approve pull requests" turned on
+# in the repo's Settings > Actions > General.
+
+name: vrfkit watch
+
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: A vrfkit tag to use instead of the newest, like v0.4.0
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: vrfkit-watch
+
+jobs:
+  bump:
+    name: Look for a new vrfkit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Point vrfkit.json at the newest vrfkit
+        id: bump
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: ./scripts/vrfkit-bump.ps1 -Tag "$env:TAG" -OutDir "$env:RUNNER_TEMP/bump"
+
+      - name: Open a pull request
+        if: steps.bump.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          branch="bot/vrfkit-$TAG"
+          # One pull request per release: an open one is kept, a closed one means skip it.
+          if [ -n "$(gh pr list --head "$branch" --state all --json number --jq '.[].number')" ]; then
+            echo "A pull request for vrfkit $TAG already exists"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "Update vrfkit to $TAG"
+          git push --force origin "$branch"
+          gh pr create --base main --head "$branch" --title "Update vrfkit to $TAG" --body-file "$RUNNER_TEMP/bump/pr-body.md"
+          # A pull request opened with this workflow's token starts no other
+          # workflows, so start CI on the branch; its checks show on the pull request.
+          gh workflow run ci.yml --ref "$branch"

@@ -1,7 +1,7 @@
-# Checks every push to main and every pull request: formatting, clippy with
-# warnings as errors, then all the tests, including the full scan of the
-# public fixtures with the pinned vrfkit. The release workflow runs this
-# first and only publishes when it passes.
+# Checks every push to main and every pull request: formatting, the
+# changelog's format, clippy with warnings as errors, then all the tests,
+# including the full scan of the public fixtures with the pinned vrfkit. The
+# release workflow runs this first and only publishes when it passes.
 
 name: CI
 
@@ -19,9 +19,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  # Keep in step with PINNED in crates/core/src/vrfkit.rs; a test checks they match.
-  VRFKIT_ZIP_URL: https://github.com/yakisoba0728/vrfkit/releases/download/v0.3.0/vrfkit-v0.3.0-windows-x64.zip
-  VRFKIT_ZIP_SHA256: 58cd76fb926642de931e74d70b3ad3db1e696ffbd752e4a1a60fc6686c4540df
 
 jobs:
   lint:
@@ -35,6 +32,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --all --check
+      - name: Changelog
+        shell: pwsh
+        run: ./scripts/release-notes.ps1 -Check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked
 
@@ -46,17 +46,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Fetch the pinned vrfkit
+      # The vrfkit vrfkit.json names, so a pull request that changes it tests the new one.
+      - name: Fetch the vrfkit in vrfkit.json
         shell: pwsh
         run: |
+          $pin = Get-Content vrfkit.json -Raw | ConvertFrom-Json
           $zip = Join-Path $env:RUNNER_TEMP 'vrfkit.zip'
-          Invoke-WebRequest $env:VRFKIT_ZIP_URL -OutFile $zip
+          Invoke-WebRequest $pin.zip_url -OutFile $zip
           $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-          if ($hash -ne $env:VRFKIT_ZIP_SHA256) { throw "vrfkit zip hash $hash doesn't match the pin" }
+          if ($hash -ne $pin.zip_sha256) { throw "vrfkit zip hash $hash doesn't match vrfkit.json" }
           $dir = Join-Path $env:RUNNER_TEMP 'vrfkit'
           Expand-Archive $zip $dir
           $exe = Get-ChildItem $dir -Recurse -Filter vrfkit.exe | Select-Object -First 1
+          $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
+          if ($hash -ne $pin.exe_sha256) { throw "vrfkit.exe hash $hash doesn't match vrfkit.json" }
           "VANTAGE_VRFKIT=$($exe.FullName)" >> $env:GITHUB_ENV
+          "Tested with vrfkit **$($pin.tag)** (VALORANT $($pin.builds -join ' to '))" >> $env:GITHUB_STEP_SUMMARY
 
       - name: Test
         run: cargo test --workspace --locked

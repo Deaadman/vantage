@@ -19,7 +19,7 @@ Type `/` to see the commands. Keep typing to filter them, and press Tab to compl
 | `/scan` | Look for new replays now. Add `--retry-failed` to try failed replays again. |
 | `/settings` | Your rank, folders, AI review and other settings. See [Settings and updates](settings.md). |
 | `/logs` | Open the folder of session logs, to attach one to a bug report. |
-| `/update` | Install the newest Vantage now. |
+| `/update` | Install the newest Vantage and vrfkit now. |
 | `/help` | The commands and keys. |
 | `/clear` | Clear the screen. |
 | `/exit` | Quit Vantage. |

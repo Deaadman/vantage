@@ -25,7 +25,7 @@ use vantage_core::install::{self, Layout};
 use vantage_core::paths;
 use vantage_core::store::Store;
 use vantage_core::update::{self, WhatsNew};
-use vantage_core::vrfkit::Vrfkit;
+use vantage_core::vrfkit::{self, Pin, Vrfkit};
 
 use crate::coach_views::{CoachAction, HabitsPanel, PlanData, PlanPanel, RankPanel};
 use crate::editor::{Action, CommandInfo, Context, Editor, FlagInfo, MatchInfo};
@@ -87,6 +87,16 @@ enum UpdateNote {
     Failed,
 }
 
+/// What a background check sends the shell.
+enum Checked {
+    Note(UpdateNote),
+    /// A newer vrfkit was installed, and is used from now on.
+    Vrfkit(Pin),
+}
+
+/// How often an open shell checks for updates again after launch.
+const RECHECK: Duration = Duration::from_secs(6 * 60 * 60);
+
 impl UpdateNote {
     fn text(self) -> (Color, &'static str) {
         match self {
@@ -102,16 +112,7 @@ pub fn run(data_dir: &Path) -> Result<()> {
     out::capture(Some(tx));
     let result = Screen::on().map_err(anyhow::Error::from).and_then(|_screen| {
         let mut app = App::new(data_dir, rx);
-        let (update_tx, update_rx) = mpsc::channel();
-        app.update_rx = Some(update_rx);
-        let cfg = Config::load(data_dir).unwrap_or_default();
-        if update::auto_disabled(cfg.auto_update).is_none() {
-            let dir = data_dir.to_path_buf();
-            std::thread::spawn(move || check_for_update(&dir, &update_tx, true));
-        } else {
-            let dir = data_dir.to_path_buf();
-            std::thread::spawn(move || check_for_update(&dir, &update_tx, false));
-        }
+        app.check_for_updates();
         // With no catalog yet, `launch` fetches one first; an old one refreshes quietly.
         let path = paths::catalog_path(data_dir);
         let stale = Catalog::load(&path).ok().is_some_and(|c| {
@@ -257,7 +258,8 @@ enum Item {
         logo: usize,
     },
     Line(Kind, String),
-    /// A line of pieces in their own styles; never wrapped.
+    /// A line of pieces in their own styles. Only the last piece wraps,
+    /// under itself, so a bullet's text lines up past the bullet.
     Row(out::Line),
     /// A line the user sent.
     Echo(String),
@@ -282,7 +284,12 @@ struct App {
     notices: Vec<(Color, String)>,
     /// What the background update check found, shown before the notices.
     update_note: Option<UpdateNote>,
-    update_rx: Option<Receiver<UpdateNote>>,
+    update_rx: Option<Receiver<Checked>>,
+    update_tx: Option<Sender<Checked>>,
+    /// When to check for updates again.
+    next_check: Option<Instant>,
+    /// A vrfkit that was just installed, announced once no job is running.
+    new_vrfkit: Option<Pin>,
     /// Whether a rank is set, for the input's placeholder.
     ranked: bool,
     footer: String,
@@ -350,6 +357,9 @@ impl App {
             notices: vec![],
             update_note: None,
             update_rx: None,
+            update_tx: None,
+            next_check: None,
+            new_vrfkit: None,
             ranked: false,
             footer: String::new(),
             watch: Watch {
@@ -413,6 +423,26 @@ impl App {
             started: Instant::now(),
             handle: std::thread::spawn(job),
         });
+    }
+
+    /// Check for a newer Vantage and vrfkit in the background, and again
+    /// every `RECHECK`. A Vantage update already installed isn't checked again.
+    fn check_for_updates(&mut self) {
+        let tx = match &self.update_tx {
+            Some(tx) => tx.clone(),
+            None => {
+                let (tx, rx) = mpsc::channel();
+                self.update_rx = Some(rx);
+                self.update_tx = Some(tx.clone());
+                tx
+            }
+        };
+        let cfg = Config::load(&self.data_dir).unwrap_or_default();
+        let install_it = update::auto_disabled(cfg.auto_update).is_none();
+        let vantage = self.update_note != Some(UpdateNote::Installed);
+        let dir = self.data_dir.clone();
+        std::thread::spawn(move || check_for_update(&dir, &tx, install_it, vantage));
+        self.next_check = Some(Instant::now() + RECHECK);
     }
 
     /// The launch: what's new after an update, the scan, and the focus.
@@ -481,9 +511,30 @@ impl App {
         let mut dirty = true;
         loop {
             dirty |= self.drain();
-            if let Some(note) = self.update_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
-                self.update_note = Some(note);
-                self.notices = notices(&self.data_dir, true);
+            while let Some(checked) = self.update_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+                match checked {
+                    // An installed update stays the news until the restart.
+                    Checked::Note(note) if self.update_note != Some(UpdateNote::Installed) => {
+                        self.update_note = Some(note);
+                    }
+                    Checked::Note(_) => {}
+                    Checked::Vrfkit(pin) => self.new_vrfkit = Some(pin),
+                }
+                self.notices = notices(&self.data_dir, self.update_note.is_some());
+                dirty = true;
+            }
+            if self.next_check.is_some_and(|t| Instant::now() >= t) {
+                self.check_for_updates();
+            }
+            if self.job.is_none()
+                && let Some(pin) = self.new_vrfkit.take()
+            {
+                vrfkit_news(&pin).into_iter().for_each(out::row);
+                let dir = self.data_dir.clone();
+                self.start("Reading replays with the new vrfkit", true, move || {
+                    rescan(&dir);
+                    Flow::Continue
+                });
                 dirty = true;
             }
             if self.job.as_ref().is_some_and(|j| j.handle.is_finished()) {
@@ -951,7 +1002,26 @@ fn transcript_rows(items: &[Item], w: usize) -> Vec<Row> {
             }
             Item::Row(pieces) => {
                 let mut row: Row = vec![(Style::default(), " ".into())];
-                row.extend(pieces.iter().map(|(kind, text)| (kind_style(*kind), text.clone())));
+                let Some(((kind, last), lead)) = pieces.split_last() else {
+                    rows.push(row);
+                    continue;
+                };
+                row.extend(lead.iter().map(|(kind, text)| (kind_style(*kind), text.clone())));
+                let lead_w: usize = lead.iter().map(|(_, t)| t.chars().count()).sum();
+                if lead_w > text_w / 2 {
+                    row.push((kind_style(*kind), last.clone()));
+                    rows.push(row);
+                    continue;
+                }
+                for (i, piece) in wrap(last, text_w - lead_w).into_iter().enumerate() {
+                    if i > 0 {
+                        rows.push(std::mem::replace(
+                            &mut row,
+                            vec![(Style::default(), " ".repeat(1 + lead_w))],
+                        ));
+                    }
+                    row.push((kind_style(*kind), piece));
+                }
                 rows.push(row);
             }
             Item::Echo(text) => {
@@ -1115,7 +1185,10 @@ fn notices(data_dir: &Path, update: bool) -> Vec<(Color, String)> {
     }
     if !update
         && let Ok(c) = Catalog::load(&paths::catalog_path(data_dir))
-        && let Some(v) = c.game_version.as_deref().filter(|v| check_game_version(v).is_some())
+        && let Some(v) = c
+            .game_version
+            .as_deref()
+            .filter(|v| check_game_version(v, &vrfkit::active().decodes()).is_some())
     {
         let patch = v.splitn(3, '.').take(2).collect::<Vec<_>>().join(".");
         out.push((
@@ -1131,38 +1204,69 @@ fn fetch_catalog(path: &Path) -> Result<()> {
     vantage_core::catalog::fetch()?.save(path)
 }
 
-/// One "what's new" block: heading, bullets, then the release link.
-fn whats_new(title: String, notes: &[String], link: String) {
-    out::row(vec![
+/// One "what's new" block: a heading, the notes, then the release link. With
+/// no notes it's just the heading and the link.
+fn news(title: String, notes: &[String], link: String) -> Vec<out::Line> {
+    let mut heading = vec![
         (Kind::Paint(crate::review_view::GREEN, true), "✓ ".into()),
         (Kind::Bold, title),
-        (Kind::Dim, " · what's new".into()),
-    ]);
+    ];
+    if !notes.is_empty() {
+        heading.push((Kind::Dim, " · what's new".into()));
+    }
+    let mut lines = vec![heading];
     for n in notes {
-        out::row(vec![
+        lines.push(vec![
             (Kind::Paint(ACCENT, false), "  • ".into()),
             (Kind::Out, n.clone()),
         ]);
     }
-    out::emit(Kind::Dim, format!("  {link} for details"));
-    outln!();
+    lines.push(vec![(Kind::Dim, format!("  {link} for details"))]);
+    lines.push(vec![(Kind::Out, String::new())]);
+    lines
+}
+
+/// What a vrfkit update brings, from its `vrfkit.json` notes.
+pub(crate) fn vrfkit_news(pin: &Pin) -> Vec<out::Line> {
+    news(
+        format!("vrfkit updated to v{}", pin.tag.trim_start_matches('v')),
+        &pin.notes,
+        format!("{}/{}", update::VRFKIT_RELEASES, pin.tag),
+    )
+}
+
+/// What a Vantage update brings, for its first launch: its block and, when
+/// it brought a newer vrfkit, one for that.
+fn whats_new(w: &WhatsNew) -> Vec<out::Line> {
+    let mut lines = news(
+        format!("{APP_NAME} updated to v{}", w.version),
+        &w.notes,
+        format!("{}/{}", update::RELEASES, w.version),
+    );
+    if let Some(v) = &w.vrfkit {
+        lines.extend(news(
+            format!("vrfkit updated to v{}", v.tag.trim_start_matches('v')),
+            &v.notes,
+            format!("{}/{}", update::VRFKIT_RELEASES, v.tag),
+        ));
+    }
+    lines
+}
+
+/// After a vrfkit update: scan again, so replays the old one couldn't read are read now.
+fn rescan(data_dir: &Path) {
+    let cfg = Config::load(data_dir).unwrap_or_default();
+    if cfg.demos_dir().is_some_and(|d| d.is_dir())
+        && let Err(e) = crate::scan_cmd(data_dir, None, false, false)
+    {
+        out::emit(Kind::Error, format!("Couldn't read your replays: {e:#}"));
+    }
 }
 
 /// On launch: what's new after an update, the scan, and the focus.
 fn launch(data_dir: &Path) {
     if let Some(w) = WhatsNew::take(data_dir, crate::VERSION) {
-        whats_new(
-            format!("{APP_NAME} updated to v{}", w.version),
-            &w.notes,
-            format!("{}/{}", update::RELEASES, w.version),
-        );
-        if let Some(v) = &w.vrfkit {
-            whats_new(
-                format!("vrfkit updated to v{}", v.tag.trim_start_matches('v')),
-                &v.notes,
-                format!("{}/{}", update::VRFKIT_RELEASES, v.tag),
-            );
-        }
+        whats_new(&w).into_iter().for_each(out::row);
     }
     let cfg = Config::load(data_dir).unwrap_or_default();
     if Vrfkit::locate(cfg.vrfkit.as_deref(), cfg.vrfkit_sha256.as_deref()).is_err() {
@@ -1190,17 +1294,50 @@ fn launch(data_dir: &Path) {
     }
 }
 
-/// In the background on launch: install a newer release (it applies on the
-/// next launch), or only say it exists when automatic updates are off or this
-/// exe was not installed by the installer (a dev build). Offline or failing
-/// checks stay quiet.
-fn check_for_update(data_dir: &Path, tx: &Sender<UpdateNote>, install_it: bool) {
+/// In the background: install a newer Vantage (it applies on the next
+/// launch) when `vantage`, then a newer vrfkit (used straight away). When
+/// automatic updates are off or this exe was not installed by the installer
+/// (a dev build), only say an update exists. Offline or failing checks stay
+/// quiet.
+fn check_for_update(data_dir: &Path, tx: &Sender<Checked>, install_it: bool, vantage: bool) {
     let installed = Layout::new()
         .ok()
         .filter(|l| std::env::current_exe().is_ok_and(|e| l.contains(&e)));
     if let Some(layout) = &installed {
         install::cleanup(layout, crate::VERSION);
     }
+    let layout = installed.filter(|_| install_it);
+    if vantage {
+        check_vantage(data_dir, tx, layout.as_ref());
+    }
+    check_vrfkit(tx, layout.as_ref());
+}
+
+/// A newer vrfkit in `vrfkit.json` on `main`, for this version of Vantage.
+fn check_vrfkit(tx: &Sender<Checked>, layout: Option<&Layout>) {
+    let Ok(pin) = update::latest_pin() else {
+        return;
+    };
+    if !install::is_newer(&pin.tag, &vrfkit::active().tag) || install::is_newer(&pin.min_vantage, crate::VERSION) {
+        return;
+    }
+    let Some(layout) = layout else {
+        let _ = tx.send(Checked::Note(UpdateNote::Available));
+        return;
+    };
+    match install::update_vrfkit(layout, &pin, crate::VERSION) {
+        Ok(true) => {
+            let _ = tx.send(Checked::Vrfkit(pin));
+        }
+        Ok(false) => {}
+        Err(e) => {
+            crate::session_log::write("WARN", &format!("vrfkit update failed: {e:#}"));
+            let _ = tx.send(Checked::Note(UpdateNote::Failed));
+        }
+    }
+}
+
+fn check_vantage(data_dir: &Path, tx: &Sender<Checked>, layout: Option<&Layout>) {
     let manifest = match update::latest() {
         Ok(m) => m,
         Err(e) => {
@@ -1213,21 +1350,22 @@ fn check_for_update(data_dir: &Path, tx: &Sender<UpdateNote>, install_it: bool) 
         update::State::record(data_dir, format!("up to date ({})", crate::VERSION));
         return;
     }
-    let Some(layout) = installed.filter(|_| install_it) else {
+    let Some(layout) = layout else {
         update::State::record(data_dir, format!("{v} available"));
-        let _ = tx.send(UpdateNote::Available);
+        let _ = tx.send(Checked::Note(UpdateNote::Available));
         return;
     };
-    match update::apply(&layout, &manifest, data_dir) {
+    let note = match update::apply(layout, &manifest, data_dir) {
         Ok(_) => {
             update::State::record(data_dir, format!("installed {v}"));
-            let _ = tx.send(UpdateNote::Installed);
+            UpdateNote::Installed
         }
         Err(e) => {
             update::State::record(data_dir, format!("failed: {e:#}"));
-            let _ = tx.send(UpdateNote::Failed);
+            UpdateNote::Failed
         }
-    }
+    };
+    let _ = tx.send(Checked::Note(note));
 }
 
 /// Set `me` once exactly one account is in every scanned match (2+).
@@ -1503,6 +1641,59 @@ mod tests {
         assert!(wide.contains("Restart to apply") && wide.contains("isn't supported"));
         let narrow = text(&status_right(Row::new(), msgs(), 45));
         assert!(narrow.contains("Restart to apply") && !narrow.contains("isn't supported"));
+    }
+
+    #[test]
+    fn whats_new_after_an_update() {
+        let w = WhatsNew {
+            version: "0.3.0".into(),
+            notes: vec![
+                "Habits by map.".into(),
+                "A note long enough that it has to wrap onto a second row, under the first row's text.".into(),
+            ],
+            vrfkit: Some(update::VrfkitNotes {
+                tag: "v0.4.0".into(),
+                notes: vec![],
+            }),
+        };
+        let lines = whats_new(&w);
+        let items: Vec<Item> = lines.into_iter().map(Item::Row).collect();
+        let shown: Vec<String> = transcript_rows(&items, 80).iter().map(text).collect();
+        assert_eq!(
+            shown,
+            [
+                " ✓ Vantage updated to v0.3.0 · what's new",
+                "   • Habits by map.",
+                "   • A note long enough that it has to wrap onto a second row, under the first",
+                "     row's text.",
+                "   github.com/Deaadman/vantage/releases/tag/0.3.0 for details",
+                " ",
+                // vrfkit's notes are in Vantage's now, so its block is the heading and link.
+                " ✓ vrfkit updated to v0.4.0",
+                "   github.com/yakisoba0728/vrfkit/releases/tag/v0.4.0 for details",
+                " ",
+            ]
+        );
+    }
+
+    #[test]
+    fn whats_new_after_a_vrfkit_update() {
+        let pin = Pin {
+            tag: "v0.4.0".into(),
+            notes: vec!["Supports VALORANT 13.10".into()],
+            ..vrfkit::bundled().clone()
+        };
+        let items: Vec<Item> = vrfkit_news(&pin).into_iter().map(Item::Row).collect();
+        let shown: Vec<String> = transcript_rows(&items, 80).iter().map(text).collect();
+        assert_eq!(
+            shown,
+            [
+                " ✓ vrfkit updated to v0.4.0 · what's new",
+                "   • Supports VALORANT 13.10",
+                "   github.com/yakisoba0728/vrfkit/releases/tag/v0.4.0 for details",
+                " ",
+            ]
+        );
     }
 
     #[test]

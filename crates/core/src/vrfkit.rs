@@ -1,32 +1,83 @@
-//! Runs the pinned vrfkit release as a subprocess.
+//! Runs vrfkit as a subprocess, and picks the release to run.
+//!
+//! `vrfkit.json` at the repo root names the release. Each build has it built
+//! in, and installed copies also fetch the newest one from `main` (see
+//! `update::latest_pin`), so a new vrfkit reaches players without a Vantage
+//! release. A vrfkit installed that way saves its pin as `vrfkit\pin.json`.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// The vrfkit release this version of Vantage installs and runs.
-pub struct Pinned {
-    pub tag: &'static str,
-    pub zip_url: &'static str,
-    pub zip_sha256: &'static str,
+use crate::builds::Decodes;
+use crate::install::{Layout, is_newer};
+
+/// One vrfkit release: where it comes from, its hashes, and what it decodes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pin {
+    pub tag: String,
+    pub zip_url: String,
+    pub zip_sha256: String,
     /// SHA-256 of `vrfkit.exe` inside the ZIP.
-    pub exe_sha256: &'static str,
+    pub exe_sha256: String,
+    /// The oldest and newest VALORANT builds it decodes, e.g. `["11.06", "13.08"]`.
+    pub builds: [String; 2],
+    /// What players see when it arrives as an update, one line each.
+    #[serde(default)]
+    pub notes: Vec<String>,
+    /// The oldest Vantage that reads its output.
+    pub min_vantage: String,
 }
 
-/// v0.3.0: the release ZIP matches GitHub's asset digest and the exe matches
-/// its `build-info.json`.
-pub const PINNED: Pinned = Pinned {
-    tag: "v0.3.0",
-    zip_url: "https://github.com/yakisoba0728/vrfkit/releases/download/v0.3.0/vrfkit-v0.3.0-windows-x64.zip",
-    zip_sha256: "58cd76fb926642de931e74d70b3ad3db1e696ffbd752e4a1a60fc6686c4540df",
-    exe_sha256: "1a211eebbaf0a794201baefa2b32162d74c93fec38a8db3a793c0d93429ba0ca",
-};
+impl Pin {
+    pub fn decodes(&self) -> Decodes {
+        let code = |b: &str| crate::builds::parse_version(b).unwrap_or(0);
+        Decodes {
+            tag: self.tag.clone(),
+            oldest: code(&self.builds[0]),
+            newest: code(&self.builds[1]),
+        }
+    }
 
-/// Release binaries Vantage has been checked against: (tag, SHA-256 of `vrfkit.exe`).
-pub const KNOWN_RELEASES: &[(&str, &str)] = &[(PINNED.tag, PINNED.exe_sha256)];
+    /// Where an update saves the pin it installed.
+    pub fn saved_path(layout: &Layout) -> PathBuf {
+        layout.root.join("vrfkit").join("pin.json")
+    }
+
+    fn load_saved(layout: &Layout) -> Option<Pin> {
+        serde_json::from_str(&std::fs::read_to_string(Self::saved_path(layout)).ok()?).ok()
+    }
+
+    pub fn save(&self, layout: &Layout) -> Result<()> {
+        let path = Self::saved_path(layout);
+        let json = serde_json::to_string_pretty(self)?;
+        std::fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
+    }
+}
+
+/// The pin built into this Vantage: `vrfkit.json` when it was built.
+pub fn bundled() -> &'static Pin {
+    static BUNDLED: OnceLock<Pin> = OnceLock::new();
+    BUNDLED.get_or_init(|| serde_json::from_str(include_str!("../../../vrfkit.json")).expect("vrfkit.json parses"))
+}
+
+/// The pin in use: one a vrfkit update saved, when it's newer than the
+/// built-in one, else the built-in one.
+pub fn active() -> Pin {
+    newest(Layout::new().ok().and_then(|l| Pin::load_saved(&l)))
+}
+
+fn newest(saved: Option<Pin>) -> Pin {
+    match saved {
+        Some(p) if !is_newer(&bundled().tag, &p.tag) => p,
+        _ => bundled().clone(),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Vrfkit {
@@ -34,6 +85,9 @@ pub struct Vrfkit {
     pub sha256: String,
     /// Release tag, or `custom` for a hash accepted through config.
     pub version: String,
+    /// The replay builds it decodes; a custom build is taken to decode what
+    /// the pin in use does.
+    pub decodes: Decodes,
 }
 
 impl Vrfkit {
@@ -54,19 +108,37 @@ impl Vrfkit {
             );
         }
         let sha256 = sha256_file(&path)?;
-        let version = if let Some((tag, _)) = KNOWN_RELEASES.iter().find(|(_, h)| *h == sha256) {
-            (*tag).to_owned()
+        let active = active();
+        let known = [&active, bundled()];
+        let (version, decodes) = if let Some(pin) = known.iter().find(|p| p.exe_sha256.eq_ignore_ascii_case(&sha256)) {
+            (pin.tag.clone(), pin.decodes())
         } else if accepted_sha256.is_some_and(|h| h.eq_ignore_ascii_case(&sha256)) {
-            "custom".to_owned()
+            ("custom".to_owned(), active.decodes())
         } else {
+            let mut tags: Vec<&str> = known.iter().map(|p| p.tag.as_str()).collect();
+            tags.dedup();
             bail!(
                 "{} has SHA-256 {sha256}, which is not a vrfkit release Vantage knows ({}). \
                  If you upgraded vrfkit on purpose, set vrfkit_sha256 = \"{sha256}\" in config.toml",
                 path.display(),
-                KNOWN_RELEASES.iter().map(|(t, _)| *t).collect::<Vec<_>>().join(", ")
+                tags.join(", ")
             );
         };
-        Ok(Vrfkit { path, sha256, version })
+        Ok(Vrfkit {
+            path,
+            sha256,
+            version,
+            decodes,
+        })
+    }
+
+    /// Whether the exe starts at all: `vrfkit --help` exits 0. Checked before
+    /// switching to a newly installed release.
+    pub fn starts(exe: &Path) -> bool {
+        Command::new(exe)
+            .arg("--help")
+            .output()
+            .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("vrfkit"))
     }
 
     /// `vrfkit export <vrf> --out <out_dir>`; `out_dir` must be new or empty.
@@ -127,11 +199,9 @@ pub fn parse_branch(inspect: &str) -> Option<String> {
         .filter(|b| !b.is_empty())
 }
 
-/// Where the installer puts the pinned release.
+/// Where the installer puts the release in use.
 pub fn installed_path() -> Option<PathBuf> {
-    crate::paths::install_root()
-        .ok()
-        .map(|r| crate::install::Layout { root: r }.vrfkit_exe(PINNED.tag))
+    Layout::new().ok().map(|l| l.vrfkit_exe(&active().tag))
 }
 
 fn find_on_path() -> Option<PathBuf> {
@@ -158,11 +228,32 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 mod tests {
     use super::*;
 
+    fn pin(tag: &str) -> Pin {
+        Pin {
+            tag: tag.into(),
+            ..bundled().clone()
+        }
+    }
+
     #[test]
-    fn ci_fetches_the_pinned_vrfkit() {
-        let ci = include_str!("../../../.github/workflows/ci.yml");
-        assert!(ci.contains(&format!("VRFKIT_ZIP_URL: {}", PINNED.zip_url)));
-        assert!(ci.contains(&format!("VRFKIT_ZIP_SHA256: {}", PINNED.zip_sha256)));
+    fn the_built_in_pin_reads() {
+        let p = bundled();
+        assert!(p.zip_url.contains(&format!("/download/{}/", p.tag)));
+        assert_eq!((p.zip_sha256.len(), p.exe_sha256.len()), (64, 64));
+        let d = p.decodes();
+        assert!(d.oldest > 1000 && d.oldest <= d.newest, "{:?}", p.builds);
+        // CI fetches the same release, from the same file.
+        assert!(include_str!("../../../.github/workflows/ci.yml").contains("vrfkit.json"));
+    }
+
+    #[test]
+    fn a_saved_pin_counts_only_when_newer() {
+        let tag = &bundled().tag;
+        let next = format!("v{}.99.0", crate::install::version_key(tag)[0] + 1);
+        assert_eq!(newest(None).tag, *tag);
+        assert_eq!(newest(Some(pin(&next))).tag, next);
+        // A Vantage update can bring a newer built-in pin than an older saved one.
+        assert_eq!(newest(Some(pin("v0.0.1"))).tag, *tag);
     }
 
     #[test]
