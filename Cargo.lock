@@ -5,6 +5,8 @@ version = 4
 [[package]]
 name = "abalone"
 version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6860f23837b06170a39aa2ba6032d63038867efe7133c53c80052ae2fb89bd9"
 dependencies = [
  "anyhow",
  "clap",

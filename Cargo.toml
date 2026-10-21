@@ -6,8 +6,3 @@ members = ["crates/core", "crates/cli"]
 edition = "2024"
 license = "GPL-3.0-only"
 publish = false
-
-# Abalone lives in its own repository. Until it's on crates.io, build against
-# the copy beside this one; remove this once it's published.
-[patch.crates-io]
-abalone = { path = "../abalone" }
