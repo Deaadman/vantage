@@ -28,8 +28,6 @@ See docs/development.md, "Releasing". CI checks this file's format.
 
 - When a replay can't be reviewed, the scan says which mode it was, such as Team Deathmatch.
 
-## [1.0.1] - 2026-10-22
-
 ### Fixed
 
 - Screenshots work straight after ffmpeg is installed, even when winget installed it for the whole computer.
@@ -41,6 +39,5 @@ See docs/development.md, "Releasing". CI checks this file's format.
 
 - The first release.
 
-[Unreleased]: https://github.com/Deaadman/vantage/compare/1.0.1...HEAD
-[1.0.1]: https://github.com/Deaadman/vantage/compare/1.0.0...1.0.1
+[Unreleased]: https://github.com/Deaadman/vantage/compare/1.0.0...HEAD
 [1.0.0]: https://github.com/Deaadman/vantage/releases/tag/1.0.0
