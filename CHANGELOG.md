@@ -20,6 +20,10 @@ See docs/development.md, "Releasing". CI checks this file's format.
 
 ## [Unreleased]
 
+### Added
+
+- `vantage uninstall` removes Vantage and your data from your PC.
+
 ## [1.0.0] - 2026-10-21
 
 ### Added

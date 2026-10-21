@@ -24,6 +24,18 @@ Then:
 
 That's it. Vantage reads your replays when it opens and picks up new ones while it's open. It updates itself.
 
+### Uninstall
+
+Close Vantage, then open a terminal and run:
+
+```powershell
+vantage uninstall
+```
+
+This removes Vantage, vrfkit and all your data (settings, API key, matches and logs), and takes Vantage off your PATH. It asks first. Add `--keep-data` to keep your data.
+
+Your screenshots in `Pictures\Vantage` are kept. ffmpeg stays installed, since other apps may use it. To remove it, run `winget uninstall Gyan.FFmpeg`.
+
 ## What it does
 
 | Command | What you get |

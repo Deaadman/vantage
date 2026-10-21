@@ -140,6 +140,163 @@ pub fn ensure_ffmpeg() -> Result<bool> {
     Ok(true)
 }
 
+/// What the installer puts in the install folder. `$VANTAGE_HOME` could name
+/// a folder with other things in it, so uninstalling deletes only these.
+const INSTALL_ENTRIES: &[&str] = &["bin", "versions", "vrfkit"];
+
+/// What Vantage writes to its data folder, which `--data-dir` or
+/// `$VANTAGE_DATA_DIR` could also point anywhere.
+const DATA_ENTRIES: &[&str] = &[
+    "config.toml",
+    "vantage.db",
+    "vantage.db-journal",
+    "vantage.db-shm",
+    "vantage.db-wal",
+    "catalog.json",
+    "history.txt",
+    "tui.txt",
+    "update.json",
+    "whats-new.json",
+    "ai",
+    "logs",
+    "minimaps",
+    "raw",
+    "tracks",
+];
+
+/// Removes the install: takes `bin` off the user's PATH and deletes the
+/// installed files and, when `data_dir` is given, Vantage's files in it.
+/// Windows can rename a running exe but not delete it, so this one is moved
+/// aside (to the temp folder, else the top of the install when that's on
+/// another drive) and deleted once it exits. True when `bin` was on PATH.
+pub fn uninstall(layout: &Layout, data_dir: Option<&Path>) -> Result<bool> {
+    let off_path = remove_from_path(&layout.bin())?;
+    let exe = std::env::current_exe().context("finding this exe")?;
+    let aside = if layout.contains(&exe) {
+        let temp = std::env::temp_dir().join(format!("{APP}-uninstall-{}.exe", std::process::id()));
+        let top = layout.root.join(format!("{APP}-uninstall.exe"));
+        let moved = fs::rename(&exe, &temp)
+            .map(|()| temp)
+            .or_else(|_| fs::rename(&exe, &top).map(|()| top));
+        Some(moved.with_context(|| format!("moving {} aside", exe.display()))?)
+    } else {
+        None
+    };
+    let removed = remove_entries(&layout.root, INSTALL_ENTRIES)
+        .and_then(|()| data_dir.map_or(Ok(()), |dir| remove_entries(dir, DATA_ENTRIES)));
+    if let Err(e) = removed {
+        bail!("{e:#}; close every Vantage window, then delete {}", layout.root.display());
+    }
+    if let Some(dir) = data_dir {
+        let _ = fs::remove_dir(dir);
+    }
+    let _ = fs::remove_dir(&layout.root);
+    if let Some(path) = aside {
+        delete_after_exit(&path, &layout.root)?;
+    }
+    Ok(off_path)
+}
+
+/// Deletes each of `names` in `dir` that's there.
+fn remove_entries(dir: &Path, names: &[&str]) -> Result<()> {
+    for name in names {
+        let path = dir.join(name);
+        let removed = if path.is_dir() {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        match removed {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("removing {}", path.display())),
+        }
+    }
+    Ok(())
+}
+
+/// Takes `bin` off the user's PATH. True when it was on it.
+#[cfg(windows)]
+fn remove_from_path(bin: &Path) -> Result<bool> {
+    // The registry is read unexpanded and written back as the same kind, so
+    // entries like %USERPROFILE%\… survive. Setting and clearing a variable
+    // through [Environment] tells open programs that PATH changed.
+    const SCRIPT: &str = r#"
+$bin = $env:VANTAGE_UNINSTALL_BIN.TrimEnd('\')
+$key = Get-Item -LiteralPath 'HKCU:\Environment'
+$path = $key.GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+if (-not $path) { exit 0 }
+$kept = @($path -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ne $bin })
+$new = $kept -join ';'
+if ($new -eq $path) { exit 0 }
+[Microsoft.Win32.Registry]::SetValue('HKEY_CURRENT_USER\Environment', 'Path', $new, $key.GetValueKind('Path'))
+[Environment]::SetEnvironmentVariable('VANTAGE_UNINSTALL', '1', 'User')
+[Environment]::SetEnvironmentVariable('VANTAGE_UNINSTALL', $null, 'User')
+'removed'
+"#;
+    let out = powershell(SCRIPT)
+        .env("VANTAGE_UNINSTALL_BIN", bin)
+        .output()
+        .context("couldn't run PowerShell to take Vantage off your PATH")?;
+    if !out.status.success() {
+        bail!(
+            "couldn't take {} off your PATH: {}",
+            bin.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim() == "removed")
+}
+
+/// Off Windows, the PATH line install.sh added is left for people to remove.
+#[cfg(not(windows))]
+fn remove_from_path(_bin: &Path) -> Result<bool> {
+    Ok(false)
+}
+
+/// Starts a hidden PowerShell that waits for this process to exit, deletes
+/// the file `path`, then `root` if that left it empty.
+#[cfg(windows)]
+fn delete_after_exit(path: &Path, root: &Path) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    const SCRIPT: &str = r#"
+Wait-Process -Id $env:VANTAGE_UNINSTALL_PID -ErrorAction SilentlyContinue
+for ($i = 0; $i -lt 10 -and (Test-Path -LiteralPath $env:VANTAGE_UNINSTALL_PATH); $i++) {
+    Remove-Item -LiteralPath $env:VANTAGE_UNINSTALL_PATH -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+}
+try { [IO.Directory]::Delete($env:VANTAGE_UNINSTALL_ROOT) } catch {}
+"#;
+    // CREATE_NO_WINDOW: its own hidden console, so closing this terminal
+    // doesn't stop it. (PowerShell won't start with no console at all.)
+    powershell(SCRIPT)
+        .env("VANTAGE_UNINSTALL_PID", std::process::id().to_string())
+        .env("VANTAGE_UNINSTALL_PATH", path)
+        .env("VANTAGE_UNINSTALL_ROOT", root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(0x0800_0000)
+        .spawn()
+        .context("couldn't start PowerShell to finish removing Vantage")?;
+    Ok(())
+}
+
+/// A running exe can be deleted elsewhere.
+#[cfg(not(windows))]
+fn delete_after_exit(path: &Path, root: &Path) -> Result<()> {
+    fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+    let _ = fs::remove_dir(root);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn powershell(script: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new("powershell.exe");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+    cmd
+}
+
 /// Who's asking, for requests.
 const AGENT: &str = concat!("vantage/", env!("CARGO_PKG_VERSION"));
 
@@ -181,5 +338,33 @@ mod tests {
             Path::new("C:/v/vrfkit/v0.4.0/vrfkit.exe")
         );
         assert_eq!(layout.launcher(), Path::new("C:/v/bin").join(layout.exe_name()));
+    }
+
+    #[test]
+    fn uninstall_deletes_only_vantages_files() {
+        let base = std::env::temp_dir().join(format!("vantage-uninstall-{}", std::process::id()));
+        let layout = Layout::at(base.join("home"), APP);
+        let data = base.join("elsewhere");
+        for dir in [layout.bin(), layout.versions().join("1.0.0"), data.join("logs")] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::write(layout.launcher(), b"").unwrap();
+        fs::write(layout.root.join("mine.txt"), b"").unwrap();
+        fs::write(data.join("config.toml"), b"").unwrap();
+        fs::write(data.join("notes.txt"), b"").unwrap();
+
+        assert!(!uninstall(&layout, Some(&data)).unwrap());
+        assert!(!layout.bin().exists() && !layout.versions().exists());
+        assert!(layout.root.join("mine.txt").is_file());
+        assert!(!data.join("config.toml").exists() && !data.join("logs").exists());
+        assert!(data.join("notes.txt").is_file());
+
+        // Once only Vantage's files are left, the folders go too.
+        fs::remove_file(layout.root.join("mine.txt")).unwrap();
+        fs::remove_file(data.join("notes.txt")).unwrap();
+        fs::create_dir_all(layout.bin()).unwrap();
+        uninstall(&layout, Some(&data)).unwrap();
+        assert!(!layout.root.exists() && !data.exists());
+        let _ = fs::remove_dir_all(base);
     }
 }

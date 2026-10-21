@@ -116,6 +116,15 @@ enum Command {
         #[arg(long)]
         update: bool,
     },
+    /// Remove Vantage, vrfkit and your data from this PC
+    Uninstall {
+        /// Keep your settings, matches and logs
+        #[arg(long)]
+        keep_data: bool,
+        /// Don't ask first
+        #[arg(long, short)]
+        yes: bool,
+    },
 }
 
 fn main() {
@@ -136,7 +145,12 @@ fn run(cli: Cli) -> Result<()> {
         Some(command) => {
             if !matches!(
                 command,
-                Command::Sync | Command::Settings | Command::Logs | Command::Update | Command::Install { .. }
+                Command::Sync
+                    | Command::Settings
+                    | Command::Logs
+                    | Command::Update
+                    | Command::Install { .. }
+                    | Command::Uninstall { .. }
             ) {
                 startup_check(&data_dir);
             }
@@ -166,6 +180,7 @@ impl Command {
             Command::Sync => "sync",
             Command::Update => "update",
             Command::Install { .. } => "install",
+            Command::Uninstall { .. } => "uninstall",
         }
     }
 }
@@ -182,6 +197,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
         }
         Command::Update => update_cmd(&data_dir)?,
         Command::Install { update } => install_cmd(&data_dir, update)?,
+        Command::Uninstall { keep_data, yes } => uninstall_cmd(&data_dir, keep_data, yes)?,
         Command::Review { match_id } => print_review(&load_review(&data_dir, match_id)?),
         Command::Plan { map } => print_plan(&load_plan(&data_dir, map)?),
         Command::Habits => {
@@ -1000,6 +1016,49 @@ fn install_cmd(data_dir: &Path, quiet: bool) -> Result<()> {
         outln!("installed vrfkit {} (SHA-256 verified)", vrfkit::active().tag);
     }
     install::report(&layout, APP_NAME, VERSION);
+    Ok(())
+}
+
+/// `vantage uninstall`: the install, its PATH entry and, unless kept, the data.
+fn uninstall_cmd(data_dir: &Path, keep_data: bool, yes: bool) -> Result<()> {
+    let layout = install::layout()?;
+    let what = if keep_data {
+        "Vantage and vrfkit"
+    } else {
+        "Vantage, vrfkit and all your data: settings, API key, matches and logs"
+    };
+    if !yes {
+        if !abalone::term::interactive() {
+            anyhow::bail!("this removes {what}; run `vantage uninstall --yes` to go ahead");
+        }
+        outln!("This removes {what}.");
+        print!("Type yes to go ahead: ");
+        std::io::Write::flush(&mut std::io::stdout())?;
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !answer.trim().eq_ignore_ascii_case("yes") {
+            outln!("nothing removed");
+            return Ok(());
+        }
+    }
+    let off_path = install::uninstall(&layout, (!keep_data).then_some(data_dir))?;
+    outln!("removed Vantage from {}", layout.root.display());
+    if off_path {
+        outln!("took {} off your PATH", layout.bin().display());
+    }
+    if keep_data {
+        outln!("kept your data in {}", data_dir.display());
+    } else {
+        outln!("removed your data from {}", data_dir.display());
+    }
+    // Pictures\Vantage, which holds Clips.
+    let shots = clips::shots_root().and_then(|d| d.parent().map(Path::to_path_buf));
+    if let Some(shots) = shots.filter(|d| d.is_dir()) {
+        outln!("your screenshots are still in {}; delete it to remove them", shots.display());
+    }
+    if clips::ffmpeg().is_some() {
+        outln!("ffmpeg stays installed; `winget uninstall {}` removes it", install::FFMPEG_PACKAGE);
+    }
     Ok(())
 }
 

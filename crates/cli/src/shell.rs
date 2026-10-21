@@ -460,9 +460,12 @@ impl App for Vantage {
     type Msg = Flow;
     type Panel = Panel;
 
-    /// The clap subcommands and their long flags (the shell adds help, clear and exit).
+    /// The clap subcommands and their long flags (the shell adds help, clear
+    /// and exit), less `uninstall`, which can't remove the running shell.
     fn commands(&self) -> Vec<CommandInfo> {
-        CommandInfo::from_clap(&Cli::command())
+        let mut cmds = CommandInfo::from_clap(&Cli::command());
+        cmds.retain(|c| c.name != "uninstall");
+        cmds
     }
 
     fn run(&mut self, line: &str, ctx: &mut Ctx<Self>) {
@@ -891,6 +894,10 @@ fn execute_line(line: &str, data_dir: &Path) -> Flow {
             || crate::load_rank(&dir),
             |(rank, standing, focus)| Flow::Rank(Box::new(RankPanel::new(rank, standing, focus))),
         ),
+        crate::Command::Uninstall { .. } => {
+            out::emit(Kind::Error, "To uninstall, quit Vantage and run `vantage uninstall`".into());
+            Flow::Continue
+        }
         command => {
             if let Err(e) = crate::run_command(&dir, command) {
                 out::emit(Kind::Error, format!("{e:#}"));
@@ -931,9 +938,9 @@ mod tests {
         ] {
             assert!(names.contains(&n), "{n}");
         }
-        // Removed for the coach, or automatic in the shell.
+        // Removed for the coach, automatic in the shell, or terminal-only.
         for n in [
-            "export", "summary", "trends", "init", "players", "sync", "update", "install",
+            "export", "summary", "trends", "init", "players", "sync", "update", "install", "uninstall",
         ] {
             assert!(!names.contains(&n), "{n}");
         }

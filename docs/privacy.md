@@ -21,6 +21,8 @@ Vantage reads each replay with [vrfkit](https://github.com/yakisoba0728/vrfkit),
 
 To keep your data somewhere else, start Vantage with `--data-dir <folder>`, or set the environment variable `VANTAGE_DATA_DIR`.
 
+To delete Vantage and everything above except your screenshots, close Vantage and run `vantage uninstall`. It deletes only the files Vantage made, even in a folder you chose yourself.
+
 ## What goes over the internet
 
 - Agent, map and weapon names, and the minimap pictures, from [valorant-api.com](https://valorant-api.com), once a day
