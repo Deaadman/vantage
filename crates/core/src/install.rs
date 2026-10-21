@@ -5,14 +5,14 @@
 //! - `vrfkit\<tag>\vrfkit.exe`: vrfkit releases, with `vrfkit\pin.json`
 //!   naming the one in use once a vrfkit update has installed one.
 //!
-//! The versions and the launcher are shellkit's (`shellkit::install`);
+//! The versions and the launcher are Abalone's (`abalone::install`);
 //! Vantage adds vrfkit, fetched before the launcher is swapped, and ffmpeg.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub use abalone::install::{Layout, check_sha256, is_newer, report, sha256_file, version_key};
 use anyhow::{Context, Result, bail};
-pub use shellkit::install::{Layout, check_sha256, is_newer, report, sha256_file, version_key};
 
 use crate::vrfkit::{Pin, Vrfkit};
 
@@ -39,18 +39,18 @@ pub struct Installed {
 /// `versions`, makes sure the vrfkit in use is there, points `bin` at it and
 /// removes old versions.
 pub fn install(layout: &Layout, version: &str, exe: &Path) -> Result<Installed> {
-    let target = shellkit::install::copy_in(layout, version, exe)?;
+    let target = abalone::install::copy_in(layout, version, exe)?;
     let vrfkit_downloaded = ensure_vrfkit(layout)?;
-    shellkit::install::place_launcher(layout, &target)?;
+    abalone::install::place_launcher(layout, &target)?;
     cleanup(layout, version);
     Ok(Installed { vrfkit_downloaded })
 }
 
-/// Best effort: old launchers and versions (see `shellkit::install::cleanup`),
+/// Best effort: old launchers and versions (see `abalone::install::cleanup`),
 /// and all but the newest older vrfkit release.
 pub fn cleanup(layout: &Layout, current: &str) {
-    shellkit::install::cleanup(layout, current);
-    shellkit::install::prune(&layout.root.join("vrfkit"), &crate::vrfkit::active().tag);
+    abalone::install::cleanup(layout, current);
+    abalone::install::prune(&layout.root.join("vrfkit"), &crate::vrfkit::active().tag);
 }
 
 /// Downloads and verifies the vrfkit in use unless it is already installed.
@@ -76,7 +76,7 @@ pub fn update_vrfkit(layout: &Layout, pin: &Pin, vantage: &str) -> Result<bool> 
         );
     }
     pin.save(layout)?;
-    shellkit::install::prune(&layout.root.join("vrfkit"), &pin.tag);
+    abalone::install::prune(&layout.root.join("vrfkit"), &pin.tag);
     Ok(true)
 }
 
@@ -144,12 +144,12 @@ pub fn ensure_ffmpeg() -> Result<bool> {
 const AGENT: &str = concat!("vantage/", env!("CARGO_PKG_VERSION"));
 
 pub fn http_get(url: &str) -> Result<ureq::http::Response<ureq::Body>> {
-    shellkit::install::http_get(url, AGENT)
+    abalone::install::http_get(url, AGENT)
 }
 
 /// Downloads `url` to `dest` (through a temporary name).
 pub fn download(url: &str, dest: &Path) -> Result<()> {
-    shellkit::install::download(url, dest, AGENT)
+    abalone::install::download(url, dest, AGENT)
 }
 
 /// Extracts the entry whose file name is `name` from the ZIP at `zip_path`.

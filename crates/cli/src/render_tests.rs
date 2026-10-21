@@ -10,7 +10,7 @@ use vantage_core::{ai, habits, plan, standing};
 use crate::coach_views::{HabitsPanel, PlanData, PlanPanel, RankPanel};
 use crate::review_view::ReviewPanel;
 use crate::{ClipFolder, Clips, ReviewData};
-use shellkit::{Row, row_width};
+use abalone::{Row, row_width};
 
 const SIZES: [(usize, usize); 3] = [(88, 30), (112, 34), (140, 40)];
 
@@ -209,7 +209,7 @@ fn plan_habits_and_rank_fit() {
 #[test]
 fn settings_fit() {
     let dir = std::env::temp_dir().join(format!("vantage-render-{}", std::process::id()));
-    let mut p = shellkit::settings::SettingsPanel::new(Box::new(crate::settings::VantageSettings::new(&dir)));
+    let mut p = abalone::settings::SettingsPanel::new(Box::new(crate::settings::VantageSettings::new(&dir)));
     for (w, h) in SIZES {
         assert!(p.rows(w, h).len() <= h);
     }

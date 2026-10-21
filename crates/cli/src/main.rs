@@ -121,12 +121,12 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
     // Caught so a crash in the shell is reported after the terminal is restored.
-    shellkit::log::guard(APP_NAME, || run(cli));
+    abalone::log::guard(APP_NAME, || run(cli));
 }
 
 fn run(cli: Cli) -> Result<()> {
     let data_dir = paths::data_dir(cli.data_dir.as_deref())?;
-    shellkit::log::start(
+    abalone::log::start(
         &paths::logs_dir(&data_dir),
         "vantage",
         &format!("{APP_NAME} {VERSION}"),
@@ -142,7 +142,7 @@ fn run(cli: Cli) -> Result<()> {
             }
             run_command(&data_dir, command)
         }
-        None if shellkit::term::interactive() => shell::run(&data_dir),
+        None if abalone::term::interactive() => shell::run(&data_dir),
         None => {
             Cli::command().print_help()?;
             Ok(())
@@ -177,7 +177,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
         Command::Logs => {
             let dir = paths::logs_dir(&data_dir);
             std::fs::create_dir_all(&dir).with_context(|| format!("couldn't create {}", dir.display()))?;
-            shellkit::files::open(&dir)?;
+            abalone::files::open(&dir)?;
             outln!("Opened {} in File Explorer.", dir.display());
         }
         Command::Update => update_cmd(&data_dir)?,
@@ -316,11 +316,11 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
 fn log_scan(results: &[vantage_core::scan::FileOutcome]) {
     for f in results {
         match &f.outcome {
-            Outcome::Failed { error } => shellkit::log::write("WARN", &format!("{} couldn't be read: {error}", f.file)),
+            Outcome::Failed { error } => abalone::log::write("WARN", &format!("{} couldn't be read: {error}", f.file)),
             Outcome::Unsupported { reason } => {
-                shellkit::log::write("WARN", &format!("{} unsupported: {reason}", f.file))
+                abalone::log::write("WARN", &format!("{} unsupported: {reason}", f.file))
             }
-            Outcome::Stored { warnings, .. } if !warnings.is_empty() => shellkit::log::write(
+            Outcome::Stored { warnings, .. } if !warnings.is_empty() => abalone::log::write(
                 "WARN",
                 &format!(
                     "{} stored with warnings:

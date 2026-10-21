@@ -1,14 +1,14 @@
-//! What the full-screen panels share: shellkit's widgets (the frame,
+//! What the full-screen panels share: Abalone's widgets (the frame,
 //! paragraphs, fields, lists, keys), rank colours, and the minimap drawn in
-//! half blocks (`shellkit::image`).
+//! half blocks (`abalone::image`).
 
-use crossterm::style::Color;
-use shellkit::image::{self, Image};
-pub use shellkit::widgets::{
+use abalone::image::{self, Image};
+pub use abalone::widgets::{
     Item, body_height, bullet, field, frame, heading, is_close, list_rows, para, rule_line, scrolled, step, step_of,
     steps, tab_key,
 };
-pub use shellkit::{pad, rgb};
+pub use abalone::{pad, rgb};
+use crossterm::style::Color;
 use vantage_core::catalog::MapInfo;
 use vantage_core::minimap::Minimap;
 

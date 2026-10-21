@@ -15,7 +15,7 @@
 # with versions and tags that have no v: "## [0.2.0] - 2026-10-21", entries
 # under the six types, and a link for every version at the bottom.
 #
-# From shellkit (shellkit::release::NOTES_SCRIPT): change it there, not here.
+# From Abalone (abalone::release::NOTES_SCRIPT): change it there, not here.
 param(
     [string]$Version,
     [string]$OutDir = '.',

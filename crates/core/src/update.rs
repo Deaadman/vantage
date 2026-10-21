@@ -1,5 +1,5 @@
-//! Updates from GitHub releases, through shellkit's updater
-//! (`shellkit::update`). Each release's `manifest.json` also names the vrfkit
+//! Updates from GitHub releases, through Abalone's updater
+//! (`abalone::update`). Each release's `manifest.json` also names the vrfkit
 //! it pins, and what's new in it:
 //!
 //! ```json
@@ -16,10 +16,10 @@
 
 use std::path::Path;
 
+pub use abalone::update::{Manifest, State, Updated, Updater, WhatsNew, news};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
-pub use shellkit::update::{Manifest, State, Updated, Updater, WhatsNew, news};
 
 use crate::install;
 use crate::vrfkit::Pin;

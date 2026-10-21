@@ -1,10 +1,10 @@
 //! `/settings`: what Vantage runs with (Status) and what you can change
-//! (Config), in shellkit's settings panel. Outside the shell,
+//! (Config), in Abalone's settings panel. Outside the shell,
 //! `vantage settings` prints the Status tab.
 
 use std::path::{Path, PathBuf};
 
-use shellkit::{Choice, Field, Loaded, Outcome, Picker, SettingRow, SettingsModel, StatusGroups, Value};
+use abalone::{Choice, Field, Loaded, Outcome, Picker, SettingRow, SettingsModel, StatusGroups, Value};
 use vantage_core::clips::{self, ShotStyle};
 use vantage_core::config::Config;
 use vantage_core::store::Store;
@@ -96,7 +96,7 @@ pub fn status_groups(data_dir: &Path) -> StatusGroups {
 
 /// `vantage settings` outside the shell: the Status tab as text.
 pub fn print_status(data_dir: &Path) {
-    shellkit::settings::status_lines(&status_groups(data_dir))
+    abalone::settings::status_lines(&status_groups(data_dir))
         .into_iter()
         .for_each(out::row);
 }

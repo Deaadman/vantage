@@ -9,30 +9,31 @@ cargo test
 
 ## How it's laid out
 
-- `crates/core`: reading replays, the analysis, and the coaching (debrief, habits, plans, ranks, clips and AI review).
-- `crates/cli`: the `vantage` program, and what its interactive shell shows: the commands, panels, settings and colours.
-The shell itself comes from [shellkit](https://github.com/Deaadman/shellkit), its own repository, with nothing about VALORANT in it: the header, input box and command menu, status bar, help and settings panels, the session log, the data folder and settings file, half-block pictures, the self-updater and installer, and the release templates. To change it alongside Vantage, clone it beside this repository and add to `Cargo.toml`:
+- `crates/core`: reads replays, analyses them, and does the coaching (debrief, habits, plans, ranks, clips and AI review).
+- `crates/cli`: the `vantage` program: its commands, panels, settings and colours.
+
+The shell itself (input box, menus, panels, logs, settings file, self-updater and installer) comes from [Abalone](https://github.com/Deaadman/abalone), a separate repository with nothing VALORANT-specific in it. To work on both at once, clone Abalone next to this repository and add this to `Cargo.toml`:
 
 ```toml
-[patch."https://github.com/Deaadman/shellkit"]
-shellkit = { path = "../shellkit" }
+[patch."https://github.com/Deaadman/abalone"]
+abalone = { path = "../abalone" }
 ```
 
-`install.ps1` and `scripts/release-notes.ps1` come from shellkit. A test fails when they drift from it; `cargo test -p vantage write_install_script -- --ignored` writes them again.
+`install.ps1` and `scripts/release-notes.ps1` are copied from Abalone. A test fails if they get out of sync. To copy them again, run `cargo test -p vantage write_install_script -- --ignored`.
 
 ## Tests
 
-`cargo test` runs the unit tests. Three kinds of test need extra files and skip without them:
+`cargo test` runs the unit tests. Three tests need extra files, and skip if they're missing:
 
 | Test | Needs |
 | --- | --- |
-| `crates/core/tests/fixtures.rs` scans the public replays in `tests/fixtures/public` | The vrfkit in [`vrfkit.json`](../vrfkit.json), set with `VANTAGE_VRFKIT=<path>` or on PATH |
-| `crates/core/tests/oracle.rs` checks a hand-verified match | A personal export at `VANTAGE_ORACLE_EXPORT` or `tests/data/oracle_export` |
-| `real_data_panels_open_and_fit` opens every screen on real matches | `VANTAGE_SMOKE_DATA=<data folder>` |
+| `crates/core/tests/fixtures.rs` reads the replays in `tests/fixtures/public` | The vrfkit named in [`vrfkit.json`](../vrfkit.json), on PATH or set with `VANTAGE_VRFKIT=<path>` |
+| `crates/core/tests/oracle.rs` checks one match against hand-checked numbers | Your own export, in `tests/data/oracle_export` or set with `VANTAGE_ORACLE_EXPORT` |
+| `real_data_panels_open_and_fit` opens every screen with real matches | `VANTAGE_SMOKE_DATA=<data folder>` |
 
 ## Benchmark
 
-A benchmark times the work behind each screen on made-up matches:
+This times each screen on made-up matches:
 
 ```powershell
 cargo test --release -p vantage bench -- --ignored --nocapture
@@ -42,46 +43,42 @@ Set `BENCH_OUT=<file>` to also save the results as JSON.
 
 ## CI
 
-Every push to `main` and every pull request runs [CI](../.github/workflows/ci.yml) on Windows:
+[CI](../.github/workflows/ci.yml) runs on Windows for every push to `main` and every pull request. It checks:
 
-- `cargo fmt --check`
-- a check that `CHANGELOG.md` is written in the format below
+- formatting, with `cargo fmt --check`
+- that `CHANGELOG.md` follows the format below
 - clippy, with warnings as errors
-- every test, with the vrfkit in `vrfkit.json` downloaded so the fixture scan runs
-- a release build, with the exe's size in the run's summary
+- every test, including the fixture test (CI downloads the vrfkit)
+- that a release build works, and shows the exe's size
 
 ## Releasing
 
-The [release workflow](../.github/workflows/release.yml) is turned off for now. Once it's on, a release goes like this:
+The [release workflow](../.github/workflows/release.yml) is turned off for now. Once it's on:
 
-1. In [`CHANGELOG.md`](../CHANGELOG.md), rename `## [Unreleased]` to the new version and today's date, for example `## [0.2.0] - 2026-11-02`. Add a fresh, empty `## [Unreleased]` above it, and update the links at the bottom (see below).
-2. Set the same version in `crates/cli/Cargo.toml`, and commit both.
-3. Tag the commit with the version and push the tag: `git tag 0.2.0`, then `git push origin 0.2.0`. Tags have no `v` in front; the app adds one when it shows a version.
+1. In [`CHANGELOG.md`](../CHANGELOG.md), rename `## [Unreleased]` to the new version and date, for example `## [0.2.0] - 2026-11-02`. Add a new empty `## [Unreleased]` above it, and update the links at the bottom.
+2. Set the same version in `crates/cli/Cargo.toml`. Commit both files.
+3. Tag the commit and push the tag: `git tag 0.2.0`, then `git push origin 0.2.0`. Tags don't start with `v`.
 
-The workflow runs CI, checks the tag matches `crates/cli/Cargo.toml`, builds the exe and publishes the release. It stops if `CHANGELOG.md` has no section for the version.
+The workflow then runs CI, checks the tag matches `crates/cli/Cargo.toml`, builds the exe and publishes the release. It stops if `CHANGELOG.md` has no section for that version.
 
 ### Writing the changelog
 
-`CHANGELOG.md` follows [Keep a Changelog 2.0.0](https://keepachangelog.com/en/2.0.0/), except that versions and tags have no `v`. CI checks the format on every push, and the error says what to fix.
+`CHANGELOG.md` follows [Keep a Changelog 2.0.0](https://keepachangelog.com/en/2.0.0/), but without a `v` in front of versions. CI checks the format and says what to fix.
 
-- Add each change to `## [Unreleased]` as you make it, newest version first below that.
-- Group entries under these headings, in this order, leaving out any with nothing in them: `### Added`, `### Changed`, `### Deprecated`, `### Removed`, `### Fixed`, `### Security`. No other headings.
-- Every line under a heading is a `- ` entry. A long entry can carry on to the next line if that line is indented.
-- A version can open with a short summary before its first heading.
-- Start an entry that breaks something people rely on with `**Breaking:**`. Start a security fix with its CVE number, if it has one.
-- Leave out vrfkit updates. They reach players on their own (see "vrfkit updates" below).
-- Mark a release that was pulled with ` [YANKED]` after its date. The workflow won't publish it.
+Each version's notes appear in two places: the GitHub release, and the "what's new" list players see after updating. The app shows them as plain text, without headings, links or formatting. So write for players:
 
-Each version's section is used twice:
+- Add each change under `## [Unreleased]` as you make it.
+- One plain sentence per change, about what's different for players. "Clips shows each clip's length", not "Add length_s to Matched".
+- Leave out changes players can't see, like refactors and tests, and vrfkit updates (those ship on their own, see below).
+- Use full `https://` links. Links like `docs/review.md` break on the release page.
 
-- **The GitHub release description**: the section as you wrote it, followed by GitHub's own notes (merged pull requests and a link to the full list of changes).
-- **What's new in the app**: each entry is one line players see on the first launch after updating. The app shows them as plain text, so links, `code` and **bold** marks are removed, and the headings aren't shown.
+The format rules:
 
-So write for players, not for developers:
-
-- One entry per change, as a plain sentence about what's different for them. "Clips shows each clip's length", not "Add length_s to Matched".
-- Leave out changes players can't see, like refactors and tests.
-- Use full `https://` links. A link like `docs/review.md` works in the repo but not on the release page.
+- Use only these headings, in this order, and skip empty ones: `### Added`, `### Changed`, `### Deprecated`, `### Removed`, `### Fixed`, `### Security`.
+- Every line under a heading starts with `- `. A long entry can continue on the next line if it's indented.
+- A version can start with a short summary before its first heading.
+- Start a breaking change with `**Breaking:**`, and a security fix with its CVE number if it has one.
+- Add ` [YANKED]` after the date of a pulled release. The workflow won't publish it.
 
 ```markdown
 ## [Unreleased]
@@ -107,32 +104,34 @@ So write for players, not for developers:
 [0.1.0]: https://github.com/Deaadman/vantage/releases/tag/0.1.0
 ```
 
-The links at the bottom make each heading clickable. `[Unreleased]` compares the newest release with `HEAD`, each version compares with the one before it, and the oldest links to its own tag. Before the first release, `[Unreleased]` links to the commits on `main`.
+The links at the bottom make each heading clickable. `[Unreleased]` compares the newest release with `HEAD`, each version compares with the one before, and the first links to its tag. Before the first release, `[Unreleased]` links to the commits on `main`.
 
-To see what a release would get, run `.\scripts\release-notes.ps1 -Version 0.2.0 -OutDir notes`. It writes the description to `notes/release-notes.md` and the in-app notes to `notes/whats-new.json`; the release workflow also passes `-Extra` with the vrfkit's notes from `vrfkit.json`. `.\scripts\release-notes.ps1 -Check` only checks the format, as CI does.
+To preview a release's notes, run `.\scripts\release-notes.ps1 -Version 0.2.0 -OutDir notes`. It writes the GitHub description to `notes/release-notes.md` and the in-app notes to `notes/whats-new.json`. Add `-Check` instead to only check the format, like CI does.
 
 ## vrfkit updates
 
-[`vrfkit.json`](../vrfkit.json) names the vrfkit release Vantage uses: where to download it, its two SHA-256 hashes, the VALORANT builds it reads, the line players see when it arrives, and `min_vantage`, the oldest Vantage that can read its output. Each build of Vantage has the file built in, CI tests with the release it names, and installed copies fetch the newest one from `main` when they check for updates. So merging a change to it updates vrfkit everywhere, with no Vantage release. Installs on an older Vantage than `min_vantage` wait for a Vantage update instead.
+[`vrfkit.json`](../vrfkit.json) says which vrfkit release Vantage uses: its download link, two SHA-256 hashes, the VALORANT versions it reads, the line players see when it arrives, and `min_vantage`, the oldest Vantage that works with it.
 
-You don't edit it by hand. Once a day the [vrfkit watch](../.github/workflows/vrfkit-watch.yml) workflow looks for a new vrfkit release. When there is one, it:
+Installed copies of Vantage read this file from `main` when they check for updates. So merging a change to it updates vrfkit for everyone, without a Vantage release. Copies older than `min_vantage` wait until Vantage itself is updated.
 
-1. runs [`scripts/vrfkit-bump.ps1`](../scripts/vrfkit-bump.ps1), which downloads the release, checks it against GitHub's record of the file, reads the builds it supports from vrfkit's README, and rewrites `vrfkit.json`
-2. opens a pull request, "Update vrfkit to v0.4.0", with the line players will see and vrfkit's own notes
-3. starts CI on it, which runs every test with the new vrfkit
+You don't edit it by hand. The [vrfkit watch](../.github/workflows/vrfkit-watch.yml) workflow checks for a new vrfkit once a day. When it finds one, it:
 
-Check that CI passed, reword the player line in `notes` if you want, and merge. To skip a release, close its pull request. The workflow needs **Allow GitHub Actions to create and approve pull requests**, under Settings > Actions > General.
+1. runs [`scripts/vrfkit-bump.ps1`](../scripts/vrfkit-bump.ps1), which downloads and checks the release and rewrites `vrfkit.json`
+2. opens a pull request, like "Update vrfkit to v0.4.0"
+3. runs CI on it with the new vrfkit
 
-When Vantage checks for updates and `main` names a newer vrfkit, it downloads it, checks both hashes and that it starts, then switches to it straight away. The one before stays installed. To try a release by hand, run `.\scripts\vrfkit-bump.ps1 -Tag v0.4.0`.
+If CI passes, edit the player line in `notes` if you want, then merge. To skip a release, close the pull request. The workflow needs **Allow GitHub Actions to create and approve pull requests** turned on, under Settings > Actions > General.
+
+To try a release by hand, run `.\scripts\vrfkit-bump.ps1 -Tag v0.4.0`.
 
 ## The pictures in the docs
 
-The pictures in `docs/images` are Vantage's real screens, drawn from made-up matches and saved as SVG. The README's `launch.gif` is the same screens, played in order. When you change a screen the docs show, redraw them:
+The pictures in `docs/images`, and the README's `launch.gif`, are Vantage's real screens drawn from made-up matches. When you change a screen the docs show, redraw them:
 
 ```powershell
 .\scripts\redraw-docs-images.ps1
 ```
 
-It runs the ignored test `redraw_docs_images` in [`crates/cli/src/docs_pictures.rs`](../crates/cli/src/docs_pictures.rs), which rewrites all 14 pictures and the GIF, then lists the ones that changed. Look over those before you commit. It needs the internet, for the map catalog and Lotus's minimap. Set `DOCS_IMAGES=<folder>` to write the pictures somewhere else.
+This runs the `redraw_docs_images` test in [`crates/cli/src/docs_pictures.rs`](../crates/cli/src/docs_pictures.rs), which redraws every picture and lists the ones that changed. Check those before you commit. It needs the internet. Set `DOCS_IMAGES=<folder>` to save them somewhere else.
 
-To add a picture, draw its screen in that test, then use it in a page as `![What it shows](images/<name>.svg)`.
+To add a picture, draw its screen in that test, then add it to a page with `![What it shows](images/<name>.svg)`.

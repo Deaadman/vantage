@@ -45,11 +45,11 @@ impl Config {
 
     /// A missing file is an empty config.
     pub fn load(data_dir: &Path) -> Result<Self> {
-        shellkit::files::load_toml(&Self::path(data_dir))
+        abalone::files::load_toml(&Self::path(data_dir))
     }
 
     pub fn save(&self, data_dir: &Path) -> Result<()> {
-        shellkit::files::save_toml(&Self::path(data_dir), self)
+        abalone::files::save_toml(&Self::path(data_dir), self)
     }
 
     /// Configured demos dir, else `%LOCALAPPDATA%\VALORANT\Saved\Demos`.

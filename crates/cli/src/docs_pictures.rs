@@ -7,9 +7,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use abalone::Logo;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::Color;
-use shellkit::Logo;
 use vantage_core::analysis::Side;
 use vantage_core::clips::{Matched, ShotStyle};
 use vantage_core::coach::{self, sample};
@@ -37,16 +37,16 @@ fn screen(shell: &mut Shell<Vantage>) -> Vec<Row> {
 }
 
 /// The header with the logo at `frame`, for made-up settings.
-fn header(rank: Option<&str>, frame: usize) -> shellkit::Item {
-    shellkit::Item::Rows(shellkit::skin::header(
+fn header(rank: Option<&str>, frame: usize) -> abalone::Item {
+    abalone::Item::Rows(abalone::skin::header(
         Chevrons.rows(frame),
         &header_lines(rank, "VALORANT v13.08", "C:\\Users\\Player\\Documents\\VALORANT\\Demos"),
         W,
     ))
 }
 
-fn row(pieces: Vec<(Kind, &str)>) -> shellkit::Item {
-    shellkit::Item::Row(pieces.into_iter().map(|(k, t)| (k, t.to_owned())).collect())
+fn row(pieces: Vec<(Kind, &str)>) -> abalone::Item {
+    abalone::Item::Row(pieces.into_iter().map(|(k, t)| (k, t.to_owned())).collect())
 }
 
 /// The shell just after launch: the scan found one new match.
@@ -58,7 +58,7 @@ fn launched(shell: &mut Shell<Vantage>) {
             (Kind::Dim, "  1 new · 13 already done"),
         ]),
         row(vec![(Kind::Good, "  + "), (Kind::Out, "Sova on Lotus")]),
-        shellkit::Item::Line(Kind::Out, String::new()),
+        abalone::Item::Line(Kind::Out, String::new()),
         row(vec![
             (Kind::Paint(YELLOW, false), "◆ "),
             (Kind::Out, "Your focus: "),
@@ -66,7 +66,7 @@ fn launched(shell: &mut Shell<Vantage>) {
             (Kind::Paint(crate::review_view::GREEN, false), "  ▇▅▅▃▂"),
             (Kind::Paint(crate::review_view::GREEN, true), "  getting better"),
         ]),
-        shellkit::Item::Line(Kind::Dim, "  To switch, type /focus and pick a habit.".into()),
+        abalone::Item::Line(Kind::Dim, "  To switch, type /focus and pick a habit.".into()),
     ];
     shell.reset_view();
     shell.pretend_job(None);

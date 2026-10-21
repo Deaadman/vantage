@@ -14,6 +14,6 @@ png = "0.18.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
-shellkit = { git = "https://github.com/Deaadman/shellkit", features = ["install", "update"] }
+abalone = { git = "https://github.com/Deaadman/abalone", features = ["install", "update"] }
 ureq = "3.4.2"
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }

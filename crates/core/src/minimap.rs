@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use shellkit::image::Image;
+use abalone::image::Image;
 
 use crate::catalog::MapInfo;
 
@@ -70,7 +70,7 @@ impl Minimap {
         })
     }
 
-    /// The pixels, for drawing (`shellkit::image`).
+    /// The pixels, for drawing (`abalone::image`).
     pub fn image(&self) -> Image {
         Image::from_rgba(self.width, self.height, &self.rgba)
     }

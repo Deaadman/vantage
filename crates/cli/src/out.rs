@@ -1,8 +1,8 @@
 //! Where command output goes: stdout and stderr, or the interactive shell's
-//! transcript while it runs a command. It's shellkit's (`shellkit::out`);
-//! warnings and errors also go to the session log (`shellkit::log`).
+//! transcript while it runs a command. It's Abalone's (`abalone::out`);
+//! warnings and errors also go to the session log (`abalone::log`).
 
-pub use shellkit::out::*;
+pub use abalone::out::*;
 
 /// `println!`, or a transcript line in the shell.
 macro_rules! outln {

@@ -2,8 +2,8 @@
 //! from the bottom up, a pulse runs up through them once, and the logo stays
 //! on its last frame for the rest of the session.
 
+use abalone::{Logo, Row, half_blocks};
 use crossterm::style::Color;
-use shellkit::{Logo, Row, half_blocks};
 
 use crate::shell::{BRIGHT, RED};
 
@@ -62,7 +62,7 @@ impl Logo for Chevrons {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shellkit::{Style, row_text};
+    use abalone::{Style, row_text};
 
     #[test]
     fn ends_on_three_chevrons() {

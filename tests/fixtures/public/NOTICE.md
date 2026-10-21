@@ -14,7 +14,7 @@ at commit `b51d67423b7b4952d59051cf91e55efa1c42da05`
 
 The hashes match the ones pinned in vrfkit's `.github/workflows/ci.yml`.
 
-They are short solo custom-game clips: one player, no kills, 23 to 70 s. They
-exercise scanning, storage and rendering on three older builds and on
-degenerate data (no kills, no teams, no plants); the facts themselves are
-checked against the oracle replay in `crates/core/tests/oracle.rs`.
+They are short custom games with one player and no kills, 23 to 70 seconds
+long. They test that Vantage can scan, store and show replays from three older
+builds, and handle matches with no kills, teams or plants. The match facts
+themselves are checked by `crates/core/tests/oracle.rs`.

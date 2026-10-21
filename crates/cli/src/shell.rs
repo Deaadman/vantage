@@ -1,6 +1,6 @@
-//! `vantage` with no command: the full-screen shell, built on shellkit.
+//! `vantage` with no command: the full-screen shell, built on Abalone.
 //! Vantage supplies its commands (from clap), what a line runs, its header,
-//! notices, panels, settings and colours; shellkit draws the screen, edits
+//! notices, panels, settings and colours; Abalone draws the screen, edits
 //! the line and runs commands on a worker thread.
 //!
 //! Alongside commands it watches the replay folder for new downloads, and
@@ -13,15 +13,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
+use abalone::update::Updater;
+use abalone::{
+    App, CommandInfo, Completer, Ctx, Help, Notice, PanelEvent, Shell, Suggestion, Theme, UpdateNote, split_words,
+};
+pub(crate) use abalone::{Row, Style, wrap};
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use crossterm::event::KeyEvent;
 use crossterm::style::Color;
-use shellkit::update::Updater;
-use shellkit::{
-    App, CommandInfo, Completer, Ctx, Help, Notice, PanelEvent, Shell, Suggestion, Theme, UpdateNote, split_words,
-};
-pub(crate) use shellkit::{Row, Style, wrap};
 use vantage_core::Catalog;
 use vantage_core::ai;
 use vantage_core::builds::check_game_version;
@@ -70,7 +70,7 @@ pub(crate) const YELLOW: Color = Color::Rgb { r: 255, g: 193, b: 7 };
 pub(crate) const GREY: Color = Color::Rgb { r: 140, g: 140, b: 140 };
 pub(crate) const BRIGHT: Color = Color::Rgb { r: 240, g: 240, b: 240 };
 
-/// Vantage's colours, for everything shellkit draws.
+/// Vantage's colours, for everything Abalone draws.
 pub(crate) const THEME: Theme = Theme {
     accent: ACCENT,
     bright: BRIGHT,
@@ -86,7 +86,7 @@ pub(crate) const THEME: Theme = Theme {
 const ISSUES: &str = "https://github.com/Deaadman/vantage/issues";
 const HOME: &str = "https://github.com/Deaadman/vantage";
 
-/// The General tab of `/help`; shellkit adds the keys after it.
+/// The General tab of `/help`; Abalone adds the keys after it.
 const GENERAL: &str = "Vantage watches your VALORANT replays and coaches you: why you died, what to fix, and what works at your rank. Everything stays on this computer unless you turn on AI review.
 
 # After a match
@@ -171,7 +171,7 @@ pub(crate) enum PanelAction {
     Focus(&'static str),
 }
 
-impl shellkit::Panel for Panel {
+impl abalone::Panel for Panel {
     type Event = PanelAction;
 
     fn key(&mut self, key: KeyEvent) -> PanelEvent<PanelAction> {
@@ -598,7 +598,7 @@ impl App for Vantage {
     fn crashed(&self) -> String {
         format!(
             "internal error: the command crashed (please report){}",
-            shellkit::log::hint()
+            abalone::log::hint()
         )
     }
 }
@@ -792,7 +792,7 @@ fn check_vrfkit(updater: &Updater, pins: &Sender<Pin>, layout: Option<&Layout>) 
         }
         Ok(false) => None,
         Err(e) => {
-            shellkit::log::write("WARN", &format!("vrfkit update failed: {e:#}"));
+            abalone::log::write("WARN", &format!("vrfkit update failed: {e:#}"));
             Some(UpdateNote::Failed)
         }
     }
@@ -874,7 +874,7 @@ fn execute_line(line: &str, data_dir: &Path) -> Flow {
     let Some(command) = cli.command else {
         return Flow::Continue;
     };
-    shellkit::log::write("CMD", command.name());
+    abalone::log::write("CMD", command.name());
     let dir = cli.data_dir.unwrap_or_else(|| data_dir.to_path_buf());
     // In the shell, these open a panel instead of printing.
     match command {
@@ -907,8 +907,8 @@ mod docs_pictures;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shellkit::editor::{Context, suggest};
-    use shellkit::row_text;
+    use abalone::editor::{Context, suggest};
+    use abalone::row_text;
 
     #[test]
     fn labels() {
@@ -996,10 +996,10 @@ mod tests {
     }
 
     fn shown(lines: Vec<out::Line>) -> Vec<String> {
-        shellkit::set_theme(THEME);
+        abalone::set_theme(THEME);
         lines
             .iter()
-            .flat_map(|l| shellkit::skin::pieces_rows(l, 80))
+            .flat_map(|l| abalone::skin::pieces_rows(l, 80))
             .map(|r| row_text(&r))
             .collect()
     }
@@ -1053,8 +1053,8 @@ mod tests {
 
     #[test]
     fn header_beside_the_logo() {
-        use shellkit::Logo;
-        let rows = shellkit::skin::header(
+        use abalone::Logo;
+        let rows = abalone::skin::header(
             Chevrons.rows(crate::logo::FRAMES - 1),
             &header_lines(Some("Gold 2"), "VALORANT v13.08", "C:\\Demos"),
             80,
@@ -1067,22 +1067,22 @@ mod tests {
     }
 
     #[test]
-    fn the_install_script_and_release_notes_are_shellkits() {
+    fn the_install_script_and_release_notes_come_from_abalone() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let read = |p: &str| std::fs::read_to_string(root.join(p)).unwrap();
         assert!(
-            shellkit::release::same_text(&read("install.ps1"), &install_script()),
+            abalone::release::same_text(&read("install.ps1"), &install_script()),
             "install.ps1 is out of date: write install_script() to it"
         );
         assert!(
-            shellkit::release::same_text(&read("scripts/release-notes.ps1"), shellkit::release::NOTES_SCRIPT),
-            "scripts/release-notes.ps1 is out of date: copy shellkit::release::NOTES_SCRIPT to it"
+            abalone::release::same_text(&read("scripts/release-notes.ps1"), abalone::release::NOTES_SCRIPT),
+            "scripts/release-notes.ps1 is out of date: copy abalone::release::NOTES_SCRIPT to it"
         );
     }
 
-    /// `install.ps1`: shellkit's, plus ffmpeg for the screenshots.
+    /// `install.ps1`: Abalone's, plus ffmpeg for the screenshots.
     fn install_script() -> String {
-        shellkit::install::InstallScript::new(APP_NAME, install::APP, update::REPO)
+        abalone::install::InstallScript::new(APP_NAME, install::APP, update::REPO)
             .about("It also fetches the vrfkit release Vantage reads replays with, and")
             .about("ffmpeg, which takes the screenshots, from winget if it isn't installed.")
             .after(
@@ -1109,6 +1109,6 @@ mod tests {
     fn write_install_script() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         std::fs::write(root.join("install.ps1"), install_script()).unwrap();
-        std::fs::write(root.join("scripts/release-notes.ps1"), shellkit::release::NOTES_SCRIPT).unwrap();
+        std::fs::write(root.join("scripts/release-notes.ps1"), abalone::release::NOTES_SCRIPT).unwrap();
     }
 }

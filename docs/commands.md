@@ -21,7 +21,7 @@ Type `/` to see the commands. Keep typing to filter them, and press Tab to compl
 | `/logs` | Open the folder of session logs, to attach one to a bug report. |
 | `/update` | Install the newest Vantage and vrfkit now. |
 | `/release-notes` | What's new in each version: pick one, or show them all. |
-| `/tui` | `/tui fullscreen` (the default) takes over the whole terminal. `/tui default` runs in the terminal's own scrollback instead, so the output stays after you quit. Vantage remembers which. |
+| `/tui` | `/tui fullscreen` (the default) fills the terminal. `/tui default` keeps the output in the terminal after you quit. Vantage remembers your choice. |
 | `/help` | The commands and keys. |
 | `/clear` | Clear the screen. |
 | `/exit` | Quit Vantage. |

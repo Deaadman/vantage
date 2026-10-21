@@ -7,7 +7,7 @@ edition = "2024"
 license = "GPL-3.0-only"
 publish = false
 
-# shellkit lives in its own repository. Until it's on GitHub, build against
+# Abalone lives in its own repository. Until it's on GitHub, build against
 # the copy beside this one; remove this once it's pushed.
-[patch."https://github.com/Deaadman/shellkit"]
-shellkit = { path = "../shellkit" }
+[patch."https://github.com/Deaadman/abalone"]
+abalone = { path = "../abalone" }

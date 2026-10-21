@@ -9,7 +9,7 @@ pub const HOME_ENV: &str = "VANTAGE_HOME";
 
 /// `explicit`, else `$VANTAGE_DATA_DIR`, else `%LOCALAPPDATA%\vantage\data`.
 pub fn data_dir(explicit: Option<&Path>) -> Result<PathBuf> {
-    shellkit::files::data_dir(crate::install::APP, explicit)
+    abalone::files::data_dir(crate::install::APP, explicit)
 }
 
 /// Where the installer puts `bin`, `versions` and `vrfkit`: `$VANTAGE_HOME`,
@@ -18,7 +18,7 @@ pub fn install_root() -> Result<PathBuf> {
     Ok(crate::install::layout()?.root)
 }
 
-/// One log file per run, for bug reports (`shellkit::log`).
+/// One log file per run, for bug reports (`abalone::log`).
 pub fn logs_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("logs")
 }
