@@ -2,8 +2,9 @@
 # v0.1.0 that matches the version in crates/cli/Cargo.toml. Every release
 # carries vantage-windows-x64.exe and manifest.json (version, file, SHA-256).
 #
-# Disabled while Vantage is in development: nothing runs on push. To turn it
-# on, replace the `on:` block with the commented one below.
+# Disabled while Vantage is in development: pushes to main and tags start
+# nothing, and the job below only publishes from a v* tag. To turn it on,
+# replace the `on:` block with the commented one below.
 
 name: Release
 
@@ -17,7 +18,14 @@ permissions:
   contents: write
 
 jobs:
+  # Formatting, clippy and every test, fixtures included: nothing ships unless they pass.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: ci
+    # Only from a version tag: a manual run from a branch checks but never publishes.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     env:
       ASSET: vantage-windows-x64.exe
@@ -34,9 +42,6 @@ jobs:
           }
 
       - uses: Swatinem/rust-cache@v2
-
-      - name: Test
-        run: cargo test --release --locked
 
       - name: Build
         run: cargo build --release --locked -p vantage

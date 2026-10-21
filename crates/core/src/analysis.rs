@@ -7,10 +7,10 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::{Catalog, MapInfo};
-use crate::vrfkit_export::EventKind;
 use crate::fields::Change;
 use crate::game::Game;
 use crate::items::{Item, ItemKind, identify};
+use crate::vrfkit_export::EventKind;
 
 /// Ability slot numbers in `AbilityCastsThisRound[].Slot`, verified on 13.08
 /// by each slot's effect statistics against valorant-api.com's slot names

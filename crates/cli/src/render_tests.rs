@@ -14,11 +14,11 @@ use crate::{ClipFolder, Clips, ReviewData};
 
 const SIZES: [(usize, usize); 3] = [(88, 30), (112, 34), (140, 40)];
 
-fn key(code: KeyCode) -> KeyEvent {
+pub(crate) fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
-fn match_review() -> vantage_core::MatchReview {
+pub(crate) fn match_review() -> vantage_core::MatchReview {
     let rounds: Vec<(bool, Side)> = (0..24)
         .map(|i| (i % 3 != 0, if i < 12 { Side::Attack } else { Side::Defense }))
         .collect();
@@ -50,7 +50,7 @@ fn check(name: &str, rows: &[Row], w: usize, h: usize) {
     }
 }
 
-fn review_data(clips: Clips, ai: Option<ai::Saved>) -> ReviewData {
+pub(crate) fn review_data(clips: Clips, ai: Option<ai::Saved>) -> ReviewData {
     let r = match_review();
     ReviewData {
         debrief: coach::debrief(&r, &[]),
@@ -65,7 +65,7 @@ fn review_data(clips: Clips, ai: Option<ai::Saved>) -> ReviewData {
     }
 }
 
-fn saved() -> ai::Saved {
+pub(crate) fn saved() -> ai::Saved {
     ai::Saved {
         output: ai::Output {
             schema: ai::SCHEMA.into(),

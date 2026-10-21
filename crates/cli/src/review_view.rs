@@ -913,3 +913,88 @@ fn clip_size(bytes: u64) -> String {
         format!("{mb:.1} MB")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render_tests::{key, review_data, saved};
+    use vantage_core::clips::ShotStyle;
+
+    fn with_shots() -> Clips {
+        Clips::Set {
+            dir: "clips".into(),
+            per_death: vec![None; 7],
+            shots_dir: "shots".into(),
+            shots: vec![(1, vec!["R01.jpg".into()])],
+            shot_error: None,
+            style: ShotStyle::Strip,
+        }
+    }
+
+    fn ctrl_enter() -> KeyEvent {
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn enter_follows_debrief_to_fixes_to_the_map() {
+        let mut p = ReviewPanel::new(review_data(with_shots(), None));
+        p.key(key(KeyCode::Down));
+        p.key(key(KeyCode::Down));
+        assert_eq!(p.scroll, 2, "the Debrief scrolls");
+        p.key(key(KeyCode::Enter));
+        assert_eq!((p.tab, p.scroll), (T_FIXES, 0));
+        p.key(key(KeyCode::Down));
+        let fix = &p.data.debrief.fixes[p.sel];
+        let first = p
+            .data
+            .debrief
+            .deaths
+            .iter()
+            .position(|d| fix.rounds.contains(&d.round))
+            .unwrap();
+        p.key(key(KeyCode::Enter));
+        assert_eq!((p.tab, p.death, p.sel), (T_MAP, first, 0));
+        // Clips → Screenshots → AI with Enter.
+        p.key(key(KeyCode::Char('4')));
+        p.key(key(KeyCode::Enter));
+        assert_eq!(p.tab, T_SHOTS);
+        p.key(key(KeyCode::Enter));
+        assert_eq!(p.tab, T_AI);
+    }
+
+    #[test]
+    fn ctrl_enter_runs_the_ai_review_once() {
+        let mut p = ReviewPanel::new(review_data(with_shots(), None));
+        p.key(key(KeyCode::Char('6')));
+        assert!(matches!(p.key(key(KeyCode::Enter)), ReviewAction::None));
+        assert!(matches!(p.key(key(KeyCode::Char('a'))), ReviewAction::None));
+        assert!(matches!(p.key(ctrl_enter()), ReviewAction::RunAi));
+        assert!(is_run(&KeyEvent::new(KeyCode::Char('\n'), KeyModifiers::CONTROL)));
+
+        let mut done = ReviewPanel::new(review_data(with_shots(), Some(saved())));
+        done.key(key(KeyCode::Char('6')));
+        assert!(matches!(done.key(ctrl_enter()), ReviewAction::None));
+        assert!(done.flash.as_deref().is_some_and(|f| f.contains("already")));
+        // Switching tabs clears the message.
+        done.key(key(KeyCode::Left));
+        assert!(done.flash.is_none());
+
+        let mut no_shots = ReviewPanel::new(review_data(Clips::NotSet(vec![]), None));
+        no_shots.key(key(KeyCode::Char('6')));
+        assert!(matches!(no_shots.key(ctrl_enter()), ReviewAction::None));
+        assert!(no_shots.flash.as_deref().is_some_and(|f| f.contains("no screenshots")));
+    }
+
+    #[test]
+    fn clip_table_cells() {
+        assert_eq!(clip_length(30.0), "30s");
+        assert_eq!(clip_length(59.4), "59s");
+        assert_eq!(clip_length(59.6), "1m 00s");
+        assert_eq!(clip_length(65.0), "1m 05s");
+        assert_eq!(clip_size(50_544_640), "48.2 MB");
+        assert_eq!(clip_size(3 * 1024 * 1024 * 1024 / 2), "1.5 GB");
+        assert_eq!(clip_name("short.mp4", 20), "short.mp4");
+        assert_eq!(clip_name("VALORANT 2026.10.19.mp4", 10), "VALORANT …");
+        assert_eq!(clip_name("abc", 0), "…");
+    }
+}

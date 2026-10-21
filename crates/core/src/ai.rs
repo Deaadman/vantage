@@ -703,6 +703,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn models_without_a_key_are_the_usual_ones() {
+        for id in ["anthropic", "openai", "gemini"] {
+            let p = provider(id).unwrap();
+            for key in [None, Some("")] {
+                let got = models(p, key).unwrap();
+                assert_eq!(got, fallback_models(p), "{id}");
+                assert!(got.iter().any(|m| m.id == p.model && m.about.ends_with("the default")));
+            }
+        }
+        assert_eq!(chosen_model(provider("openai").unwrap(), Some("  ")), "gpt-5");
+    }
+
+    #[test]
     fn model_names() {
         assert_eq!(model_name("claude-sonnet-5-5"), "Sonnet 5.5");
         assert_eq!(model_name("claude-fable-5-1"), "Fable 5.1");

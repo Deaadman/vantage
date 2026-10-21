@@ -1,0 +1,77 @@
+# Checks every push to main and every pull request: formatting, clippy with
+# warnings as errors, then all the tests, including the full scan of the
+# public fixtures with the pinned vrfkit. The release workflow runs this
+# first and only publishes when it passes.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # Keep in step with PINNED in crates/core/src/vrfkit.rs; a test checks they match.
+  VRFKIT_ZIP_URL: https://github.com/yakisoba0728/vrfkit/releases/download/v0.3.0/vrfkit-v0.3.0-windows-x64.zip
+  VRFKIT_ZIP_SHA256: 58cd76fb926642de931e74d70b3ad3db1e696ffbd752e4a1a60fc6686c4540df
+
+jobs:
+  lint:
+    name: Format and clippy
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked
+
+  test:
+    name: Tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch the pinned vrfkit
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'vrfkit.zip'
+          Invoke-WebRequest $env:VRFKIT_ZIP_URL -OutFile $zip
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($hash -ne $env:VRFKIT_ZIP_SHA256) { throw "vrfkit zip hash $hash doesn't match the pin" }
+          $dir = Join-Path $env:RUNNER_TEMP 'vrfkit'
+          Expand-Archive $zip $dir
+          $exe = Get-ChildItem $dir -Recurse -Filter vrfkit.exe | Select-Object -First 1
+          "VANTAGE_VRFKIT=$($exe.FullName)" >> $env:GITHUB_ENV
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+  size:
+    name: Release build size
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked -p vantage
+      - name: Report the size
+        shell: pwsh
+        run: |
+          $mb = (Get-Item target/release/vantage.exe).Length / 1MB
+          "vantage.exe (release): **{0:N2} MB**" -f $mb >> $env:GITHUB_STEP_SUMMARY

@@ -85,3 +85,48 @@ pub fn cluster_deaths(facts: &mut [DeathFact], map: Option<&MapInfo>) -> Vec<Dea
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deaths_join_the_first_spot_close_enough_on_the_same_floor() {
+        let p = |x: f64, z: f64| Some([x, 0.0, z]);
+        let points = [
+            p(0.0, 0.0),
+            p(1500.0, 0.0),  // within the radius: joins the first spot
+            p(0.0, 400.0),   // right above it, another floor: a new spot
+            None,            // no position: skipped
+            p(2100.0, 0.0),  // past the radius from the seed, though near the second death
+            p(-1999.0, 0.0), // just inside the radius
+            p(0.0, 420.0),
+            p(2000.0, 0.0),
+            p(2200.0, 0.0),
+        ];
+        // The first spot has 4 (0, 1, 5, 7); the one at 2100 has 2; upstairs has 2.
+        assert_eq!(leader_clusters(&points), vec![vec![0, 1, 5, 7]]);
+        assert_eq!(centroid(&points, &[0, 1, 5, 7]), [375.0, 0.0, 0.0]);
+        assert!(
+            leader_clusters(&points[..3]).is_empty(),
+            "fewer than MIN_DEATHS is no spot"
+        );
+    }
+
+    #[test]
+    fn bigger_spots_come_first_and_ties_keep_time_order() {
+        let at = |x: f64| Some([x, 0.0, 0.0]);
+        let points = [
+            at(0.0),
+            at(9000.0),
+            at(0.0),
+            at(9000.0),
+            at(0.0),
+            at(9000.0),
+            at(9000.0),
+        ];
+        assert_eq!(leader_clusters(&points), vec![vec![1, 3, 5, 6], vec![0, 2, 4]]);
+        let tie = [at(0.0), at(9000.0), at(0.0), at(9000.0), at(0.0), at(9000.0)];
+        assert_eq!(leader_clusters(&tie), vec![vec![0, 2, 4], vec![1, 3, 5]]);
+    }
+}

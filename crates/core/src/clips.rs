@@ -359,6 +359,57 @@ fn run(cmd: &mut Command) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// An MP4 with `ftyp`, then `moov` holding an `mvhd` of the given version.
+    fn mp4(version: u8, scale: u32, duration: u64) -> Vec<u8> {
+        let boxed = |kind: &[u8], body: &[u8]| {
+            let mut b = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+            b.extend(kind);
+            b.extend(body);
+            b
+        };
+        let mut mvhd = vec![version, 0, 0, 0];
+        if version == 1 {
+            mvhd.extend([0; 16]);
+            mvhd.extend(scale.to_be_bytes());
+            mvhd.extend(duration.to_be_bytes());
+        } else {
+            mvhd.extend([0; 8]);
+            mvhd.extend(scale.to_be_bytes());
+            mvhd.extend((duration as u32).to_be_bytes());
+        }
+        mvhd.extend([0; 80]);
+        let mut file = boxed(b"ftyp", b"isom\0\0\0\0");
+        file.extend(boxed(b"moov", &boxed(b"mvhd", &mvhd)));
+        file
+    }
+
+    #[test]
+    fn clip_lengths_from_the_mp4_header() {
+        let dir = std::env::temp_dir().join(format!("vantage-mp4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let length = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            mp4_length(&p)
+        };
+        assert_eq!(length("v0.mp4", &mp4(0, 1000, 30_500)), Some(30.5));
+        assert_eq!(length("v1.mp4", &mp4(1, 90_000, 90_000 * 65)), Some(65.0));
+        assert_eq!(length("noscale.mp4", &mp4(0, 0, 100)), None);
+        assert_eq!(length("empty.mp4", b""), None);
+        assert_eq!(length("text.mp4", b"not a video at all"), None);
+        // A box claiming a 64-bit size near u64::MAX: no overflow, no answer.
+        let mut huge = 1u32.to_be_bytes().to_vec();
+        huge.extend(b"free");
+        huge.extend((u64::MAX - 4).to_be_bytes());
+        huge.extend(mp4(0, 1000, 1000));
+        assert_eq!(length("huge.mp4", &huge), None);
+        // Cut off halfway through the moov box.
+        let cut = mp4(0, 1000, 1000);
+        assert_eq!(length("cut.mp4", &cut[..cut.len() - 40]), None);
+        assert_eq!(mp4_length(&dir.join("missing.mp4")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn deaths_get_the_clip_saved_just_after() {
         let start = parse_rfc3339("2026-10-19T21:04:00Z").unwrap();

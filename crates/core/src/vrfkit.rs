@@ -159,6 +159,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ci_fetches_the_pinned_vrfkit() {
+        let ci = include_str!("../../../.github/workflows/ci.yml");
+        assert!(ci.contains(&format!("VRFKIT_ZIP_URL: {}", PINNED.zip_url)));
+        assert!(ci.contains(&format!("VRFKIT_ZIP_SHA256: {}", PINNED.zip_sha256)));
+    }
+
+    #[test]
     fn branch_line() {
         let out = "=== Header ===
   Replay version:   5.3.2 (changelist 2153182552)

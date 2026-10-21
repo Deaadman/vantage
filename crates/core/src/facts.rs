@@ -616,3 +616,35 @@ fn economy(a: &Analysis, i: usize, pawn: u32, pistol: bool) -> RoundEconomy {
 fn secs(ms: u32) -> f64 {
     round_to(f64::from(ms) / 1000.0, 1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buy_types_from_the_loadout_and_spend() {
+        assert_eq!(buy_type(4700, Some(4700), Some(300), true), "pistol");
+        assert_eq!(buy_type(3900, Some(2900), Some(200), false), "full");
+        assert_eq!(buy_type(1200, Some(400), Some(5000), false), "save");
+        assert_eq!(buy_type(1200, None, None, false), "save");
+        assert_eq!(buy_type(1900, Some(1500), Some(2000), false), "eco");
+        assert_eq!(buy_type(3000, Some(2800), Some(900), false), "force");
+        assert_eq!(buy_type(3000, Some(2800), Some(1000), false), "half");
+        assert_eq!(buy_type(3000, Some(2800), None, false), "half");
+    }
+
+    #[test]
+    fn range_bands_and_hit_regions() {
+        assert_eq!(range_band(0.0), "0-10 m");
+        assert_eq!(range_band(9.99), "0-10 m");
+        assert_eq!(range_band(10.0), "10-20 m");
+        assert_eq!(range_band(29.9), "20-30 m");
+        assert_eq!(range_band(30.0), "30+ m");
+        assert_eq!(range_band(f64::NAN), "30+ m");
+        assert_eq!(region_name(Some(1)), "head");
+        assert_eq!(region_name(Some(0)), "body");
+        assert_eq!(region_name(Some(2)), "legs");
+        assert_eq!(region_name(Some(7)), "other");
+        assert_eq!(region_name(None), "other");
+    }
+}

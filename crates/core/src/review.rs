@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 
 use crate::analysis::Side;
-use crate::facts::RoundFact;
 use crate::export::MatchReview;
+use crate::facts::RoundFact;
 
 /// One player's line in the scoreboard, from their own stored review.
 #[derive(Debug, Clone)]

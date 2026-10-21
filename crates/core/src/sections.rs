@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::analysis::{Side, slot_key, slot_name};
-use crate::facts::RoundFact;
 use crate::export::{Duel, MatchReview};
+use crate::facts::RoundFact;
 
 /// Caveats for the derived (D) facts in these sections, stated once in the export.
 pub const PHASE4_CAVEATS: &[&str] = &[

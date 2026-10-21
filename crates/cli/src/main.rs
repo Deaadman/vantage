@@ -1,5 +1,7 @@
 #[macro_use]
 mod out;
+#[cfg(test)]
+mod bench_tests;
 mod coach_views;
 mod editor;
 mod help;
