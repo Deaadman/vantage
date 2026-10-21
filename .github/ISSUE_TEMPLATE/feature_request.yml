@@ -1,0 +1,42 @@
+name: Feature request
+description: An idea for something Vantage could do, or do better.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you're trying to do
+      description: The problem or the moment where Vantage falls short. Start from your games, not the feature.
+      placeholder: After a loss I want to know whether I died to the same angle as last time on this map.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: What Vantage could do about it. A rough sketch of a screen is welcome.
+      placeholder: The Map tab could mark deaths from my last few matches on the same map in a dimmer colour.
+    validations:
+      required: true
+
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today instead
+      description: How you get by now, if at all.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of Vantage
+      multiple: true
+      options:
+        - /review
+        - Clips, screenshots or AI review
+        - /plan
+        - /habits or /focus
+        - /rank
+        - Scanning replays
+        - Installing, updating or settings
+        - Something new

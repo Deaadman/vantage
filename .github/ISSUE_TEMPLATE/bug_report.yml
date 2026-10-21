@@ -1,0 +1,79 @@
+name: Bug report
+description: Something in Vantage is wrong, broken or crashed.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting it. The more of this you fill in, the faster it can be fixed.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What went wrong, and any error message you saw.
+      placeholder: The Clips tab says "no clip" for every death, though Medal saved clips for that match.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      placeholder: Each death with a clip saved just after it shows that clip.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      description: The steps from opening Vantage, if you know them.
+      placeholder: |
+        1. Run vantage
+        2. Type /review and pick the newest match
+        3. Press 4 for the Clips tab
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it happened
+      multiple: true
+      options:
+        - Installing or updating
+        - Scanning replays (/scan, or the replay watcher)
+        - /review (Debrief, Fixes, Map)
+        - /review Clips or Screenshots
+        - /review AI review
+        - /plan
+        - /habits or /focus
+        - /rank
+        - /settings
+        - Somewhere else
+    validations:
+      required: true
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Output of `vantage settings`
+      description: |
+        Run `vantage settings` in a terminal (or open /settings in Vantage) and paste what it prints. It includes your version.
+        It also shows your account ID and folder paths, which can include your Windows user name; replace those if you'd rather not share them.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Session log
+      description: |
+        Type /logs in Vantage (or run `vantage logs`) to open the logs folder, then drag the log from the run where it went wrong into this box. The newest file is the latest run.
+        Logs list the commands that ran, warnings, errors and crashes. They never contain match data, and your home folder and Windows user name are removed.
+
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Screenshots of the screen, the map or agent, your clip app, or anything else that might help.
