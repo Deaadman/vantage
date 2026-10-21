@@ -50,6 +50,7 @@ Set `BENCH_OUT=<file>` to also save the results as JSON.
 - clippy, with warnings as errors
 - every test, including the fixture test (CI downloads the vrfkit)
 - that a release build works, and shows the exe's size
+- that the [pictures in the docs](#the-pictures-in-the-docs) match what the code draws now
 - that no crate in `Cargo.lock` has a [security advisory](https://rustsec.org), with `cargo audit`
 
 Once a week, [Dependabot](../.github/dependabot.yml) opens a pull request for crates and actions with a newer version, with the minor and patch updates together. Merge it when CI passes. It leaves Abalone alone: change its `tag` in `crates/cli/Cargo.toml` and `crates/core/Cargo.toml` when Abalone has a release.
@@ -135,6 +136,6 @@ The pictures in `docs/images`, and the README's `launch.gif`, are Vantage's real
 .\scripts\redraw-docs-images.ps1
 ```
 
-This runs the `redraw_docs_images` test in [`crates/cli/src/docs_pictures.rs`](../crates/cli/src/docs_pictures.rs), which redraws every picture and lists the ones that changed. Check those before you commit. It needs the internet. Set `DOCS_IMAGES=<folder>` to save them somewhere else.
+This runs the `redraw_docs_images` test in [`crates/cli/src/docs_pictures.rs`](../crates/cli/src/docs_pictures.rs), which redraws every picture and lists the ones that changed. Check those before you commit. CI fails if they're out of date. It needs the internet. Set `DOCS_IMAGES=<folder>` to save them somewhere else.
 
 To add a picture, draw its screen in that test, then add it to a page with `![What it shows](images/<name>.svg)`.

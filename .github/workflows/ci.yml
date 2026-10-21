@@ -1,7 +1,8 @@
 # Checks every push to main and every pull request: formatting, the
 # changelog's format, clippy with warnings as errors, then all the tests,
-# including the full scan of the public fixtures with the pinned vrfkit, and
-# a check of Cargo.lock for crates with security advisories. The release
+# including the full scan of the public fixtures with the pinned vrfkit, that
+# the pictures in docs/images match what the code draws now, and a check of
+# Cargo.lock for crates with security advisories. The release
 # workflow runs this first and only publishes when it passes.
 
 name: CI
@@ -93,3 +94,25 @@ jobs:
       # Fails if a crate in Cargo.lock has a RustSec advisory.
       - name: Audit
         run: cargo audit
+
+  pictures:
+    name: Docs pictures
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Redraws docs/images (it needs the network for the map catalog), then
+      # fails if any picture differs from the committed one.
+      - name: Pictures are current
+        shell: bash
+        run: |
+          cargo test -p vantage --locked redraw_docs_images -- --ignored
+          git diff --exit-code -- docs/images || {
+            echo "::error::docs/images is out of date: run scripts/redraw-docs-images.ps1 and commit the pictures"
+            exit 1
+          }
+          test -z "$(git ls-files --others --exclude-standard docs/images)" || {
+            echo "::error::new pictures in docs/images aren't committed"
+            exit 1
+          }
