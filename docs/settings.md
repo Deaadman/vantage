@@ -19,8 +19,8 @@ Use ↑ and ↓ to pick a setting, and Enter or Space to change it.
 | Rank | Your current rank. Replays don't include it, and `/rank` and `/plan` need it. |
 | Focus habit | The habit every debrief checks. See [Your focus](habits.md#your-focus). |
 | Your account | Which account is yours. Vantage works this out from your replays; change it if it picked the wrong one. |
-| AI review | The AI that reviews your screenshots: Claude, ChatGPT, Gemini or Ollama. It asks for your API key when it needs one. |
-| AI model | Which of that AI's models to use. Shown once you pick an AI. |
+| AI review | The AI that reviews your screenshots: your AI app (no key needed), Claude, ChatGPT, Gemini or Ollama. It asks for your API key when it needs one. See [With your AI app](review.md#with-your-ai-app). |
+| AI model | Which of that AI's models to use. Shown once you pick an AI, except your AI app, which picks its own. |
 | Screenshots per death | Three moments in one image (the default), one image of the moment you died, or three separate images. |
 | Replay folder | Where VALORANT saves your replays. Vantage finds it for you. |
 | Clip folder | Where your clip app saves clips. |

@@ -42,6 +42,8 @@ Nothing is sent until you press Ctrl+Enter on the AI tab, and only for that one 
 
 Ollama runs on your PC, so with Ollama nothing leaves your computer.
 
+If you use your AI app (through MCP), the app asks Vantage for a match when you ask it to review one. Vantage gives it that match's facts and screenshots, and the app sends them to its own AI, under that app's privacy terms. The app can also list your matches. Nothing is sent until you ask the app.
+
 ## Session logs
 
 Each run writes a short log: the version, which commands ran, and any warnings, errors or crashes. Logs never contain match data, and your home folder and Windows user name are removed. Vantage keeps the last 20. Type `/logs` to open the folder.

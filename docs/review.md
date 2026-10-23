@@ -28,18 +28,11 @@ The minimap, drawn in the terminal, with your deaths and your best and worst spo
 
 ## Clips
 
-Your clips matched to your deaths, with each clip's length and size. A clip counts when your clip app saved it within 90 seconds of the death.
+Your clips matched to your deaths, with each clip's length and size. Medal's clips are matched using Medal's own records of which match and moment each clip is from, so it doesn't matter that Medal saves them all when the match ends. Other apps' clips count when the app saved them within 90 seconds of the death.
 
-The first time, Vantage looks for the folders of these apps and lets you pick one:
+The first time, Vantage looks for Medal's clips in `C:\Medal\Clips\Valorant`, where Medal saves them unless you moved its capture folder, and lets you pick it.
 
-- Medal
-- NVIDIA ShadowPlay
-- Xbox Game Bar
-- AMD Adrenalin
-- Outplayed
-- SteelSeries Moments
-
-For any other folder, pick **Another folder…**: it points you to `/settings` → Config → **Clip folder**, where you type the path. Change it there later too.
+If you moved it, or use another clip app, pick **Another folder…**: it points you to `/settings` → Config → **Clip folder**, where you type the path. Change it there later too.
 
 ![The Clips tab](images/review-clips.svg)
 
@@ -57,11 +50,26 @@ Optional. An AI looks at the screenshots for things the replay can't show, like 
 
 You can use:
 
+- Your AI app, like Claude Desktop or Claude Code, with no API key. It uses the plan you already pay for.
 - Claude, ChatGPT or Gemini, with your own API key
 - Ollama, which runs on your PC and sends nothing anywhere
 
 Pick the AI and its model in `/settings`. Then press **Ctrl+Enter** on this tab to run the review. Each match is reviewed once, and the answer is saved.
 
 ![The AI tab](images/review-ai.svg)
+
+### With your AI app
+
+Pick **Your AI app** in `/settings` → Config → AI review, then the app:
+
+- **Claude Desktop**: Vantage adds itself to Claude Desktop's MCP servers. Restart Claude Desktop afterwards.
+- **Claude Code**: Vantage runs `claude mcp add` for you, so it works in every project.
+- **Another app**: add a local MCP server to it with the command `vantage mcp`. Any app that runs MCP servers on your PC works, like Cursor, VS Code, LM Studio or Gemini CLI. ChatGPT's app only connects to MCP servers on the internet, so it needs an API key instead.
+
+You start the review from the app's chat, not from Vantage. The AI tab shows what to ask, and **c** copies it, for example:
+
+> Review my VALORANT match Sova on Lotus, Mon 19 Oct 21:04 (match 3f2a9c1b) with Vantage.
+
+The app fetches the match's facts and screenshots from Vantage, and saves its review back in the same format as any other. While it works, the bottom of the screen says so. When it's saved, Vantage says so and the AI tab shows it. Each match is still reviewed once.
 
 [What gets sent to the AI](privacy.md#ai-review)

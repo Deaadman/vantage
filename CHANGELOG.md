@@ -20,6 +20,22 @@ See docs/development.md, "Releasing". CI checks this file's format.
 
 ## [Unreleased]
 
+### Added
+
+- No API key? Your AI app, like Claude Desktop or Claude Code, can do the AI review on the plan you already pay for. Pick Your AI app in /settings, then ask the app to review a match.
+- /matches shows each match's mode, such as Comp/Unrated/Premier, Swiftplay or Spike Rush, and /matches comp or /matches swiftplay lists just one mode. Matches stored before this update show no mode.
+
+### Changed
+
+- When a replay can't be reviewed, the scan says which mode it was, such as Team Deathmatch.
+
+### Fixed
+
+- Screenshots work straight after ffmpeg is installed, even when winget installed it for the whole computer.
+- A replay that was still downloading when Vantage looked for new ones is now read once it finishes, and the bottom left shows the download until then.
+- The Clips tab finds Medal clips in C:\Medal\Clips\Valorant, where Medal really saves them. Other clip apps are no longer listed with guessed folders; pick Another folder… for them.
+- Medal's death clips match your deaths again, even though Medal saves them all when the match ends, and screenshots show the moment you died rather than a few seconds before.
+
 ## [1.0.0] - 2026-10-21
 
 ### Added

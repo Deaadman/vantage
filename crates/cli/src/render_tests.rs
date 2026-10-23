@@ -63,6 +63,7 @@ pub(crate) fn review_data(clips: Clips, ai: Option<ai::Saved>) -> ReviewData {
         clips,
         ai,
         ai_provider: ai::provider("anthropic"),
+        ai_app: None,
     }
 }
 
@@ -92,6 +93,7 @@ pub(crate) fn saved() -> ai::Saved {
             model: "claude-sonnet-5-5".into(),
             saved_at: "2026-10-19T21:52:00Z".into(),
             format: ai::FORMAT_VERSION,
+            app: None,
         },
     }
 }
@@ -101,9 +103,9 @@ fn review_tabs_fit() {
     let folders = vec![
         ClipFolder {
             name: "Medal".into(),
-            about: "found 31 VALORANT clips in C:\\Users\\Player\\Videos\\Medal\\Clips\\VALORANT".into(),
+            about: "found 31 VALORANT clips in C:\\Medal\\Clips\\Valorant".into(),
             found: Some(31),
-            path: Some("C:\\Videos\\Medal".into()),
+            path: Some("C:\\Medal\\Clips\\Valorant".into()),
         },
         ClipFolder {
             name: "Another folder…".into(),
@@ -113,11 +115,11 @@ fn review_tabs_fit() {
         },
     ];
     let set = || Clips::Set {
-        dir: "C:\\Users\\Player\\Videos\\Medal\\Clips\\VALORANT".into(),
+        dir: "C:\\Medal\\Clips\\Valorant".into(),
         per_death: (0..7)
             .map(|i| {
                 (i % 2 == 0).then(|| Matched {
-                    path: format!("VALORANT 2026.10.19 - 21.0{i}.10.mp4").into(),
+                    path: format!("MedalTVValorant20261019210{i}10.mp4").into(),
                     before_end_s: 12.0,
                     length_s: Some(30.0),
                     bytes: Some(50_544_640),
