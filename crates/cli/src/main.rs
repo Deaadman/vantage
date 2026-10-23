@@ -569,7 +569,8 @@ fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
     let medal = clips::medal_clips(dir, &d.match_id);
     let started = d.played_at.as_deref().and_then(clips::parse_rfc3339);
     let waiting = (medal.is_empty() && started.is_some_and(|s| clips::medal_pending(dir, s as f64))).then(|| {
-        "Medal has saved clips from this match but hasn't added them to its records yet, which it does a few          minutes after the match. They'll show up here on their own when it does."
+        "Medal has saved clips from this match but hasn't added them to its records yet, which it does a few \
+         minutes after the match. They'll show up here on their own when it does."
             .to_owned()
     });
     let per_death = d
