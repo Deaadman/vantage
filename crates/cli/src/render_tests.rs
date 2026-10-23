@@ -129,7 +129,9 @@ fn review_tabs_fit() {
         shots_dir: "C:\\Users\\Player\\Pictures\\Vantage\\Clips\\2026-10-19 Lotus".into(),
         shots: vec![(1, vec!["R01.jpg".into()]), (7, vec!["R07.jpg".into()])],
         shot_error: None,
-        style: ShotStyle::Strip,
+        waiting: None,
+        stamp: 0,
+        style: ShotStyle::Grid,
     };
     for data in [
         review_data(Clips::NotSet(folders), None),

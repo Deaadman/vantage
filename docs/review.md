@@ -38,7 +38,7 @@ If you moved it, or use another clip app, pick **Another folder…**: it points 
 
 ## Screenshots
 
-A screenshot of the seconds before each death, taken from its clip. They're saved in `Pictures\Vantage\Clips`. Press `o` to open the folder.
+A screenshot of each death, taken from its clip: four moments in one image (3 seconds before, 1 second before, the moment you were shot, and half a second after, when the game shows who killed you), and a close-up of the middle of your screen as you died. They're saved in `Pictures\Vantage\Clips`. Press `o` to open the folder.
 
 Screenshots need ffmpeg. The installer gets it for you. If it's missing, the bottom of the screen says so, and `/update` installs it.
 

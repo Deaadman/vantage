@@ -521,17 +521,41 @@ pub fn prompt(d: &Debrief, shots: &[Shot]) -> String {
         }
         s.push('\n');
     }
-    s.push_str("Screenshots (each is 3 s before, 1 s before and the moment of the death, left to right, unless it is a single frame):\n");
-    for shot in shots {
-        let round: u32 = shot.name.get(1..3).and_then(|r| r.parse().ok()).unwrap_or(0);
+    s.push_str(SHOTS_HELP);
+    let mut rounds: Vec<u32> = shots.iter().map(|x| shot_round(&x.name)).collect();
+    rounds.dedup();
+    for round in rounds {
+        let names: Vec<&str> = shots
+            .iter()
+            .filter(|x| shot_round(&x.name) == round)
+            .map(|x| x.name.as_str())
+            .collect();
         let death = d.deaths.iter().find(|x| x.round == round);
         s.push_str(&format!(
-            "- {}: round {round}. {}\n",
-            shot.name,
-            death.map_or_else(String::new, |x| x.sentence())
+            "- Round {round} ({}): {}\n",
+            names.join(", "),
+            death.map_or_else(String::new, |x| format!("{} {}", x.sentence(), x.aim_sentence()))
         ));
     }
     s
+}
+
+/// How the screenshots are laid out, and how to use the replay's facts with them.
+const SHOTS_HELP: &str = "Screenshots of each death, from the player's clip. RNN.jpg is four moments in a 2×2 grid: \
+     top left 3 s before the death, top right 1 s before, bottom left a quarter second before (what the player saw \
+     as they were shot), bottom right half a second after. After the death the game shows a \"Killed by\" panel with \
+     the killer and the damage each way, and often the killer outlined in red. RNNa.jpg to RNNd.jpg are the same \
+     four moments as separate images. RNNz.jpg is a close-up of the middle of the screen as the player died: use it \
+     for crosshair placement, the peek, and a killer in front. The timing can be off by up to a second when the \
+     clip came from an app other than Medal. The facts after each round come from the replay and are exact. When \
+     they say the killer was off-screen, the killer won't be in the screenshots before the death: judge from where \
+     the player stood and where they were looking which angle they left open, and make that a finding (exposure or \
+     awareness), not unclear. Put a screenshot in unclear only when it can't show where the player was or what they \
+     were doing.\n";
+
+/// `R07z.jpg` is round 7's.
+fn shot_round(name: &str) -> u32 {
+    name.get(1..3).and_then(|r| r.parse().ok()).unwrap_or(0)
 }
 
 /// Checks an answer against the format; the error says what's wrong, for the retry.

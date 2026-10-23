@@ -232,7 +232,9 @@ fn clips() -> Clips {
             .map(|r| (r, vec![format!("R{r:02}.jpg").into()]))
             .to_vec(),
         shot_error: None,
-        style: ShotStyle::Strip,
+        waiting: None,
+        stamp: 0,
+        style: ShotStyle::Grid,
     }
 }
 

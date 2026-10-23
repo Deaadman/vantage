@@ -28,6 +28,8 @@ See docs/development.md, "Releasing". CI checks this file's format.
 ### Changed
 
 - When a replay can't be reviewed, the scan says which mode it was, such as Team Deathmatch.
+- Screenshots show four moments in a larger grid, including the "Killed by" screen just after you died, plus a close-up of your crosshair, so the AI review can see more of each fight. Screenshots you already have are taken again.
+- The AI review is told how far away your killer was and whether they were on your screen, so a killer off to the side becomes a finding instead of "couldn't tell".
 
 ### Fixed
 
@@ -35,6 +37,8 @@ See docs/development.md, "Releasing". CI checks this file's format.
 - A replay that was still downloading when Vantage looked for new ones is now read once it finishes, and the bottom left shows the download until then.
 - The Clips tab finds Medal clips in C:\Medal\Clips\Valorant, where Medal really saves them. Other clip apps are no longer listed with guessed folders; pick Another folder… for them.
 - Medal's death clips match your deaths again, even though Medal saves them all when the match ends, and screenshots show the moment you died rather than a few seconds before.
+- Screenshots from Medal clips are timed from Medal's own mark of each death, so they no longer land a second or more before it in some matches.
+- A match's Medal clips show up in an open /review as soon as Medal records them, a few minutes after the match, without restarting Vantage. Until then, the Clips tab says they're on their way.
 
 ## [1.0.0] - 2026-10-21
 

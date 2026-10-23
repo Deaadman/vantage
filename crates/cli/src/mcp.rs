@@ -297,6 +297,10 @@ fn no_shots(data: &ReviewData) -> String {
         Clips::Set {
             shot_error: Some(e), ..
         } => format!("There are no screenshots of this match. {e}"),
+        Clips::Set { waiting: Some(w), .. } => format!(
+            "There are no screenshots of this match yet. {w} Tell the player to try again in a few minutes; \
+             don't review the match without them."
+        ),
         Clips::Set { .. } => "There are no screenshots of this match: none of the player's clips are of its deaths. \
                               Their clip app has to save a clip of each death."
             .into(),

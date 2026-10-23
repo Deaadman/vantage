@@ -121,9 +121,11 @@ pub struct Matched {
 }
 
 /// How much later a death happens on the wall clock than `played_at` plus its
-/// match time. Measured on Medal's clips of one match: all 16 deaths came
-/// 5.8 s later, give or take 0.1 s.
-pub const REPLAY_CLOCK_LAG_S: f64 = 5.8;
+/// match time. It holds within a match but not between them: against Medal's
+/// death bookmarks it was 5.8 s in one match and 7.1 s in the next (`played_at`
+/// is to the second, and the game starts recording after a varying wait). The
+/// middle of those keeps clips without a bookmark within about 0.7 s.
+pub const REPLAY_CLOCK_LAG_S: f64 = 6.5;
 
 /// Unix seconds of each death: `played_at` (RFC 3339) plus the match time.
 pub fn death_times(played_at: &str, times_ms: &[u32]) -> Option<Vec<f64>> {
@@ -131,33 +133,69 @@ pub fn death_times(played_at: &str, times_ms: &[u32]) -> Option<Vec<f64>> {
     Some(times_ms.iter().map(|t| start + *t as f64 / 1000.0).collect())
 }
 
-/// A clip from Medal's database: the file and when its recording started.
+/// A clip from Medal's database: the file, when its recording started, and
+/// where in it Medal bookmarked the death, from the game's own event.
 #[derive(Debug, Clone)]
 pub struct MedalClip {
     pub path: PathBuf,
     pub start_unix: f64,
+    pub death_at_s: Option<f64>,
 }
 
 /// This match's clips in Medal's database, `Databases\medal-*.db` in Medal's
 /// folder: the clip folder or one above it. Empty when there is no database
 /// or it can't be read, and then clips are matched by when they were saved.
 pub fn medal_clips(clips_dir: &Path, match_id: &str) -> Vec<MedalClip> {
-    let mut out = Vec::new();
-    for root in clips_dir.ancestors().take(4) {
-        let Ok(entries) = std::fs::read_dir(root.join("Databases")) else {
-            continue;
-        };
-        for e in entries.flatten() {
-            let name = e.file_name().to_string_lossy().to_lowercase();
-            if name.starts_with("medal-") && name.ends_with(".db") {
-                out.extend(read_medal_db(&e.path(), match_id).unwrap_or_default());
-            }
-        }
-    }
+    let mut out: Vec<MedalClip> = medal_dbs(clips_dir)
+        .iter()
+        .flat_map(|db| read_medal_db(db, match_id).unwrap_or_default())
+        .collect();
     out.retain(|c| c.path.is_file());
     out.sort_by(|a, b| a.start_unix.total_cmp(&b.start_unix));
     out.dedup_by(|a, b| a.path == b.path);
     out
+}
+
+/// Medal's databases for the clip folder (see `medal_clips`).
+fn medal_dbs(clips_dir: &Path) -> Vec<PathBuf> {
+    clips_dir
+        .ancestors()
+        .take(4)
+        .filter_map(|root| std::fs::read_dir(root.join("Databases")).ok())
+        .flat_map(|entries| entries.flatten().map(|e| e.path()))
+        .filter(|p| {
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            name.starts_with("medal-") && name.ends_with(".db")
+        })
+        .collect()
+}
+
+/// Medal saved clips after `since_unix` but hasn't recorded them in its
+/// database yet, which it does minutes later: until then they can't be told
+/// apart, as Medal saves a match's clips all at once when it ends.
+pub fn medal_pending(clips_dir: &Path, since_unix: f64) -> bool {
+    !medal_dbs(clips_dir).is_empty() && find(clips_dir).iter().any(|c| c.saved_unix >= since_unix)
+}
+
+/// Changes when the clips in `clips_dir` or Medal's records of them do, so a
+/// review can look again for clips it didn't have.
+pub fn stamp(clips_dir: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let file = |p: &Path| std::fs::metadata(p).ok().map(|m| (m.len(), m.modified().ok()));
+    for db in medal_dbs(clips_dir) {
+        // Medal writes to the `-wal` file first and the database later.
+        file(&db).hash(&mut h);
+        file(&PathBuf::from(format!("{}-wal", db.display()))).hash(&mut h);
+    }
+    for c in find(clips_dir) {
+        c.path.hash(&mut h);
+        c.saved_unix.to_bits().hash(&mut h);
+    }
+    h.finish()
 }
 
 fn read_medal_db(db: &Path, match_id: &str) -> rusqlite::Result<Vec<MedalClip>> {
@@ -177,6 +215,7 @@ fn read_medal_db(db: &Path, match_id: &str) -> rusqlite::Result<Vec<MedalClip>> 
             Some(MedalClip {
                 path: path.into(),
                 start_unix: clip_start(&meta)?,
+                death_at_s: death_bookmark(&meta),
             })
         })
         .collect())
@@ -208,6 +247,30 @@ fn clip_start(meta: &[u8]) -> Option<f64> {
     Some(parse_rfc3339(&text)? as f64 + frac)
 }
 
+/// Seconds into the clip of Medal's `Death` bookmark, from the same encoding:
+/// `bookmarks … time` `9.733` `name` `Death`, each text after a byte of
+/// length and type. The replay's clock only places a death to within a second
+/// or two (the lag varies by match); the bookmark is within a frame or so.
+fn death_bookmark(meta: &[u8]) -> Option<f64> {
+    let from = meta.windows(9).position(|w| w == b"bookmarks")?;
+    let rest = &meta[from..];
+    rest.windows(4)
+        .enumerate()
+        .filter(|(_, w)| *w == b"time")
+        .find_map(|(i, _)| {
+            let after = rest.get(i + 5..)?;
+            let digits: String = after
+                .iter()
+                .take_while(|b| b.is_ascii_digit() || **b == b'.')
+                .map(|&b| b as char)
+                .collect();
+            // The bookmark's name follows its time: `name`, a byte, `Death`.
+            let name = after.get(digits.len()..(digits.len() + 12).min(after.len()))?;
+            let death = name.windows(5).any(|w| w == b"Death");
+            if death { digits.parse().ok() } else { None }
+        })
+}
+
 /// Each death's clip from Medal: the clip whose recording holds the death,
 /// the one with the death nearest its middle when two do, no clip used twice.
 pub fn match_medal(deaths_unix: &[f64], clips: &[MedalClip]) -> Vec<Option<Matched>> {
@@ -232,7 +295,10 @@ fn match_medal_with(deaths_unix: &[f64], clips: &[MedalClip], lengths: &[Option<
             used[i] = true;
             Some(Matched {
                 path: c.path.clone(),
-                before_end_s: c.start_unix + len - t,
+                before_end_s: c
+                    .death_at_s
+                    .filter(|d| (0.0..=len).contains(d))
+                    .map_or(c.start_unix + len - t, |d| len - d),
                 length_s: Some(len),
                 bytes: std::fs::metadata(&c.path).ok().map(|m| m.len()),
             })
@@ -334,52 +400,71 @@ pub fn parse_rfc3339(t: &str) -> Option<i64> {
 /// How screenshots of a death are taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShotStyle {
-    /// 3 s before, 1 s before and the death, side by side in one image.
-    Strip,
+    /// The four moments in a 2×2 grid, and the close-up.
+    Grid,
     /// Just the moment of the death.
     One,
-    /// The three moments as separate images.
-    Three,
+    /// The four moments as separate images, and the close-up.
+    Four,
 }
 
 impl ShotStyle {
+    /// `strip` and `three` were the grid and the separate images when there were three moments.
     pub fn parse(s: Option<&str>) -> Self {
         match s {
             Some("one") => ShotStyle::One,
-            Some("three") => ShotStyle::Three,
-            _ => ShotStyle::Strip,
+            Some("four" | "three") => ShotStyle::Four,
+            _ => ShotStyle::Grid,
         }
     }
 
     pub fn key(self) -> &'static str {
         match self {
-            ShotStyle::Strip => "strip",
+            ShotStyle::Grid => "grid",
             ShotStyle::One => "one",
-            ShotStyle::Three => "three",
+            ShotStyle::Four => "four",
         }
     }
 
-    pub const ALL: [ShotStyle; 3] = [ShotStyle::Strip, ShotStyle::One, ShotStyle::Three];
+    pub const ALL: [ShotStyle; 3] = [ShotStyle::Grid, ShotStyle::One, ShotStyle::Four];
 
     pub fn name(self) -> &'static str {
         match self {
-            ShotStyle::Strip => "3 moments in one image",
+            ShotStyle::Grid => "4 moments in one image, and a close-up",
             ShotStyle::One => "1 image, the moment you died",
-            ShotStyle::Three => "3 separate images",
+            ShotStyle::Four => "4 separate images, and a close-up",
         }
     }
 
     pub fn about(self) -> &'static str {
         match self {
-            ShotStyle::Strip => "3 s before, 1 s before, the death",
+            ShotStyle::Grid => "3 s and 1 s before, as you died, just after",
             ShotStyle::One => "fewest files",
-            ShotStyle::Three => "for AIs that read small images badly",
+            ShotStyle::Four => "for AIs that read small images badly",
         }
     }
 }
 
-/// Seconds before the death of each moment taken.
-const MOMENTS_S: [f64; 3] = [3.0, 1.0, 0.0];
+/// Seconds before the death of each moment taken; negative is after it.
+/// A quarter second before is what I saw as I was shot; half a second after
+/// shows the "Killed by" panel and often the killer outlined in red.
+const MOMENTS_S: [f64; 4] = [3.0, 1.0, 0.25, -0.5];
+/// The moment of the death, for the close-up and the one-image style.
+const DEATH_S: f64 = MOMENTS_S[2];
+
+/// Width of each moment in the grid: two across fit the 1568 px Claude reads
+/// without shrinking the image (the other AIs' limits are close).
+const GRID_TILE_W: u32 = 720;
+
+/// The close-up: the middle half of the screen as I died,
+/// at the clip's own resolution, where the crosshair, the peek and a killer
+/// in front are; enlarged so the AI looks at it closely.
+const CLOSE_UP: &str = "crop=iw/2:ih/2,scale=1280:-2:flags=lanczos";
+
+/// Changes whenever the screenshots are taken differently, so the ones taken
+/// before are taken again (see `forget_old_shots`).
+const SHOTS_LAYOUT: &str = "3";
+const LAYOUT_FILE: &str = "layout.txt";
 
 /// `ffmpeg.exe` on PATH, where winget links or unpacks it, or in
 /// `%LOCALAPPDATA%\vantage\ffmpeg`. winget's folders are checked by name: a
@@ -431,15 +516,38 @@ fn winget_package_bins(packages: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// A death's screenshot files: `R07.jpg` for the strip, `R07a.jpg` …
-/// `R07c.jpg` for three, and just `R07c.jpg`, the moment of the death, for one.
-/// Each style has its own names, so changing style never shows another's image.
+/// A death's screenshot files: `R07.jpg` for the grid, `R07a.jpg` …
+/// `R07d.jpg` for the four moments, `R07z.jpg` for the close-up, and just
+/// `R07c.jpg`, the moment of the death, for one. A name is always the same
+/// picture, so changing style never shows a wrong image.
 pub fn shot_names(round: u32, style: ShotStyle) -> Vec<String> {
+    let name = |s: &str| format!("R{round:02}{s}.jpg");
     match style {
-        ShotStyle::Three => ["a", "b", "c"].iter().map(|s| format!("R{round:02}{s}.jpg")).collect(),
-        ShotStyle::One => vec![format!("R{round:02}c.jpg")],
-        ShotStyle::Strip => vec![format!("R{round:02}.jpg")],
+        ShotStyle::Four => ["a", "b", "c", "d", "z"].map(name).to_vec(),
+        ShotStyle::One => vec![name("c")],
+        ShotStyle::Grid => vec![name(""), name("z")],
     }
+}
+
+/// Deletes a match's screenshots taken by an older layout, whose names may
+/// now mean other pictures, so they are taken again. `dir` is one match's folder.
+pub fn forget_old_shots(dir: &Path) -> Result<()> {
+    let marker = dir.join(LAYOUT_FILE);
+    if std::fs::read_to_string(&marker).is_ok_and(|l| l.trim() == SHOTS_LAYOUT) {
+        return Ok(());
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for p in entries.flatten().map(|e| e.path()) {
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if name.starts_with('R') && name.ends_with(".jpg") {
+                std::fs::remove_file(&p).with_context(|| format!("deleting {}", p.display()))?;
+            }
+        }
+    }
+    crate::files::write_atomic(&marker, SHOTS_LAYOUT.as_bytes())
 }
 
 /// The longest one ffmpeg run may take before it's stopped.
@@ -462,7 +570,10 @@ pub fn screenshot(ffmpeg: &Path, clip: &Matched, round: u32, style: ShotStyle, d
     // crash never leaves a half-written image that would be kept as done.
     let part = |p: &Path| p.with_extension("part.jpg");
     let finish = |p: &Path| std::fs::rename(part(p), p).with_context(|| format!("saving {}", p.display()));
-    let one_frame = |before: f64, out: &Path| -> Result<()> {
+    let one_frame = |before: f64, filter: Option<&str>, out: &Path| -> Result<()> {
+        if out.is_file() {
+            return Ok(());
+        }
         let mut one = Command::new(ffmpeg);
         one.args([
             "-hide_banner",
@@ -474,36 +585,40 @@ pub fn screenshot(ffmpeg: &Path, clip: &Matched, round: u32, style: ShotStyle, d
             "-i",
             &input,
         ]);
+        if let Some(f) = filter {
+            one.args(["-vf", f]);
+        }
         one.args(["-frames:v", "1", "-q:v", "3"]).arg(part(out));
         run(&mut one)?;
         finish(out)
     };
+    let close_up = |out: &Path| one_frame(DEATH_S, Some(CLOSE_UP), out);
     match style {
-        ShotStyle::One => one_frame(0.0, &paths[0])?,
-        ShotStyle::Three => {
+        ShotStyle::One => one_frame(DEATH_S, None, &paths[0])?,
+        ShotStyle::Four => {
             for (m, p) in MOMENTS_S.iter().zip(&paths) {
-                if !p.is_file() {
-                    one_frame(*m, p)?;
-                }
+                one_frame(*m, None, p)?;
             }
+            close_up(&paths[4])?;
         }
-        ShotStyle::Strip => {
-            let mut cmd = Command::new(ffmpeg);
-            cmd.args(["-hide_banner", "-loglevel", "error", "-y"]);
-            for m in MOMENTS_S {
-                cmd.args(["-sseof", &from_end(m), "-i", &input]);
+        ShotStyle::Grid => {
+            if !paths[0].is_file() {
+                let mut cmd = Command::new(ffmpeg);
+                cmd.args(["-hide_banner", "-loglevel", "error", "-y"]);
+                for m in MOMENTS_S {
+                    cmd.args(["-sseof", &from_end(m), "-i", &input]);
+                }
+                let w = GRID_TILE_W;
+                let grid = format!(
+                    "[0:v]scale={w}:-2[a];[1:v]scale={w}:-2[b];[2:v]scale={w}:-2[c];[3:v]scale={w}:-2[d];\
+                     [a][b]hstack[top];[c][d]hstack[bottom];[top][bottom]vstack"
+                );
+                cmd.args(["-filter_complex", &grid, "-frames:v", "1", "-q:v", "3"]);
+                cmd.arg(part(&paths[0]));
+                run(&mut cmd)?;
+                finish(&paths[0])?;
             }
-            cmd.args([
-                "-filter_complex",
-                "[0:v]scale=960:-2[a];[1:v]scale=960:-2[b];[2:v]scale=960:-2[c];[a][b][c]hstack=inputs=3",
-                "-frames:v",
-                "1",
-                "-q:v",
-                "3",
-            ]);
-            cmd.arg(part(&paths[0]));
-            run(&mut cmd)?;
-            finish(&paths[0])?;
+            close_up(&paths[1])?;
         }
     }
     Ok(paths)
@@ -606,9 +721,15 @@ mod tests {
         assert_eq!(m[0].as_ref().unwrap().before_end_s, 10.0);
         // 75 is too long after the second death's 200; 500 is too late for 400.
         assert!(m[1].is_none() && m[2].is_none());
-        assert_eq!(shot_names(7, ShotStyle::Three), ["R07a.jpg", "R07b.jpg", "R07c.jpg"]);
-        assert_ne!(shot_names(7, ShotStyle::One), shot_names(7, ShotStyle::Strip));
-        assert_eq!(ShotStyle::parse(None), ShotStyle::Strip);
+        assert_eq!(
+            shot_names(7, ShotStyle::Four),
+            ["R07a.jpg", "R07b.jpg", "R07c.jpg", "R07d.jpg", "R07z.jpg"]
+        );
+        assert_eq!(shot_names(7, ShotStyle::Grid), ["R07.jpg", "R07z.jpg"]);
+        assert_eq!(shot_names(7, ShotStyle::One), ["R07c.jpg"]);
+        assert_eq!(ShotStyle::parse(None), ShotStyle::Grid);
+        assert_eq!(ShotStyle::parse(Some("strip")), ShotStyle::Grid);
+        assert_eq!(ShotStyle::parse(Some("three")), ShotStyle::Four);
 
         // A 30 s clip saved 40 s after the death starts after it: skipped for the 60 s one.
         let m = match_deaths_with(&deaths[..1], &clips[..2], &[Some(5.0), Some(60.0)]);
@@ -631,14 +752,56 @@ mod tests {
         let clip = |s: f64| MedalClip {
             path: format!("{s}.mp4").into(),
             start_unix: start + s,
+            death_at_s: None,
         };
-        let clips = [clip(0.0), clip(140.0)];
+        let mut clips = [clip(0.0), clip(140.0)];
         let m = match_medal_with(&deaths, &clips, &[Some(20.0), Some(20.0)]);
         assert_eq!(m[0].as_ref().unwrap().path, clips[0].path);
         assert!((m[1].as_ref().unwrap().before_end_s - 10.0).abs() < 1e-6);
+        // Medal's bookmark of the death beats the replay's clock.
+        clips[1].death_at_s = Some(11.25);
+        let m = match_medal_with(&deaths, &clips, &[Some(20.0), Some(20.0)]);
+        assert!((m[1].as_ref().unwrap().before_end_s - 8.75).abs() < 1e-6);
         // A death no clip holds, and a clip of unknown length, get nothing.
         let m = match_medal_with(&[start + 60.0, start + 150.0], &clips, &[Some(20.0), None]);
         assert!(m[0].is_none() && m[1].is_none());
+    }
+
+    #[test]
+    fn clips_medal_hasnt_recorded_yet_are_noticed() {
+        let dir = std::env::temp_dir().join(format!("vantage-pending-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let clips = dir.join("Clips").join("Valorant");
+        std::fs::create_dir_all(&clips).unwrap();
+        std::fs::create_dir_all(dir.join("Databases")).unwrap();
+        // No Medal database: nothing to wait for.
+        std::fs::write(clips.join("MedalTVValorant1.mp4"), b"").unwrap();
+        assert!(!medal_pending(&clips, 0.0));
+        std::fs::write(dir.join("Databases").join("medal-1.db"), b"").unwrap();
+        assert!(medal_pending(&clips, 0.0));
+        assert!(!medal_pending(&clips, 4e9), "clips from before the match don't count");
+        // Medal writing its records, or a new clip, changes the stamp.
+        let before = stamp(&clips);
+        assert_eq!(stamp(&clips), before);
+        std::fs::write(dir.join("Databases").join("medal-1.db-wal"), b"rows").unwrap();
+        let after = stamp(&clips);
+        assert_ne!(after, before);
+        std::fs::write(clips.join("MedalTVValorant2.mp4"), b"").unwrap();
+        assert_ne!(stamp(&clips), after);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn reads_medal_s_death_bookmark() {
+        // As Medal stores it, cut short after the bookmark's timestamp.
+        let meta = b"\xd7\x13videoLengthSeconds\x95\x1220.152\xcbbookmarks\xcbO\xccMGtimeU9.733GnameWDeathGdata\xbc\x87Event ID\x176\x97timestamp\xc3\r1792744435484";
+        assert_eq!(death_bookmark(meta), Some(9.733));
+        // A kill bookmark, or none at all, isn't a death.
+        assert_eq!(
+            death_bookmark(b"bookmarks\xcbO\xccMGtimeU4.5GnameWKill\x97timestamp"),
+            None
+        );
+        assert_eq!(death_bookmark(b"clipStartTime 2026"), None);
     }
 
     #[test]
@@ -648,6 +811,21 @@ mod tests {
         assert_eq!(a, "2026-10-19 21.04 Ascent 5c673443");
         assert_ne!(a, b);
         assert_eq!(shots_folder(None, "..\\x/y", "../.."), "undated .._x_y");
+    }
+
+    #[test]
+    fn screenshots_from_an_older_layout_are_taken_again() {
+        let dir = std::env::temp_dir().join(format!("vantage-layout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("R07.jpg"), b"old").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"").unwrap();
+        forget_old_shots(&dir).unwrap();
+        assert!(!dir.join("R07.jpg").exists() && dir.join("notes.txt").exists());
+        std::fs::write(dir.join("R07.jpg"), b"new").unwrap();
+        forget_old_shots(&dir).unwrap();
+        assert!(dir.join("R07.jpg").exists(), "this layout's screenshots are kept");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

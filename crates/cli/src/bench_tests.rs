@@ -73,7 +73,9 @@ fn bench() {
         shots_dir: "shots".into(),
         shots: vec![(1, vec!["R01.jpg".into()])],
         shot_error: None,
-        style: ShotStyle::Strip,
+        waiting: None,
+        stamp: 0,
+        style: ShotStyle::Grid,
     };
     let mut review = ReviewPanel::new(review_data(clips(), Some(saved())));
     let mut habits_panel = HabitsPanel::new(habits::progress(&eight), "untraded", eight.len());
