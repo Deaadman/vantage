@@ -30,16 +30,9 @@ The minimap, drawn in the terminal, with your deaths and your best and worst spo
 
 Your clips matched to your deaths, with each clip's length and size. A clip counts when your clip app saved it within 90 seconds of the death.
 
-The first time, Vantage looks for the folders of these apps and lets you pick one:
+The first time, Vantage looks for Medal's clips in `C:\Medal\Clips\Valorant`, where Medal saves them unless you moved its capture folder, and lets you pick it.
 
-- Medal
-- NVIDIA ShadowPlay
-- Xbox Game Bar
-- AMD Adrenalin
-- Outplayed
-- SteelSeries Moments
-
-For any other folder, pick **Another folder…**: it points you to `/settings` → Config → **Clip folder**, where you type the path. Change it there later too.
+If you moved it, or use another clip app, pick **Another folder…**: it points you to `/settings` → Config → **Clip folder**, where you type the path. Change it there later too.
 
 ![The Clips tab](images/review-clips.svg)
 

@@ -96,7 +96,7 @@ const GENERAL: &str = "Vantage watches your VALORANT replays and coaches you: wh
 # After a match
   Download the replay in the client. Vantage picks it up and tells you how it went.
   /review opens the debrief: the short version, the issues that cost you the most rounds, what to keep doing, and how your focus habit went.
-  Its Clips and Screenshots tabs match your clips (Medal, ShadowPlay, Game Bar and others) to your deaths and take a screenshot of each one.
+  Its Clips and Screenshots tabs match your clips (from Medal or any clip app) to your deaths and take a screenshot of each one.
   The AI tab in /review can ask an AI (Claude, ChatGPT, Gemini, or Ollama on your own PC) to look at those screenshots for you: where you stood and where your crosshair was. It's optional and saved once per match.
 
 # Before you queue

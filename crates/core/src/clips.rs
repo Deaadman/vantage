@@ -37,26 +37,23 @@ pub fn shots_root() -> Option<PathBuf> {
         .map(|d| d.join("Vantage").join("Clips"))
 }
 
-/// The known apps' usual folders and how many VALORANT clips each holds.
-/// Only Game Bar's and ShadowPlay's defaults are fixed; the others can be
-/// moved in the app, so the Videos scan catches the rest.
+/// The known apps' default folders and how many VALORANT clips each holds.
+/// Only Medal documents its default: `C:\Medal\Clips\Valorant`, with clips
+/// named like `MedalTVValorant20250809233847.mp4` (support.medal.tv). It
+/// can be moved in Medal; other apps' folders are typed as "Another folder…".
 pub fn apps() -> Vec<App> {
-    let Some(v) = videos_dir() else { return vec![] };
-    [
-        ("Medal", v.join("Medal").join("Clips").join("VALORANT")),
-        ("NVIDIA ShadowPlay", v.join("VALORANT")),
-        ("Xbox Game Bar", v.join("Captures")),
-        ("AMD Adrenalin", v.join("Radeon ReLive").join("VALORANT")),
-        ("Outplayed", v.join("Overwolf").join("Outplayed").join("VALORANT")),
-        ("SteelSeries Moments", v.join("SteelSeries Moments")),
-    ]
-    .into_iter()
-    .map(|(name, dir)| App {
-        name,
-        found: find(&dir).len(),
-        dir,
-    })
-    .collect()
+    let drive = PathBuf::from(format!(
+        "{}\\",
+        std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into())
+    ));
+    [("Medal", drive.join("Medal").join("Clips").join("Valorant"))]
+        .into_iter()
+        .map(|(name, dir)| App {
+            name,
+            found: find(&dir).len(),
+            dir,
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +64,7 @@ pub struct Clip {
 }
 
 /// VALORANT clips in `dir` and its folders, three levels down. In a folder
-/// that isn't only VALORANT's (Game Bar, the whole Videos folder), a clip
+/// that isn't only VALORANT's (a clip app's shared folder, the whole Videos folder), a clip
 /// counts when "valorant" is in its name or its folder's.
 pub fn find(dir: &Path) -> Vec<Clip> {
     let only_valorant = dir.to_string_lossy().to_lowercase().contains("valorant");
@@ -521,6 +518,27 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), b"").unwrap();
         assert_eq!(find(&dir).len(), 2);
         assert_eq!(find(&dir.join("VALORANT")).len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finds_medal_clips_in_its_valorant_folder() {
+        let dir = std::env::temp_dir().join(format!("vantage-medal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let valorant = dir.join("Medal").join("Clips").join("Valorant");
+        std::fs::create_dir_all(&valorant).unwrap();
+        std::fs::create_dir_all(dir.join("Medal").join("Imported")).unwrap();
+        for name in ["MedalTVValorant20250809233847.mp4", "MedalTVValorant20250809233848.mp4"] {
+            std::fs::write(valorant.join(name), b"").unwrap();
+        }
+        std::fs::write(
+            dir.join("Medal")
+                .join("Imported")
+                .join("MedalTVValorant20250809224907.mp4"),
+            b"",
+        )
+        .unwrap();
+        assert_eq!(find(&valorant).len(), 2);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -33,6 +33,7 @@ See docs/development.md, "Releasing". CI checks this file's format.
 
 - Screenshots work straight after ffmpeg is installed, even when winget installed it for the whole computer.
 - A replay that was still downloading when Vantage looked for new ones is now read once it finishes, and the bottom left shows the download until then.
+- The Clips tab finds Medal clips in C:\Medal\Clips\Valorant, where Medal really saves them. Other clip apps are no longer listed with guessed folders; pick Another folder… for them.
 
 ## [1.0.0] - 2026-10-21
 
