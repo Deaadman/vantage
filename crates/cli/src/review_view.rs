@@ -521,7 +521,12 @@ impl ReviewPanel {
                 }
                 self.flash_rows(&mut b, w);
             }
-            Clips::Set { dir, per_death, .. } => {
+            Clips::Set {
+                dir,
+                per_death,
+                waiting,
+                ..
+            } => {
                 let have = per_death.iter().filter(|c| c.is_some()).count();
                 b.push(vec![
                     (Style::default(), "  ".into()),
@@ -532,6 +537,10 @@ impl ReviewPanel {
                     (Style::fg(GREY), format!(" · from {}", dir.display())),
                 ]);
                 b.push(vec![]);
+                if let Some(why) = waiting {
+                    b.extend(para(why, 2, w, Style::fg(YELLOW)));
+                    b.push(vec![]);
+                }
                 if d.deaths.is_empty() {
                     b.push(vec![(Style::fg(GREY), "    You didn't die this match.".into())]);
                     return b;
@@ -597,6 +606,7 @@ impl ReviewPanel {
             shots_dir,
             shots,
             shot_error,
+            waiting,
             style,
             ..
         } = &self.data.clips
@@ -613,6 +623,7 @@ impl ReviewPanel {
             b.extend(para(
                 shot_error
                     .as_deref()
+                    .or(waiting.as_deref())
                     .unwrap_or("None of your deaths has a clip, so there's nothing to take screenshots from."),
                 2,
                 w,
@@ -630,12 +641,12 @@ impl ReviewPanel {
             ]);
             b.push(vec![]);
             let how = match style {
-                vantage_core::clips::ShotStyle::Strip => {
-                    "Each screenshot puts three moments side by side: 3 seconds before you died, 1 second before, and the moment you died, so the whole fight is in one image."
+                vantage_core::clips::ShotStyle::Grid => {
+                    "Each screenshot puts four moments in a grid: 3 seconds before you died, 1 second before, the moment you were shot, and half a second after, when the game shows who killed you. A close-up of the middle of your screen as you died goes with it."
                 }
                 vantage_core::clips::ShotStyle::One => "Each screenshot is the moment you died.",
-                vantage_core::clips::ShotStyle::Three => {
-                    "Each death has three screenshots: 3 seconds before you died, 1 second before, and the moment you died."
+                vantage_core::clips::ShotStyle::Four => {
+                    "Each death has four screenshots: 3 seconds before you died, 1 second before, the moment you were shot, and half a second after, when the game shows who killed you; and a close-up of the middle of your screen as you died."
                 }
             };
             b.extend(para(how, 2, w, Style::fg(GREY)));
@@ -1070,7 +1081,9 @@ mod tests {
             shots_dir: "shots".into(),
             shots: vec![(1, vec!["R01.jpg".into()])],
             shot_error: None,
-            style: ShotStyle::Strip,
+            waiting: None,
+            stamp: 0,
+            style: ShotStyle::Grid,
         }
     }
 

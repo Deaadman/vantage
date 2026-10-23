@@ -54,6 +54,12 @@ pub struct Death {
     pub uv: Option<[f64; 2]>,
     /// Match time of the death, for finding its clip.
     pub time_ms: u32,
+    pub killer_weapon: Option<String>,
+    pub dist_m: Option<f64>,
+    /// Degrees between where I aimed and the killer, 0 = straight at them.
+    pub aim_off_deg: Option<f64>,
+    pub speed_m_s: Option<f64>,
+    pub hits_dealt: u32,
 }
 
 impl Death {
@@ -77,6 +83,43 @@ impl Death {
         });
         s
     }
+
+    /// What the replay knows that the screenshots may not show, for the AI:
+    /// `Chamber was 27 m away with an Operator, 115° from where you were
+    /// aiming, so off-screen. You were running. You didn't hit them.`
+    pub fn aim_sentence(&self) -> String {
+        let mut s = self.killer.clone();
+        if let Some(m) = self.dist_m {
+            s.push_str(&format!(" was {m:.0} m away"));
+        }
+        if let Some(w) = &self.killer_weapon {
+            s.push_str(&format!(" with {}", a_or_an(w)));
+        }
+        match self.aim_off_deg {
+            Some(a) if a <= 10.0 => s.push_str(", almost exactly where you were aiming"),
+            Some(a) if a <= HALF_FOV_DEG => s.push_str(&format!(", {a:.0}° from where you were aiming, so on screen")),
+            Some(a) => s.push_str(&format!(", {a:.0}° from where you were aiming, so off-screen")),
+            None => {}
+        }
+        s.push('.');
+        if self.speed_m_s.is_some_and(|v| v > RUNNING_M_S) {
+            s.push_str(" You were running.");
+        }
+        // No distance means no killer to hit (a fall, or my own ability).
+        if self.hits_dealt == 0 && self.dist_m.is_some() {
+            s.push_str(" You didn't hit them.");
+        }
+        s
+    }
+}
+
+/// Half of VALORANT's horizontal field of view (103°): a killer further than
+/// this from where I aimed was off the edge of the screen.
+pub const HALF_FOV_DEG: f64 = 51.5;
+
+fn a_or_an(w: &str) -> String {
+    let an = w.starts_with(['A', 'E', 'I', 'O', 'U', 'a', 'e', 'i', 'o', 'u']);
+    format!("{} {w}", if an { "an" } else { "a" })
 }
 
 #[derive(Debug, Clone)]
@@ -1076,6 +1119,11 @@ pub fn debrief(r: &MatchReview, lobby: &[MatchReview]) -> Debrief {
                 moment: None,
                 uv: d.minimap_uv,
                 time_ms: d.time_ms,
+                killer_weapon: d.context.killer_weapon.clone(),
+                dist_m: d.dist_to_killer_m,
+                aim_off_deg: d.crosshair_offset_to_killer_deg,
+                speed_m_s: d.speed_m_s,
+                hits_dealt: d.context.duel_hits_dealt,
             }
         })
         .collect();
@@ -1225,6 +1273,26 @@ pub mod sample {
 mod tests {
     use super::sample::{death, review};
     use super::*;
+
+    #[test]
+    fn the_ai_is_told_whether_the_killer_was_on_screen() {
+        let mut behind = death(3, "A Site");
+        behind.crosshair_offset_to_killer_deg = Some(115.0);
+        behind.speed_m_s = Some(5.0);
+        behind.context.duel_hits_dealt = 0;
+        behind.context.killer_weapon = Some("Operator".into());
+        let r = review(&[(false, Side::Attack); 4], vec![death(1, "B Site"), behind]);
+        let d = debrief(&r, &[]);
+        assert_eq!(
+            d.deaths[0].aim_sentence(),
+            "Reyna was 12 m away with a Vandal, almost exactly where you were aiming."
+        );
+        assert_eq!(
+            d.deaths[1].aim_sentence(),
+            "Reyna was 12 m away with an Operator, 115° from where you were aiming, so off-screen. \
+             You were running. You didn't hit them."
+        );
+    }
 
     #[test]
     fn entries_and_isolated_deaths_become_fixes_ranked_by_rounds_lost() {

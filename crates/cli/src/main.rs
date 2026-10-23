@@ -476,6 +476,10 @@ pub enum Clips {
         shots: Vec<(u32, Vec<PathBuf>)>,
         /// Why some or all screenshots are missing.
         shot_error: Option<String>,
+        /// Clips that exist but can't be matched yet, and why.
+        waiting: Option<String>,
+        /// The clip folder's `clips::stamp` before it was read.
+        stamp: u64,
         style: ShotStyle,
     },
 }
@@ -561,7 +565,13 @@ pub(crate) fn load_review(data_dir: &Path, match_id: Option<String>) -> Result<R
 
 fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
     let times: Vec<u32> = d.deaths.iter().map(|x| x.time_ms).collect();
+    let stamp = clips::stamp(dir);
     let medal = clips::medal_clips(dir, &d.match_id);
+    let started = d.played_at.as_deref().and_then(clips::parse_rfc3339);
+    let waiting = (medal.is_empty() && started.is_some_and(|s| clips::medal_pending(dir, s as f64))).then(|| {
+        "Medal has saved clips from this match but hasn't added them to its records yet, which it does a few          minutes after the match. They'll show up here on their own when it does."
+            .to_owned()
+    });
     let per_death = d
         .played_at
         .as_deref()
@@ -587,6 +597,9 @@ fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
                 )
             }
             Some(ff) => {
+                if let Err(e) = clips::forget_old_shots(&shots_dir) {
+                    shot_error = Some(format!("Couldn't clear the old screenshots: {e:#}"));
+                }
                 for (x, c) in d.deaths.iter().zip(&per_death) {
                     let Some(c) = c else { continue };
                     match clips::screenshot(&ff, c, x.round, style, &shots_dir) {
@@ -603,6 +616,8 @@ fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
         shots_dir,
         shots,
         shot_error,
+        waiting,
+        stamp,
         style,
     }
 }

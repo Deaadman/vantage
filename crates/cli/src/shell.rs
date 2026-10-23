@@ -39,13 +39,15 @@ use crate::out::{self, Kind};
 use crate::panel::rank_color;
 use crate::review_view::{ReviewAction, ReviewPanel};
 use crate::settings::VantageSettings;
-use crate::{APP_NAME, Cli, ReviewData, VERSION};
+use crate::{APP_NAME, Cli, Clips, ReviewData, VERSION};
 
 const TICK: Duration = Duration::from_millis(80);
 /// How often the replay folder is checked for new downloads.
 const WATCH_EVERY: Duration = Duration::from_secs(3);
 /// How often the AI app's reviews are checked on.
 const AI_EVERY: Duration = Duration::from_secs(1);
+/// How often an open review missing clips looks for them again.
+const CLIPS_EVERY: Duration = Duration::from_secs(5);
 /// A catalog this many days old is refreshed in the background on launch.
 const SYNC_AFTER_DAYS: i64 = 1;
 /// How often an open shell checks for updates again after launch.
@@ -388,6 +390,8 @@ pub(crate) struct Vantage {
     /// A review's request made while a job ran, started when it ends.
     queued: Option<(String, ReviewAction)>,
     ai: AiWatch,
+    /// When the open review last checked for its missing clips.
+    clips_poll: Instant,
 }
 
 /// The AI reviews an AI app does through `vantage mcp`, which runs apart
@@ -423,6 +427,7 @@ impl Vantage {
                 reviewing: vec![],
                 saved: ai::saved_ids(data_dir).into_iter().collect(),
             },
+            clips_poll: Instant::now(),
         };
         app.refresh();
         app
@@ -550,6 +555,27 @@ impl Vantage {
             ]);
             out::emit(Kind::Dim, "  /review, then the AI tab, to read it".into());
         }
+    }
+
+    /// Looks again for the open review's missing clips once the clip folder or
+    /// Medal's records of it change: Medal records a match's clips minutes
+    /// after saving them, so a review opened straight after the match has none.
+    fn poll_clips(&mut self, ctx: &mut Ctx<Self>) {
+        let Some(Panel::Review(p)) = ctx.panel() else { return };
+        let Clips::Set {
+            dir, per_death, stamp, ..
+        } = &p.data().clips
+        else {
+            return;
+        };
+        if per_death.iter().all(Option::is_some) || vantage_core::clips::stamp(dir) == *stamp {
+            return;
+        }
+        let id = p.match_id().to_owned();
+        let dir = self.data_dir.clone();
+        self.start(ctx, "Finding your clips", false, move || {
+            panel_or_error(|| crate::load_review(&dir, Some(id)), |d| Flow::Reloaded(Box::new(d)))
+        });
     }
 
     /// `Sova on Lotus`, or the start of the match's id.
@@ -770,6 +796,10 @@ impl App for Vantage {
         if !ctx.busy() && self.watch.last_poll.elapsed() >= WATCH_EVERY {
             self.watch.last_poll = Instant::now();
             self.poll_replays(ctx);
+        }
+        if !ctx.busy() && self.clips_poll.elapsed() >= CLIPS_EVERY {
+            self.clips_poll = Instant::now();
+            self.poll_clips(ctx);
         }
         // The review shows its own spinner while the AI is asked.
         let asking = ctx
