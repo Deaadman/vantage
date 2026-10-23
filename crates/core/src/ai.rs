@@ -1,7 +1,8 @@
 //! The optional AI review: the match's facts and the death screenshots go to
-//! the player's own AI (Claude, ChatGPT or Gemini with their API key, or a
-//! model on this PC through Ollama). The answer must fit the fixed format
-//! `vantage.ai-review/1`, and it is saved once per match: it can't be
+//! the player's own AI (Claude, ChatGPT or Gemini with their API key, a
+//! model on this PC through Ollama, or the AI app they already use, which
+//! asks Vantage's MCP server for the match). The answer must fit the fixed
+//! format `vantage.ai-review/1`, and it is saved once per match: it can't be
 //! rerun, so every match is judged the same way, once.
 
 use std::path::{Path, PathBuf};
@@ -65,6 +66,46 @@ pub const PROVIDERS: [Provider; 4] = [
 
 pub fn provider(id: &str) -> Option<&'static Provider> {
     PROVIDERS.iter().find(|p| p.id == id)
+}
+
+/// What `config.toml` calls the AI app route: no key, the app asks Vantage.
+pub const APP: &str = "app";
+
+/// An AI app that runs Vantage's MCP server (`vantage mcp`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct App {
+    /// What `config.toml` calls it.
+    pub id: &'static str,
+    pub name: &'static str,
+}
+
+pub const APPS: [App; 3] = [
+    App {
+        id: "claude-desktop",
+        name: "Claude Desktop",
+    },
+    App {
+        id: "claude-code",
+        name: "Claude Code",
+    },
+    App {
+        id: "other",
+        name: "your AI app",
+    },
+];
+
+/// The configured app, or "your AI app" when it's unknown.
+pub fn app(id: Option<&str>) -> &'static App {
+    APPS.iter().find(|a| Some(a.id) == id).unwrap_or(&APPS[2])
+}
+
+/// The app's name from what it calls itself when it connects, for the saved review.
+pub fn app_from_client(client: &str) -> Option<&'static str> {
+    match client.to_lowercase().as_str() {
+        "claude-ai" | "claude desktop" | "claude-desktop" => Some("Claude Desktop"),
+        "claude-code" | "claude code" => Some("Claude Code"),
+        _ => None,
+    }
 }
 
 /// A model to pick for a provider.
@@ -321,6 +362,9 @@ pub struct Meta {
     /// RFC 3339, UTC.
     pub saved_at: String,
     pub format: u32,
+    /// The AI app that saved it through MCP, e.g. `Claude Desktop`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -336,6 +380,61 @@ pub fn saved_path(data_dir: &Path, match_id: &str) -> PathBuf {
 pub fn load(data_dir: &Path, match_id: &str) -> Option<Saved> {
     let text = std::fs::read_to_string(saved_path(data_dir, match_id)).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// How long after an AI app fetched a match it still counts as reviewing it.
+pub const REVIEWING_FOR: Duration = Duration::from_secs(20 * 60);
+
+/// Set while an AI app reviews the match: holds the app's name.
+fn asked_path(data_dir: &Path, match_id: &str) -> PathBuf {
+    data_dir.join("ai").join(format!("{match_id}.asked"))
+}
+
+/// An AI app fetched the match to review it.
+pub fn mark_asked(data_dir: &Path, match_id: &str, app: &str) -> Result<()> {
+    crate::files::write_atomic(&asked_path(data_dir, match_id), app.as_bytes())
+}
+
+/// The matches an AI app is reviewing now: (match id, app, since when).
+pub fn reviewing(data_dir: &Path) -> Vec<(String, String, std::time::SystemTime)> {
+    let Ok(dir) = std::fs::read_dir(data_dir.join("ai")) else {
+        return vec![];
+    };
+    let mut out = Vec::new();
+    for e in dir.flatten() {
+        let path = e.path();
+        let (Some(id), Some("asked")) = (
+            path.file_stem().and_then(|s| s.to_str()),
+            path.extension().and_then(|s| s.to_str()),
+        ) else {
+            continue;
+        };
+        let Ok(since) = e.metadata().and_then(|m| m.modified()) else {
+            continue;
+        };
+        if since.elapsed().is_ok_and(|t| t > REVIEWING_FOR) || saved_path(data_dir, id).is_file() {
+            continue;
+        }
+        let app = std::fs::read_to_string(&path).unwrap_or_default();
+        out.push((id.to_owned(), app.trim().to_owned(), since));
+    }
+    out.sort();
+    out
+}
+
+/// The ids of the matches with a saved review.
+pub fn saved_ids(data_dir: &Path) -> Vec<String> {
+    let Ok(dir) = std::fs::read_dir(data_dir.join("ai")) else {
+        return vec![];
+    };
+    dir.flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            (path.extension().and_then(|s| s.to_str()) == Some("json"))
+                .then(|| path.file_stem()?.to_str().map(str::to_owned))
+                .flatten()
+        })
+        .collect()
 }
 
 /// The JSON Schema of the answer, for providers that can be held to one.
@@ -422,17 +521,41 @@ pub fn prompt(d: &Debrief, shots: &[Shot]) -> String {
         }
         s.push('\n');
     }
-    s.push_str("Screenshots (each is 3 s before, 1 s before and the moment of the death, left to right, unless it is a single frame):\n");
-    for shot in shots {
-        let round: u32 = shot.name.get(1..3).and_then(|r| r.parse().ok()).unwrap_or(0);
+    s.push_str(SHOTS_HELP);
+    let mut rounds: Vec<u32> = shots.iter().map(|x| shot_round(&x.name)).collect();
+    rounds.dedup();
+    for round in rounds {
+        let names: Vec<&str> = shots
+            .iter()
+            .filter(|x| shot_round(&x.name) == round)
+            .map(|x| x.name.as_str())
+            .collect();
         let death = d.deaths.iter().find(|x| x.round == round);
         s.push_str(&format!(
-            "- {}: round {round}. {}\n",
-            shot.name,
-            death.map_or_else(String::new, |x| x.sentence())
+            "- Round {round} ({}): {}\n",
+            names.join(", "),
+            death.map_or_else(String::new, |x| format!("{} {}", x.sentence(), x.aim_sentence()))
         ));
     }
     s
+}
+
+/// How the screenshots are laid out, and how to use the replay's facts with them.
+const SHOTS_HELP: &str = "Screenshots of each death, from the player's clip. RNN.jpg is four moments in a 2×2 grid: \
+     top left 3 s before the death, top right 1 s before, bottom left a quarter second before (what the player saw \
+     as they were shot), bottom right half a second after. After the death the game shows a \"Killed by\" panel with \
+     the killer and the damage each way, and often the killer outlined in red. RNNa.jpg to RNNd.jpg are the same \
+     four moments as separate images. RNNz.jpg is a close-up of the middle of the screen as the player died: use it \
+     for crosshair placement, the peek, and a killer in front. The timing can be off by up to a second when the \
+     clip came from an app other than Medal. The facts after each round come from the replay and are exact. When \
+     they say the killer was off-screen, the killer won't be in the screenshots before the death: judge from where \
+     the player stood and where they were looking which angle they left open, and make that a finding (exposure or \
+     awareness), not unclear. Put a screenshot in unclear only when it can't show where the player was or what they \
+     were doing.\n";
+
+/// `R07z.jpg` is round 7's.
+fn shot_round(name: &str) -> u32 {
+    name.get(1..3).and_then(|r| r.parse().ok()).unwrap_or(0)
 }
 
 /// Checks an answer against the format; the error says what's wrong, for the retry.
@@ -480,7 +603,6 @@ pub fn run(
     d: &Debrief,
     shots: &[Shot],
 ) -> Result<Saved> {
-    let path = saved_path(data_dir, &d.match_id);
     // Only a review that reads back blocks a new one; a damaged file doesn't.
     if load(data_dir, &d.match_id).is_some() {
         bail!("This match already has an AI review. It's saved and can't be rerun.");
@@ -510,20 +632,60 @@ pub fn run(
             validate(&answer, shots).context("the AI's answer didn't fit the format twice, so nothing was saved")?
         }
     };
+    let label = if provider.local {
+        format!("{} (on this PC)", provider.name)
+    } else {
+        format!("{} ({model})", provider.name)
+    };
+    save(data_dir, &d.match_id, output, label, model, None)
+}
+
+/// Checks the answer an AI app sent through MCP, and saves it. The error
+/// says what to fix, and the app can send it again.
+pub fn save_from_app(
+    data_dir: &Path,
+    match_id: &str,
+    answer: &str,
+    shots: &[Shot],
+    app: &str,
+    model: Option<&str>,
+) -> Result<Saved> {
+    if load(data_dir, match_id).is_some() {
+        bail!("This match already has an AI review. It's saved and can't be rerun.");
+    }
+    let output = validate(answer, shots)?;
+    let model = model.map(str::trim).filter(|m| !m.is_empty());
+    let label = match model {
+        Some(m) => format!("{app} ({}) through MCP", model_name(m)),
+        None => format!("{app} through MCP"),
+    };
+    let saved = save(data_dir, match_id, output, label, model.unwrap_or(""), Some(app))?;
+    let _ = std::fs::remove_file(asked_path(data_dir, match_id));
+    Ok(saved)
+}
+
+fn save(
+    data_dir: &Path,
+    match_id: &str,
+    output: Output,
+    provider: String,
+    model: &str,
+    app: Option<&str>,
+) -> Result<Saved> {
     let saved = Saved {
         output,
         meta: Meta {
-            provider: if provider.local {
-                format!("{} (on this PC)", provider.name)
-            } else {
-                format!("{} ({model})", provider.name)
-            },
+            provider,
             model: model.to_owned(),
             saved_at: crate::time::now_rfc3339(),
             format: FORMAT_VERSION,
+            app: app.map(str::to_owned),
         },
     };
-    crate::files::write_atomic(&path, serde_json::to_string_pretty(&saved)?.as_bytes())?;
+    crate::files::write_atomic(
+        &saved_path(data_dir, match_id),
+        serde_json::to_string_pretty(&saved)?.as_bytes(),
+    )?;
     Ok(saved)
 }
 
@@ -681,7 +843,7 @@ fn ask(p: &Provider, key: Option<&str>, model: &str, prompt: &str, images: &[Str
 }
 
 /// Standard base64 with padding.
-fn base64(bytes: &[u8]) -> String {
+pub fn base64(bytes: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for c in bytes.chunks(3) {
@@ -735,6 +897,37 @@ mod tests {
         assert_eq!(base64(b"Man"), "TWFu");
         assert_eq!(base64(b"Ma"), "TWE=");
         assert_eq!(base64(b"M"), "TQ==");
+    }
+
+    #[test]
+    fn an_ai_app_reviews_once_and_stops_counting_as_reviewing() {
+        let dir = std::env::temp_dir().join(format!("vantage-ai-app-{}", std::process::id()));
+        let shots = [Shot {
+            name: "R07.jpg".into(),
+            path: "R07.jpg".into(),
+        }];
+        let answer = json!({
+            "schema": SCHEMA, "summary": "s",
+            "findings": [{"category": "peek", "title": "t", "rounds": [7], "screenshots": ["R07.jpg"],
+                "saw": "a", "why": "b", "try": "c", "confidence": "low"}],
+            "keep": [], "unclear": []
+        })
+        .to_string();
+        mark_asked(&dir, "m1", "Claude Desktop").unwrap();
+        let now = reviewing(&dir);
+        assert_eq!((now[0].0.as_str(), now[0].1.as_str()), ("m1", "Claude Desktop"));
+        assert!(save_from_app(&dir, "m1", "{}", &shots, "Claude Desktop", None).is_err());
+        assert_eq!(reviewing(&dir).len(), 1, "a wrong answer leaves it reviewing");
+        let saved = save_from_app(&dir, "m1", &answer, &shots, "Claude Desktop", Some("claude-opus-5-5")).unwrap();
+        assert_eq!(saved.meta.provider, "Claude Desktop (Opus 5.5) through MCP");
+        assert_eq!(load(&dir, "m1").unwrap().meta.app.as_deref(), Some("Claude Desktop"));
+        assert!(reviewing(&dir).is_empty());
+        assert_eq!(saved_ids(&dir), ["m1"]);
+        assert!(save_from_app(&dir, "m1", &answer, &shots, "Claude Desktop", None).is_err());
+        assert_eq!(app(Some("claude-code")).name, "Claude Code");
+        assert_eq!(app(None).name, "your AI app");
+        assert_eq!(app_from_client("claude-ai"), Some("Claude Desktop"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

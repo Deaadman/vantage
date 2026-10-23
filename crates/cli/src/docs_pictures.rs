@@ -209,17 +209,18 @@ fn saved() -> ai::Saved {
             model: "claude-sonnet-5-5".into(),
             saved_at: "2026-10-19T21:52:00Z".into(),
             format: ai::FORMAT_VERSION,
+            app: None,
         },
     }
 }
 
 fn clips() -> Clips {
     Clips::Set {
-        dir: "C:\\Users\\Player\\Videos\\Medal\\Clips\\VALORANT".into(),
+        dir: "C:\\Medal\\Clips\\Valorant".into(),
         per_death: (0..8)
             .map(|i| {
                 (i % 3 != 2).then(|| Matched {
-                    path: format!("VALORANT 2026.10.19 - 21.{:02}.10.mp4", 4 + i * 2).into(),
+                    path: format!("MedalTVValorant2026101921{:02}10.mp4", 4 + i * 2).into(),
                     before_end_s: 12.0,
                     length_s: Some(if i == 4 { 45.0 } else { 30.0 }),
                     bytes: Some(50_544_640 + i as u64 * 380_000),
@@ -231,7 +232,9 @@ fn clips() -> Clips {
             .map(|r| (r, vec![format!("R{r:02}.jpg").into()]))
             .to_vec(),
         shot_error: None,
-        style: ShotStyle::Strip,
+        waiting: None,
+        stamp: 0,
+        style: ShotStyle::Grid,
     }
 }
 
@@ -402,10 +405,7 @@ fn redraw_docs_images() {
             demos.display().to_string(),
             "C:\\Users\\Player\\Documents\\VALORANT\\Demos".to_owned(),
         ),
-        (
-            clip_dir.display().to_string(),
-            "C:\\Users\\Player\\Videos\\Medal\\Clips\\VALORANT".to_owned(),
-        ),
+        (clip_dir.display().to_string(), "C:\\Medal\\Clips\\Valorant".to_owned()),
         (
             data_dir.display().to_string(),
             "C:\\Users\\Player\\AppData\\Local\\vantage\\data".to_owned(),
@@ -486,6 +486,7 @@ fn redraw_docs_images() {
         clips: clips(),
         ai,
         ai_provider: ai::provider("anthropic"),
+        ai_app: None,
     };
     for (name, tab, ai) in [
         ("review-debrief", '1', None),

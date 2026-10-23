@@ -3,10 +3,11 @@
 //! notices, panels, settings and colours; Abalone draws the screen, edits
 //! the line and runs commands on a worker thread.
 //!
-//! Alongside commands it watches the replay folder for new downloads, and
-//! checks for a newer Vantage and vrfkit now and then.
+//! Alongside commands it watches the replay folder for new downloads,
+//! follows AI reviews an AI app does through `vantage mcp`, and checks for
+//! a newer Vantage and vrfkit now and then.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,11 +39,15 @@ use crate::out::{self, Kind};
 use crate::panel::rank_color;
 use crate::review_view::{ReviewAction, ReviewPanel};
 use crate::settings::VantageSettings;
-use crate::{APP_NAME, Cli, ReviewData, VERSION};
+use crate::{APP_NAME, Cli, Clips, ReviewData, VERSION};
 
 const TICK: Duration = Duration::from_millis(80);
 /// How often the replay folder is checked for new downloads.
 const WATCH_EVERY: Duration = Duration::from_secs(3);
+/// How often the AI app's reviews are checked on.
+const AI_EVERY: Duration = Duration::from_secs(1);
+/// How often an open review missing clips looks for them again.
+const CLIPS_EVERY: Duration = Duration::from_secs(5);
 /// A catalog this many days old is refreshed in the background on launch.
 const SYNC_AFTER_DAYS: i64 = 1;
 /// How often an open shell checks for updates again after launch.
@@ -93,7 +98,7 @@ const GENERAL: &str = "Vantage watches your VALORANT replays and coaches you: wh
 # After a match
   Download the replay in the client. Vantage picks it up and tells you how it went.
   /review opens the debrief: the short version, the issues that cost you the most rounds, what to keep doing, and how your focus habit went.
-  Its Clips and Screenshots tabs match your clips (Medal, ShadowPlay, Game Bar and others) to your deaths and take a screenshot of each one.
+  Its Clips and Screenshots tabs match your clips (from Medal or any clip app) to your deaths and take a screenshot of each one.
   The AI tab in /review can ask an AI (Claude, ChatGPT, Gemini, or Ollama on your own PC) to look at those screenshots for you: where you stood and where your crosshair was. It's optional and saved once per match.
 
 # Before you queue
@@ -170,6 +175,8 @@ pub(crate) enum Flow {
     AiDone(String, Result<ai::Saved, String>),
     /// The watcher stored new matches: open panels built from all matches update.
     NewMatches,
+    /// A replay the watcher waited on finished downloading: read it now.
+    Downloaded,
     /// Those panels again, replacing the open one of the same kind.
     Updated(Panel),
 }
@@ -217,6 +224,10 @@ impl abalone::Panel for Panel {
             Panel::Rank(p) => p.rows(w, h),
         }
     }
+
+    fn busy(&mut self) -> bool {
+        matches!(self, Panel::Review(p) if p.waiting())
+    }
 }
 
 /// A stored match, for completing `--match`.
@@ -229,6 +240,8 @@ pub(crate) struct MatchInfo {
     pub about: String,
     /// `Ascent`, for completing `--map`.
     pub map: String,
+    /// `Swiftplay`, for completing `/matches <mode>`.
+    pub mode: Option<String>,
 }
 
 /// Values for the command menu: matches, maps and habits.
@@ -243,6 +256,7 @@ impl Completer for Completions {
             (_, Some("--match")) => self.match_items(word, ""),
             (_, Some("--map")) => self.map_items(word, ""),
             ("focus", None) if args.is_empty() => habit_items(word),
+            ("matches", None) if args.is_empty() => self.mode_items(word),
             // A bare command offers what it is about, then its flags.
             ("review", None) if args.is_empty() && word.is_empty() => self.match_items("", "--match "),
             ("plan", None) if args.is_empty() && word.is_empty() => self.map_items("", "--map "),
@@ -254,25 +268,21 @@ impl Completer for Completions {
 impl Completions {
     /// Maps with stored matches, most played first.
     fn map_items(&self, prefix: &str, value_prefix: &str) -> Vec<Suggestion> {
-        let mut counts: Vec<(String, usize)> = Vec::new();
-        for m in self.matches.iter().filter(|m| m.map != "?") {
-            match counts.iter_mut().find(|(name, _)| *name == m.map) {
-                Some((_, n)) => *n += 1,
-                None => counts.push((m.map.clone(), 1)),
-            }
-        }
-        counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        let prefix = prefix.to_lowercase();
-        counts
+        let maps = self.matches.iter().map(|m| m.map.as_str()).filter(|m| *m != "?");
+        most_played(maps)
             .into_iter()
-            .filter(|(name, _)| name.to_lowercase().starts_with(&prefix))
-            .map(|(name, n)| {
-                Suggestion::new(
-                    format!("{value_prefix}{name}"),
-                    name,
-                    format!("{n} match{}", if n == 1 { "" } else { "es" }),
-                )
-            })
+            .filter(|(name, _)| name.to_lowercase().starts_with(&prefix.to_lowercase()))
+            .map(|(name, n)| Suggestion::new(format!("{value_prefix}{name}"), name, match_count(n)))
+            .collect()
+    }
+
+    /// Modes with stored matches, most played first. What gets typed is one
+    /// short word (`Comp`, `SpikeRush`); the menu shows the full name.
+    fn mode_items(&self, prefix: &str) -> Vec<Suggestion> {
+        most_played(self.matches.iter().filter_map(|m| m.mode.as_deref()))
+            .into_iter()
+            .filter(|(name, _)| crate::mode_fits(name, prefix))
+            .map(|(name, n)| Suggestion::new(crate::mode_word(&name, prefix), name, match_count(n)))
             .collect()
     }
 
@@ -292,6 +302,23 @@ impl Completions {
     }
 }
 
+/// Each name once with how many matches have it, most first.
+fn most_played<'a>(names: impl Iterator<Item = &'a str>) -> Vec<(String, usize)> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for name in names {
+        match counts.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((name.to_owned(), 1)),
+        }
+    }
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    counts
+}
+
+fn match_count(n: usize) -> String {
+    format!("{n} match{}", if n == 1 { "" } else { "es" })
+}
+
 fn habit_items(prefix: &str) -> Vec<Suggestion> {
     let p = prefix.to_lowercase();
     vantage_core::habits::HABITS
@@ -301,12 +328,10 @@ fn habit_items(prefix: &str) -> Vec<Suggestion> {
         .collect()
 }
 
-/// The replay folder as of the last scan, and what has changed since.
+/// The replay folder as of the last scan.
 struct Watch {
     last_poll: Instant,
     seen: HashMap<PathBuf, u64>,
-    /// Changed files and their sizes at the previous poll.
-    pending: HashMap<PathBuf, u64>,
 }
 
 /// Every replay in the configured folder with its size.
@@ -319,6 +344,18 @@ fn replay_sizes(data_dir: &Path) -> HashMap<PathBuf, u64> {
         .into_iter()
         .filter_map(|p| Some((p.clone(), std::fs::metadata(&p).ok()?.len())))
         .collect()
+}
+
+/// The longest the download job waits before giving the shell back; the
+/// next poll waits again if the replay is still being written.
+const DOWNLOAD_WAIT: Duration = Duration::from_secs(120);
+
+/// On the worker thread: wait until none of `files` is still being written.
+fn wait_for_downloads(files: Vec<PathBuf>) {
+    let started = Instant::now();
+    while started.elapsed() < DOWNLOAD_WAIT && !files.iter().all(|p| vantage_core::scan::settled(p)) {
+        std::thread::sleep(Duration::from_millis(500));
+    }
 }
 
 /// Runs `f` and turns its error into a transcript line.
@@ -352,6 +389,18 @@ pub(crate) struct Vantage {
     new_vrfkit: Option<Pin>,
     /// A review's request made while a job ran, started when it ends.
     queued: Option<(String, ReviewAction)>,
+    ai: AiWatch,
+    /// When the open review last checked for its missing clips.
+    clips_poll: Instant,
+}
+
+/// The AI reviews an AI app does through `vantage mcp`, which runs apart
+/// from the shell: what it's reviewing now, and the reviews already seen.
+struct AiWatch {
+    last_poll: Instant,
+    /// (match id, app, since when).
+    reviewing: Vec<(String, String, Instant)>,
+    saved: HashSet<String>,
 }
 
 impl Vantage {
@@ -366,7 +415,6 @@ impl Vantage {
             watch: Watch {
                 last_poll: Instant::now(),
                 seen: HashMap::new(),
-                pending: HashMap::new(),
             },
             update_known: Arc::new(AtomicBool::new(false)),
             seen_update: false,
@@ -374,17 +422,27 @@ impl Vantage {
             pin_rx,
             new_vrfkit: None,
             queued: None,
+            ai: AiWatch {
+                last_poll: Instant::now(),
+                reviewing: vec![],
+                saved: ai::saved_ids(data_dir).into_iter().collect(),
+            },
+            clips_poll: Instant::now(),
         };
         app.refresh();
         app
     }
 
     /// Run `job` on a worker thread. A job that `scans` marks the replay
-    /// folder's current files as seen, so the watcher only picks up later ones.
+    /// folder's current files as seen, so the watcher only picks up later
+    /// ones. Files still downloading aren't: the scan skips them, so the
+    /// watcher reads them once they're done.
     fn start(&mut self, ctx: &mut Ctx<Self>, label: &str, scans: bool, job: impl FnOnce() -> Flow + Send + 'static) {
         if scans {
-            self.watch.seen = replay_sizes(&self.data_dir);
-            self.watch.pending.clear();
+            self.watch.seen = replay_sizes(&self.data_dir)
+                .into_iter()
+                .filter(|(p, _)| vantage_core::scan::settled(p))
+                .collect();
         }
         ctx.start(label, job);
     }
@@ -398,23 +456,30 @@ impl Vantage {
         });
     }
 
-    /// Scan replays that appeared or changed since the last scan, once their
-    /// size holds still for a poll (a download in progress keeps growing).
+    /// Scan replays that appeared or changed since the last scan. One still
+    /// downloading is waited for first, with the wait in the status line.
     fn poll_replays(&mut self, ctx: &mut Ctx<Self>) {
         if Config::load(&self.data_dir).is_ok_and(|c| c.watch == Some(false)) {
-            self.watch.pending.clear();
             return;
         }
-        let changed: HashMap<PathBuf, u64> = replay_sizes(&self.data_dir)
+        let changed: Vec<PathBuf> = replay_sizes(&self.data_dir)
             .into_iter()
             .filter(|(p, size)| self.watch.seen.get(p) != Some(size))
+            .map(|(p, _)| p)
             .collect();
-        if changed.is_empty() || changed != self.watch.pending {
-            self.watch.pending = changed;
+        if changed.is_empty() {
             return;
         }
         // The scan skips files changed moments ago; wait until it will read them.
-        if !changed.keys().all(|p| vantage_core::scan::settled(p)) {
+        if !changed.iter().all(|p| vantage_core::scan::settled(p)) {
+            let label = match changed.len() {
+                1 => "Downloading the new replay".to_owned(),
+                n => format!("Downloading {n} new replays"),
+            };
+            self.start(ctx, &label, false, move || {
+                wait_for_downloads(changed);
+                Flow::Downloaded
+            });
             return;
         }
         let dir = self.data_dir.clone();
@@ -440,6 +505,88 @@ impl Vantage {
                 Flow::NewMatches
             }
         });
+    }
+
+    /// What the AI app is reviewing, and the reviews it saved since the last
+    /// look: each is said in the transcript, and shown if its review is open.
+    fn poll_ai(&mut self, ctx: &mut Ctx<Self>) {
+        let now: Vec<(String, String, Instant)> = ai::reviewing(&self.data_dir)
+            .into_iter()
+            .map(|(id, app, since)| {
+                let ago = since.elapsed().unwrap_or_default();
+                (id, app, Instant::now().checked_sub(ago).unwrap_or_else(Instant::now))
+            })
+            .collect();
+        let same = |a: &[(String, String, Instant)], b: &[(String, String, Instant)]| {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.0 == y.0 && x.1 == y.1)
+        };
+        if !same(&now, &self.ai.reviewing) {
+            // Keep the start time of a review already shown, so its spinner doesn't restart.
+            self.ai.reviewing = now
+                .into_iter()
+                .map(|n| match self.ai.reviewing.iter().find(|o| o.0 == n.0) {
+                    Some(o) => (n.0, n.1, o.2),
+                    None => n,
+                })
+                .collect();
+            ctx.refresh();
+        }
+        for id in ai::saved_ids(&self.data_dir) {
+            if !self.ai.saved.insert(id.clone()) {
+                continue;
+            }
+            let Some(saved) = ai::load(&self.data_dir, &id) else {
+                continue;
+            };
+            // A review the shell ran itself is said when its job ends.
+            let Some(app) = saved.meta.app.clone() else { continue };
+            let name = self.match_name(&id);
+            if let Some(Panel::Review(p)) = ctx.panel()
+                && p.match_id() == id
+            {
+                p.ai_done(Ok(saved));
+            }
+            outln!();
+            out::row(vec![
+                (Kind::Paint(crate::review_view::GREEN, true), "✓ ".into()),
+                (Kind::Out, "AI review saved: ".into()),
+                (Kind::Bold, name),
+                (Kind::Dim, format!(" · from {app}")),
+            ]);
+            out::emit(Kind::Dim, "  /review, then the AI tab, to read it".into());
+        }
+    }
+
+    /// Looks again for the open review's missing clips once the clip folder or
+    /// Medal's records of it change: Medal records a match's clips minutes
+    /// after saving them, so a review opened straight after the match has none.
+    fn poll_clips(&mut self, ctx: &mut Ctx<Self>) {
+        let Some(Panel::Review(p)) = ctx.panel() else { return };
+        let Clips::Set {
+            dir, per_death, stamp, ..
+        } = &p.data().clips
+        else {
+            return;
+        };
+        if per_death.iter().all(Option::is_some) || vantage_core::clips::stamp(dir) == *stamp {
+            return;
+        }
+        let id = p.match_id().to_owned();
+        let dir = self.data_dir.clone();
+        self.start(ctx, "Finding your clips", false, move || {
+            panel_or_error(|| crate::load_review(&dir, Some(id)), |d| Flow::Reloaded(Box::new(d)))
+        });
+    }
+
+    /// `Sova on Lotus`, or the start of the match's id.
+    fn match_name(&self, id: &str) -> String {
+        self.completions.matches.iter().find(|m| m.id == id).map_or_else(
+            || format!("match {}", id.chars().take(8).collect::<String>()),
+            |m| match m.about.split(" · ").next() {
+                Some(agent) if !agent.is_empty() => format!("{agent} on {}", m.map),
+                _ => m.map.clone(),
+            },
+        )
     }
 
     /// What a review asks for: a clip folder, or the AI review.
@@ -502,7 +649,7 @@ impl App for Vantage {
     /// and exit), less `uninstall`, which can't remove the running shell.
     fn commands(&self) -> Vec<CommandInfo> {
         let mut cmds = CommandInfo::from_clap(&Cli::command());
-        cmds.retain(|c| c.name != "uninstall");
+        cmds.retain(|c| c.name != "uninstall" && c.name != "mcp");
         cmds
     }
 
@@ -546,6 +693,10 @@ impl App for Vantage {
         match flow {
             Flow::Continue => {}
             Flow::Launch => self.start_launch(ctx),
+            Flow::Downloaded => {
+                self.watch.last_poll = Instant::now();
+                self.poll_replays(ctx);
+            }
             Flow::Review(data) => ctx.open(Panel::Review(ReviewPanel::new(*data))),
             Flow::Plan(data) => ctx.open(Panel::Plan(PlanPanel::new(*data))),
             Flow::Habits(p) => ctx.open(Panel::Habits(p)),
@@ -646,12 +797,22 @@ impl App for Vantage {
             self.watch.last_poll = Instant::now();
             self.poll_replays(ctx);
         }
+        if !ctx.busy() && self.clips_poll.elapsed() >= CLIPS_EVERY {
+            self.clips_poll = Instant::now();
+            self.poll_clips(ctx);
+        }
         // The review shows its own spinner while the AI is asked.
         let asking = ctx
             .job()
             .and_then(|(label, started)| label.strip_prefix("Asking ").map(|who| (who.to_owned(), started)));
+        if self.ai.last_poll.elapsed() >= AI_EVERY {
+            self.ai.last_poll = Instant::now();
+            self.poll_ai(ctx);
+        }
         if let Some(Panel::Review(p)) = ctx.panel() {
             p.asking(asking);
+            let id = p.match_id().to_owned();
+            p.reviewing(self.ai.reviewing.iter().find(|r| r.0 == id).map(|r| (r.1.clone(), r.2)));
         }
     }
 
@@ -672,7 +833,14 @@ impl App for Vantage {
     }
 
     fn notices(&self) -> Vec<Notice> {
-        self.notices.clone()
+        let mut out: Vec<Notice> = self
+            .ai
+            .reviewing
+            .iter()
+            .map(|(id, app, _)| Notice::info(format!("{app} is reviewing {}", self.match_name(id))))
+            .collect();
+        out.extend(self.notices.iter().cloned());
+        out
     }
 
     fn footer(&self) -> String {
@@ -928,18 +1096,22 @@ fn matches(data_dir: &Path) -> Vec<MatchInfo> {
                 .as_deref()
                 .map(crate::short_when)
                 .unwrap_or_else(|| "?".into());
-            let about = match &m.agent {
+            let mut about = match &m.agent {
                 Some(a) => {
                     let (res, _) = crate::review_view::result_style(m.won, m.lost);
                     format!("{a} · {res} {}–{}", m.won, m.lost)
                 }
                 None => "you aren't in this one".into(),
             };
+            if let Some(mode) = &m.mode {
+                about.push_str(&format!(" · {mode}"));
+            }
             MatchInfo {
                 id: m.id,
                 label: format!("{when}  {map:<6}"),
                 about,
                 map,
+                mode: m.mode,
             }
         })
         .collect()
@@ -1061,17 +1233,18 @@ mod tests {
     #[test]
     fn completes_matches_maps_and_habits() {
         let cmds = CommandInfo::from_clap(&Cli::command());
-        let m = |id: &str, label: &str, map: &str| MatchInfo {
+        let m = |id: &str, label: &str, map: &str, mode: &str| MatchInfo {
             id: id.into(),
             label: label.into(),
             about: "Sova · won 13–8".into(),
             map: map.into(),
+            mode: Some(mode.into()),
         };
         let completions = Completions {
             matches: vec![
-                m("aaaa1111-0000", "2026-10-19  Ascent", "Ascent"),
-                m("bbbb2222-0000", "2026-10-18  Lotus", "Lotus"),
-                m("cccc3333-0000", "2026-10-17  Lotus", "Lotus"),
+                m("aaaa1111-0000", "2026-10-19  Ascent", "Ascent", "Spike Rush"),
+                m("bbbb2222-0000", "2026-10-18  Lotus", "Lotus", "Comp/Unrated/Premier"),
+                m("cccc3333-0000", "2026-10-17  Lotus", "Lotus", "Comp/Unrated/Premier"),
             ],
         };
         let ctx = Context {
@@ -1090,6 +1263,14 @@ mod tests {
         assert_eq!(suggest("/plan ", &ctx).items[0].description, "2 matches");
         assert_eq!(values("/plan --map lo"), ["Lotus"]);
         assert_eq!(values("/review --match b"), ["bbbb2222"]);
+        // `/matches` offers the modes played, most first, as one short word each, then its flag.
+        assert_eq!(values("/matches "), ["Comp", "SpikeRush", "--all"]);
+        assert_eq!(suggest("/matches ", &ctx).items[0].label, "Comp/Unrated/Premier");
+        assert_eq!(values("/matches sp"), ["SpikeRush"]);
+        assert_eq!(values("/matches prem"), ["Premier"]);
+        assert_eq!(values("/matches unr"), ["Unrated"]);
+        // Past one part, the whole name, so it still starts with what was typed.
+        assert_eq!(values("/matches compun"), ["CompUnratedPremier"]);
         assert!(values("/focus ").contains(&"untraded".to_owned()));
         assert!(values("/focus unt").iter().all(|v| v.starts_with("unt")));
     }

@@ -63,7 +63,7 @@ fn bench() {
         per_death: (0..7)
             .map(|i| {
                 (i % 2 == 0).then(|| Matched {
-                    path: format!("VALORANT 2026.10.19 - 21.0{i}.10.mp4").into(),
+                    path: format!("MedalTVValorant20261019210{i}10.mp4").into(),
                     before_end_s: 12.0,
                     length_s: Some(30.0),
                     bytes: Some(50_544_640),
@@ -73,7 +73,9 @@ fn bench() {
         shots_dir: "shots".into(),
         shots: vec![(1, vec!["R01.jpg".into()])],
         shot_error: None,
-        style: ShotStyle::Strip,
+        waiting: None,
+        stamp: 0,
+        style: ShotStyle::Grid,
     };
     let mut review = ReviewPanel::new(review_data(clips(), Some(saved())));
     let mut habits_panel = HabitsPanel::new(habits::progress(&eight), "untraded", eight.len());

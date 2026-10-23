@@ -33,6 +33,7 @@ pub fn status_groups(data_dir: &Path) -> StatusGroups {
         None => vec![piece(Kind::Warn, "Not found yet")],
     };
     let ai = match cfg.ai.as_deref().and_then(ai::provider) {
+        None if cfg.ai.as_deref() == Some(ai::APP) => vec![piece(Kind::Out, app_label(&cfg))],
         Some(p) => vec![piece(
             Kind::Out,
             format!(
@@ -209,6 +210,17 @@ impl Setting {
     }
 }
 
+/// The AI app's picker, opened under the AI review row.
+const AI_APP: &str = "ai_app";
+
+/// `Claude Desktop · through MCP`.
+fn app_label(cfg: &Config) -> String {
+    match ai::app(cfg.ai_app.as_deref()) {
+        a if a.id == "other" => "Your AI app · vantage mcp".into(),
+        a => format!("{} · through MCP", a.name),
+    }
+}
+
 /// "Another model": type its id.
 const OTHER_MODEL: &str = "";
 /// A field for an AI provider's key: `ai_key:<provider id>`.
@@ -278,7 +290,14 @@ impl VantageSettings {
     fn options(&self, setting: Setting) -> Vec<Choice> {
         match setting {
             Setting::Ai => {
-                let mut v = vec![Choice::new("off", "Off", "the review works without it")];
+                let mut v = vec![
+                    Choice::new("off", "Off", "the review works without it"),
+                    Choice::new(
+                        ai::APP,
+                        "Your AI app",
+                        "Claude Desktop, Claude Code and others · no key",
+                    ),
+                ];
                 v.extend(ai::PROVIDERS.iter().map(|p| {
                     let about = match p.key {
                         Some(k) => format!("with your {k}"),
@@ -419,15 +438,49 @@ impl SettingsModel for VantageSettings {
     fn picked(&mut self, id: &str, value: &str) -> Outcome {
         let value = value.to_owned();
         match Setting::from_id(id) {
+            None if id == AI_APP => {
+                let added = match value.as_str() {
+                    "claude-desktop" => crate::mcp::add_to_claude_desktop(),
+                    "claude-code" => crate::mcp::add_to_claude_code(),
+                    _ => Ok(()),
+                };
+                if let Err(e) = added {
+                    return Outcome::Error(format!("{e:#}"));
+                }
+                self.save(|c| {
+                    c.ai = Some(ai::APP.into());
+                    c.ai_app = Some(value);
+                    c.ai_key = None;
+                    c.ai_model = None;
+                })
+            }
             Some(Setting::Ai) => match value.as_str() {
                 "off" => self.save(|c| {
                     c.ai = None;
+                    c.ai_app = None;
                     c.ai_key = None;
                     c.ai_model = None;
                 }),
+                ai::APP => {
+                    let cfg = self.config();
+                    let apps = ai::APPS
+                        .iter()
+                        .map(|a| {
+                            let about = match a.id {
+                                "claude-desktop" => "adds Vantage to its MCP servers, then restart it",
+                                "claude-code" => "runs claude mcp add for you",
+                                _ => "add the MCP server vantage mcp to it yourself",
+                            };
+                            let name = if a.id == "other" { "Another app" } else { a.name };
+                            Choice::new(a.id, name, about)
+                        })
+                        .collect();
+                    Outcome::Pick(Picker::new(Setting::Ai.id(), apps, cfg.ai_app.as_deref()).id(AI_APP))
+                }
                 id => match ai::provider(id) {
                     Some(p) if p.local => self.save(|c| {
                         c.ai = Some(p.id.into());
+                        c.ai_app = None;
                         c.ai_key = None;
                         c.ai_model = None;
                     }),
@@ -478,6 +531,7 @@ impl SettingsModel for VantageSettings {
                     c.ai_model = None;
                 }
                 c.ai = Some(p.id.into());
+                c.ai_app = None;
                 c.ai_key = Some(text);
             });
         }
@@ -507,6 +561,7 @@ fn value(setting: Setting, cfg: &Config) -> Value {
     let unset = |t: &str| Value::Unset(t.to_owned());
     match setting {
         Setting::Ai => match cfg.ai.as_deref().and_then(ai::provider) {
+            None if cfg.ai.as_deref() == Some(ai::APP) => text(app_label(cfg)),
             None => text("Off".into()),
             Some(p) if p.local => text(format!("{} · on this PC", p.name)),
             Some(p) => {
@@ -581,6 +636,14 @@ mod tests {
         );
         cfg.ai = Some("anthropic".into());
         assert_eq!(labels(&cfg)[0][4], "AI model");
+        // An AI app picks its own model.
+        cfg.ai = Some(ai::APP.into());
+        cfg.ai_app = Some("claude-desktop".into());
+        assert_eq!(labels(&cfg)[0][4], "Screenshots per death");
+        assert_eq!(
+            value(Setting::Ai, &cfg),
+            Value::Text(Style::default(), "Claude Desktop · through MCP".into())
+        );
         assert_eq!(
             SETTING_ROWS,
             GROUPS.iter().map(|g| g.len()).sum::<usize>() + GROUPS.len() - 1

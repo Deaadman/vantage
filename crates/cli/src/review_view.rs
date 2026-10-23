@@ -51,6 +51,8 @@ pub struct ReviewPanel {
     flash: Option<String>,
     /// While the AI review runs: who is asked, and since when.
     asking: Option<(String, Instant)>,
+    /// While an AI app reviews this match through MCP: the app, and since when.
+    reviewing: Option<(String, Instant)>,
     map_cache: MapCache,
 }
 
@@ -66,6 +68,7 @@ impl ReviewPanel {
             json: false,
             flash: None,
             asking: None,
+            reviewing: None,
             map_cache: MapCache::default(),
         }
     }
@@ -93,6 +96,16 @@ impl ReviewPanel {
     /// The shell is running the AI review: show the spinner.
     pub fn asking(&mut self, who: Option<(String, Instant)>) {
         self.asking = who;
+    }
+
+    /// Waiting on an AI app's review, so the spinner keeps turning.
+    pub fn waiting(&self) -> bool {
+        self.reviewing.is_some() && self.data.ai.is_none()
+    }
+
+    /// An AI app is reviewing this match: show the spinner.
+    pub fn reviewing(&mut self, who: Option<(String, Instant)>) {
+        self.reviewing = who;
     }
 
     /// The AI review finished, or failed.
@@ -150,6 +163,17 @@ impl ReviewPanel {
             if is_run(&key) {
                 return self.run_ai();
             }
+            if ch == Some('c')
+                && self.data.ai.is_none()
+                && let Some(app) = self.data.ai_app
+            {
+                let line = crate::mcp::ask_line(&self.data.debrief);
+                self.flash = Some(match crate::mcp::copy(&line) {
+                    Ok(()) => format!("Copied. Paste it into {}.", app_title(app)),
+                    Err(e) => format!("{e:#}"),
+                });
+                return ReviewAction::None;
+            }
             if ch == Some('j') && self.data.ai.is_some() {
                 self.json = !self.json;
                 self.scroll = 0;
@@ -206,10 +230,12 @@ impl ReviewPanel {
         if self.asking.is_some() {
             return ReviewAction::None;
         }
-        if self.data.ai_provider.is_none() {
-            self.flash = Some("Connect an AI first, in /settings → Config → AI review.".into());
-        } else if self.data.ai.is_some() {
+        if self.data.ai.is_some() {
             self.flash = Some("This match already has an AI review. It's saved and can't be rerun.".into());
+        } else if let Some(app) = self.data.ai_app {
+            self.flash = Some(format!("Ask {} instead: press c to copy what to ask.", app.name));
+        } else if self.data.ai_provider.is_none() {
+            self.flash = Some("Connect an AI first, in /settings → Config → AI review.".into());
         } else if self.data.shots().is_empty() {
             self.flash = Some("There are no screenshots to send yet. Set up the Clips tab first.".into());
         } else {
@@ -263,6 +289,8 @@ impl ReviewPanel {
             _ if self.data.ai.is_some() && self.json => "↑↓ scroll · j: back to the review · ",
             _ if self.data.ai.is_some() => "↑↓ select · j: the format and saved answer · ",
             _ if self.data.ai_provider.is_some() => "Ctrl+Enter: run the AI review · ",
+            _ if self.data.ai_app.is_some() && self.reviewing.is_none() => "c: copy what to ask · ",
+            _ if self.data.ai_app.is_some() => "",
             _ => "connect an AI in /settings → Config · ",
         };
         frame(
@@ -493,7 +521,12 @@ impl ReviewPanel {
                 }
                 self.flash_rows(&mut b, w);
             }
-            Clips::Set { dir, per_death, .. } => {
+            Clips::Set {
+                dir,
+                per_death,
+                waiting,
+                ..
+            } => {
                 let have = per_death.iter().filter(|c| c.is_some()).count();
                 b.push(vec![
                     (Style::default(), "  ".into()),
@@ -504,6 +537,10 @@ impl ReviewPanel {
                     (Style::fg(GREY), format!(" · from {}", dir.display())),
                 ]);
                 b.push(vec![]);
+                if let Some(why) = waiting {
+                    b.extend(para(why, 2, w, Style::fg(YELLOW)));
+                    b.push(vec![]);
+                }
                 if d.deaths.is_empty() {
                     b.push(vec![(Style::fg(GREY), "    You didn't die this match.".into())]);
                     return b;
@@ -569,6 +606,7 @@ impl ReviewPanel {
             shots_dir,
             shots,
             shot_error,
+            waiting,
             style,
             ..
         } = &self.data.clips
@@ -585,6 +623,7 @@ impl ReviewPanel {
             b.extend(para(
                 shot_error
                     .as_deref()
+                    .or(waiting.as_deref())
                     .unwrap_or("None of your deaths has a clip, so there's nothing to take screenshots from."),
                 2,
                 w,
@@ -602,12 +641,12 @@ impl ReviewPanel {
             ]);
             b.push(vec![]);
             let how = match style {
-                vantage_core::clips::ShotStyle::Strip => {
-                    "Each screenshot puts three moments side by side: 3 seconds before you died, 1 second before, and the moment you died, so the whole fight is in one image."
+                vantage_core::clips::ShotStyle::Grid => {
+                    "Each screenshot puts four moments in a grid: 3 seconds before you died, 1 second before, the moment you were shot, and half a second after, when the game shows who killed you. A close-up of the middle of your screen as you died goes with it."
                 }
                 vantage_core::clips::ShotStyle::One => "Each screenshot is the moment you died.",
-                vantage_core::clips::ShotStyle::Three => {
-                    "Each death has three screenshots: 3 seconds before you died, 1 second before, and the moment you died."
+                vantage_core::clips::ShotStyle::Four => {
+                    "Each death has four screenshots: 3 seconds before you died, 1 second before, the moment you were shot, and half a second after, when the game shows who killed you; and a close-up of the middle of your screen as you died."
                 }
             };
             b.extend(para(how, 2, w, Style::fg(GREY)));
@@ -669,6 +708,28 @@ impl ReviewPanel {
             ));
             return b;
         }
+        if self.data.ai.is_none()
+            && let Some((who, started)) = &self.reviewing
+        {
+            let (style, glyph) = spike(started.elapsed());
+            let mut b = vec![
+                vec![
+                    (style, format!("  {glyph} ")),
+                    (Style::fg(ACCENT), format!("{who} is reviewing this match…")),
+                ],
+                vec![],
+            ];
+            b.extend(para(
+                &format!(
+                    "It has this match's facts and {}. Its answer is checked against the AI review format before it's saved, and it's told what to fix if it doesn't fit.",
+                    plural(shots, "screenshot")
+                ),
+                4,
+                w,
+                Style::fg(GREY),
+            ));
+            return b;
+        }
         if let Some(saved) = self.data.ai.clone() {
             return if self.json {
                 self.ai_json(&saved, w, h)
@@ -684,12 +745,75 @@ impl ReviewPanel {
             Style::fg(GREY),
         ));
         b.push(vec![]);
-        match provider {
-            None => {
+        match (provider, self.data.ai_app) {
+            (None, Some(app)) => {
+                let what = if shots > 0 {
+                    format!("this match's facts and {}", plural(shots, "screenshot"))
+                } else {
+                    "this match's facts, but no screenshots yet (pick your clip folder in the Clips tab first)"
+                        .to_owned()
+                };
+                b.extend(field(
+                    "Sends",
+                    &format!("{}, when you ask it: {what}", app_title(app)),
+                    w,
+                    Style::default(),
+                ));
+                b.extend(field(
+                    "Answers in",
+                    &format!("the same format every time ({}), checked when it's saved", ai::SCHEMA),
+                    w,
+                    Style::default(),
+                ));
+                b.extend(field(
+                    "Saved",
+                    "once for this match. It can't be rerun, so every match is judged the same way, once.",
+                    w,
+                    Style::default(),
+                ));
+                b.extend(field(
+                    "Costs",
+                    "nothing extra: it uses the plan you already pay for, not an API key",
+                    w,
+                    Style::default(),
+                ));
+                if app.id == "other" {
+                    b.extend(field(
+                        "Set up",
+                        "add a local MCP server to your AI app with the command: vantage mcp",
+                        w,
+                        Style::default(),
+                    ));
+                }
+                b.push(vec![]);
+                b.push(vec![(Style::fg(GREEN).bold(), format!("    Ask {}:", app.name))]);
+                b.extend(para(
+                    &crate::mcp::ask_line(&self.data.debrief),
+                    4,
+                    w,
+                    Style::default().bold(),
+                ));
+                b.extend(para(
+                    &format!(
+                        "Press c to copy it. This tab fills in once {} saves its answer.",
+                        app.name
+                    ),
+                    4,
+                    w,
+                    Style::fg(GREY),
+                ));
+            }
+            (None, None) => {
                 b.extend(bullet(
                     "•",
                     ACCENT,
-                    "Connect Claude, ChatGPT, Gemini, or Ollama on this PC in /settings → Config → AI review.",
+                    "Connect your AI app, Claude, ChatGPT, Gemini, or Ollama on this PC in /settings → Config → AI review.",
+                    w,
+                ));
+                b.extend(bullet(
+                    "•",
+                    ACCENT,
+                    "No API key? Your AI app (Claude Desktop, Claude Code and others) reviews through MCP on the plan you already pay for. You start it from that app's chat.",
                     w,
                 ));
                 b.extend(bullet(
@@ -705,7 +829,7 @@ impl ReviewPanel {
                     w,
                 ));
             }
-            Some(p) => {
+            (Some(p), _) => {
                 let what = if shots > 0 {
                     format!(
                         "this match's facts and {} from the Screenshots tab",
@@ -887,6 +1011,14 @@ pub fn result_style(won: usize, lost: usize) -> (&'static str, Color) {
     }
 }
 
+/// The app's name to start a sentence with: `Your AI app`.
+fn app_title(app: &ai::App) -> String {
+    let mut c = app.name.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
+}
+
 /// Ctrl+Enter, which runs the AI review.
 fn is_run(key: &KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Enter | KeyCode::Char('\n'))
@@ -949,7 +1081,9 @@ mod tests {
             shots_dir: "shots".into(),
             shots: vec![(1, vec!["R01.jpg".into()])],
             shot_error: None,
-            style: ShotStyle::Strip,
+            waiting: None,
+            stamp: 0,
+            style: ShotStyle::Grid,
         }
     }
 

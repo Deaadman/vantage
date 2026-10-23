@@ -4,6 +4,7 @@ mod out;
 mod bench_tests;
 mod coach_views;
 mod logo;
+mod mcp;
 mod panel;
 #[cfg(test)]
 mod render_tests;
@@ -78,11 +79,13 @@ enum Command {
     },
     /// What wins games at your rank, and how you compare
     Rank,
-    /// Your matches, newest first
+    /// Your matches and their modes, newest first
     Matches {
         /// Show every match, not just the newest 10
         #[arg(long)]
         all: bool,
+        /// Only one mode, e.g. comp, unrated, premier, swiftplay or spike
+        mode: Option<String>,
     },
     /// Look for new replays now
     Scan {
@@ -115,6 +118,10 @@ enum Command {
         #[arg(long)]
         update: bool,
     },
+    /// Serve your matches to your AI app (Claude Desktop, Claude Code and others) for the AI review,
+    /// without an API key. The app starts this itself: add it as a local MCP server with the
+    /// command `vantage mcp`.
+    Mcp,
     /// Remove Vantage, vrfkit and your data from this PC
     Uninstall {
         /// Keep your settings, matches and logs
@@ -150,6 +157,7 @@ fn run(cli: Cli) -> Result<()> {
                     | Command::Update
                     | Command::Install { .. }
                     | Command::Uninstall { .. }
+                    | Command::Mcp
             ) {
                 startup_check(&data_dir);
             }
@@ -180,6 +188,7 @@ impl Command {
             Command::Update => "update",
             Command::Install { .. } => "install",
             Command::Uninstall { .. } => "uninstall",
+            Command::Mcp => "mcp",
         }
     }
 }
@@ -197,6 +206,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
         Command::Update => update_cmd(&data_dir)?,
         Command::Install { update } => install_cmd(&data_dir, update)?,
         Command::Uninstall { keep_data, yes } => uninstall_cmd(&data_dir, keep_data, yes)?,
+        Command::Mcp => mcp::serve(&data_dir)?,
         Command::Review { match_id } => print_review(&load_review(&data_dir, match_id)?),
         Command::Plan { map } => print_plan(&load_plan(&data_dir, map)?),
         Command::Habits => {
@@ -230,7 +240,7 @@ fn run_command(data_dir: &Path, command: Command) -> Result<()> {
                 outln!("  - {t}");
             }
         }
-        Command::Matches { all } => print_matches(&data_dir, all)?,
+        Command::Matches { all, mode } => print_matches(&data_dir, all, mode.as_deref())?,
         Command::Scan {
             demos_dir,
             keep_raw,
@@ -325,7 +335,9 @@ fn scan_cmd(data_dir: &Path, demos_dir: Option<PathBuf>, keep_raw: bool, retry_f
             (Kind::Dim, " · read after the next update".into()),
         ]);
     }
-    if waiting > 0 {
+    // The shell's watcher shows a download in the status line and reads it once it's done.
+    let watched = abalone::out::captured() && cfg.watch != Some(false);
+    if waiting > 0 && !watched {
         out::row(vec![
             (Kind::Dim, "  · ".into()),
             (Kind::Out, format!("{} still downloading", plural(waiting, "replay"))),
@@ -464,6 +476,10 @@ pub enum Clips {
         shots: Vec<(u32, Vec<PathBuf>)>,
         /// Why some or all screenshots are missing.
         shot_error: Option<String>,
+        /// Clips that exist but can't be matched yet, and why.
+        waiting: Option<String>,
+        /// The clip folder's `clips::stamp` before it was read.
+        stamp: u64,
         style: ShotStyle,
     },
 }
@@ -480,6 +496,8 @@ pub struct ReviewData {
     pub clips: Clips,
     pub ai: Option<ai::Saved>,
     pub ai_provider: Option<&'static ai::Provider>,
+    /// The AI app that reviews through MCP, when that's the AI picked.
+    pub ai_app: Option<&'static ai::App>,
 }
 
 impl ReviewData {
@@ -534,6 +552,7 @@ pub(crate) fn load_review(data_dir: &Path, match_id: Option<String>) -> Result<R
     Ok(ReviewData {
         ai: ai::load(data_dir, &id),
         ai_provider: cfg.ai.as_deref().and_then(ai::provider),
+        ai_app: (cfg.ai.as_deref() == Some(ai::APP)).then(|| ai::app(cfg.ai_app.as_deref())),
         debrief,
         focus,
         focus_trend,
@@ -545,13 +564,26 @@ pub(crate) fn load_review(data_dir: &Path, match_id: Option<String>) -> Result<R
 }
 
 fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
-    let found = clips::find(dir);
     let times: Vec<u32> = d.deaths.iter().map(|x| x.time_ms).collect();
+    let stamp = clips::stamp(dir);
+    let medal = clips::medal_clips(dir, &d.match_id);
+    let started = d.played_at.as_deref().and_then(clips::parse_rfc3339);
+    let waiting = (medal.is_empty() && started.is_some_and(|s| clips::medal_pending(dir, s as f64))).then(|| {
+        "Medal has saved clips from this match but hasn't added them to its records yet, which it does a few \
+         minutes after the match. They'll show up here on their own when it does."
+            .to_owned()
+    });
     let per_death = d
         .played_at
         .as_deref()
         .and_then(|p| clips::death_times(p, &times))
-        .map(|t| clips::match_deaths(&t, &found))
+        .map(|t| {
+            if medal.is_empty() {
+                clips::match_deaths(&t, &clips::find(dir))
+            } else {
+                clips::match_medal(&t, &medal)
+            }
+        })
         .unwrap_or_else(|| vec![None; d.deaths.len()]);
     let played = d.played_at.as_deref().and_then(vantage_core::time::local_minutes);
     let folder = clips::shots_folder(played.as_deref(), &d.map, &d.match_id);
@@ -566,6 +598,9 @@ fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
                 )
             }
             Some(ff) => {
+                if let Err(e) = clips::forget_old_shots(&shots_dir) {
+                    shot_error = Some(format!("Couldn't clear the old screenshots: {e:#}"));
+                }
                 for (x, c) in d.deaths.iter().zip(&per_death) {
                     let Some(c) = c else { continue };
                     match clips::screenshot(&ff, c, x.round, style, &shots_dir) {
@@ -582,6 +617,8 @@ fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
         shots_dir,
         shots,
         shot_error,
+        waiting,
+        stamp,
         style,
     }
 }
@@ -848,12 +885,31 @@ pub(crate) fn my_matches(data_dir: &Path) -> Vec<MyMatch> {
     Store::open(&db).and_then(|s| s.my_matches(&me)).unwrap_or_default()
 }
 
-/// `/matches`: the newest matches under a heading for their day.
-fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
-    let matches = my_matches(data_dir);
+/// `/matches`: the newest matches under a heading for their day, each with
+/// its mode. `mode` keeps the matches it fits (see [`mode_fits`]).
+fn print_matches(data_dir: &Path, all: bool, mode: Option<&str>) -> Result<()> {
+    let mut matches = my_matches(data_dir);
     if matches.is_empty() {
         outln!("No matches yet. Download one in the client and it shows up here.");
         return Ok(());
+    }
+    // Matches stored before modes were read have none, so a filter leaves them out.
+    let mut unknown = 0;
+    if let Some(want) = mode.map(str::trim) {
+        let mut played: Vec<String> = matches.iter().filter_map(|m| m.mode.clone()).collect();
+        played.sort();
+        played.dedup();
+        unknown = matches.iter().filter(|m| m.mode.is_none()).count();
+        matches.retain(|m| m.mode.as_deref().is_some_and(|x| mode_fits(x, want)));
+        if matches.is_empty() {
+            if played.is_empty() {
+                outln!("No {want} matches.");
+            } else {
+                outln!("No {want} matches. You've played {}.", played.join(", "));
+            }
+            unknown_modes(unknown);
+            return Ok(());
+        }
     }
     let shown = if all {
         matches.len()
@@ -887,7 +943,14 @@ fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
         if let Some(agent) = &m.agent {
             let (res, color) = review_view::result_style(m.won, m.lost);
             row.push((Kind::Out, format!("{agent:<10}")));
-            row.push((Kind::Paint(color, true), format!("{res} {}–{}", m.won, m.lost)));
+            let result = format!("{res} {}–{}", m.won, m.lost);
+            row.push((Kind::Paint(color, true), format!("{result:<10}")));
+        } else if m.mode.is_some() {
+            // No agent or result to show: keep the mode in its column.
+            row.push((Kind::Out, " ".repeat(20)));
+        }
+        if let Some(mode) = &m.mode {
+            row.push((Kind::Dim, format!("  {mode}")));
         }
         out::row(row);
     }
@@ -902,7 +965,54 @@ fn print_matches(data_dir: &Path, all: bool) -> Result<()> {
             ),
         );
     }
+    unknown_modes(unknown);
     Ok(())
+}
+
+/// After `/matches <mode>`: the matches left out because their mode isn't known.
+fn unknown_modes(n: usize) {
+    if n > 0 {
+        out::emit(
+            Kind::Dim,
+            format!(
+                "{} stored before modes were read {} no mode, so {} left out",
+                plural(n, "match"),
+                if n == 1 { "has" } else { "have" },
+                if n == 1 { "it's" } else { "they're" }
+            ),
+        );
+    }
+}
+
+/// A mode name as `/matches <mode>` compares it: lower case, letters and
+/// digits only, so `spikerush`, `SpikeRush` and `"Spike Rush"` are the same.
+pub(crate) fn mode_key(mode: &str) -> String {
+    mode.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Whether `/matches want` picks `mode`: `want` starts the name, or one of
+/// its `/` parts, so `comp`, `unrated` and `premier` find `Comp/Unrated/Premier`.
+pub(crate) fn mode_fits(mode: &str, want: &str) -> bool {
+    let want = mode_key(want);
+    std::iter::once(mode)
+        .chain(mode.split('/'))
+        .any(|part| mode_key(part).starts_with(&want))
+}
+
+/// The one word to type for `mode`: the `/` part `typed` starts, else the
+/// whole name, as letters and digits. `Comp/Unrated/Premier` -> `Comp`, or
+/// `Premier` after `pre`, or `CompUnratedPremier` after `compun`;
+/// `Spike Rush` -> `SpikeRush`. Either way it still starts with what was typed.
+pub(crate) fn mode_word(mode: &str, typed: &str) -> String {
+    let typed = mode_key(typed);
+    let part = mode
+        .split('/')
+        .find(|part| mode_key(part).starts_with(&typed))
+        .unwrap_or(mode);
+    part.chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
 /// `vantage review` outside the shell: the Debrief as text.
