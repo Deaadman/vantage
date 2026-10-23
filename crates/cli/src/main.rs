@@ -560,13 +560,19 @@ pub(crate) fn load_review(data_dir: &Path, match_id: Option<String>) -> Result<R
 }
 
 fn load_clips(dir: &Path, d: &Debrief, style: ShotStyle) -> Clips {
-    let found = clips::find(dir);
     let times: Vec<u32> = d.deaths.iter().map(|x| x.time_ms).collect();
+    let medal = clips::medal_clips(dir, &d.match_id);
     let per_death = d
         .played_at
         .as_deref()
         .and_then(|p| clips::death_times(p, &times))
-        .map(|t| clips::match_deaths(&t, &found))
+        .map(|t| {
+            if medal.is_empty() {
+                clips::match_deaths(&t, &clips::find(dir))
+            } else {
+                clips::match_medal(&t, &medal)
+            }
+        })
         .unwrap_or_else(|| vec![None; d.deaths.len()]);
     let played = d.played_at.as_deref().and_then(vantage_core::time::local_minutes);
     let folder = clips::shots_folder(played.as_deref(), &d.map, &d.match_id);
