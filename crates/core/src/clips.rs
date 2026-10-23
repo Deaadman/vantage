@@ -2,10 +2,13 @@
 //! match each death to the clip saved just after it, and take screenshots
 //! of the seconds before the death with ffmpeg.
 //!
-//! A clip is matched by when it was saved: instant replay saves the last
-//! seconds, so a clip saved soon after a death ends just after it. The
-//! death's wall-clock time is the replay's timestamp plus the death's match
-//! time, which assumes the timestamp is when recording started (unverified).
+//! Medal's clips are matched from Medal's own database, which tags each clip
+//! with the VALORANT match and when its recording started: Medal saves a
+//! match's death clips all at once when the match ends, so their file times
+//! say nothing about the deaths. Other clips are matched by when they were
+//! saved: instant replay saves the last seconds, so a clip saved soon after a
+//! death ends just after it. The death's wall-clock time is the replay's
+//! timestamp plus the death's match time plus `REPLAY_CLOCK_LAG_S`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -117,10 +120,124 @@ pub struct Matched {
     pub bytes: Option<u64>,
 }
 
+/// How much later a death happens on the wall clock than `played_at` plus its
+/// match time. Measured on Medal's clips of one match: all 16 deaths came
+/// 5.8 s later, give or take 0.1 s.
+pub const REPLAY_CLOCK_LAG_S: f64 = 5.8;
+
 /// Unix seconds of each death: `played_at` (RFC 3339) plus the match time.
 pub fn death_times(played_at: &str, times_ms: &[u32]) -> Option<Vec<f64>> {
-    let start = parse_rfc3339(played_at)?;
-    Some(times_ms.iter().map(|t| start as f64 + *t as f64 / 1000.0).collect())
+    let start = parse_rfc3339(played_at)? as f64 + REPLAY_CLOCK_LAG_S;
+    Some(times_ms.iter().map(|t| start + *t as f64 / 1000.0).collect())
+}
+
+/// A clip from Medal's database: the file and when its recording started.
+#[derive(Debug, Clone)]
+pub struct MedalClip {
+    pub path: PathBuf,
+    pub start_unix: f64,
+}
+
+/// This match's clips in Medal's database, `Databases\medal-*.db` in Medal's
+/// folder: the clip folder or one above it. Empty when there is no database
+/// or it can't be read, and then clips are matched by when they were saved.
+pub fn medal_clips(clips_dir: &Path, match_id: &str) -> Vec<MedalClip> {
+    let mut out = Vec::new();
+    for root in clips_dir.ancestors().take(4) {
+        let Ok(entries) = std::fs::read_dir(root.join("Databases")) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            if name.starts_with("medal-") && name.ends_with(".db") {
+                out.extend(read_medal_db(&e.path(), match_id).unwrap_or_default());
+            }
+        }
+    }
+    out.retain(|c| c.path.is_file());
+    out.sort_by(|a, b| a.start_unix.total_cmp(&b.start_unix));
+    out.dedup_by(|a, b| a.path == b.path);
+    out
+}
+
+fn read_medal_db(db: &Path, match_id: &str) -> rusqlite::Result<Vec<MedalClip>> {
+    use rusqlite::{Connection, OpenFlags};
+    // Medal keeps it open while it runs; reading alongside it is fine.
+    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    conn.busy_timeout(std::time::Duration::from_secs(2))?;
+    let mut stmt = conn.prepare(
+        "SELECT video_path, metadata FROM contents WHERE video_path IS NOT NULL AND instr(metadata, ?1) > 0",
+    )?;
+    let rows = stmt.query_map([match_id.as_bytes()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+    })?;
+    Ok(rows
+        .flatten()
+        .filter_map(|(path, meta)| {
+            Some(MedalClip {
+                path: path.into(),
+                start_unix: clip_start(&meta)?,
+            })
+        })
+        .collect())
+}
+
+/// `clipStartTime` from a clip's metadata in Medal's database: a binary
+/// encoding with the time as text, `2026-10-22T09:18:08.398+00:00`.
+fn clip_start(meta: &[u8]) -> Option<f64> {
+    let key = b"clipStartTime";
+    let at = meta.windows(key.len()).position(|w| w == key)? + key.len();
+    // A byte or two of length and type before the text.
+    let rest = meta.get(at..(at + 48).min(meta.len()))?;
+    let from = rest.windows(2).take(4).position(|w| w == b"20")?;
+    let text: String = rest[from..]
+        .iter()
+        .take_while(|b| b.is_ascii_digit() || b"-T:.+Z".contains(b))
+        .map(|&b| b as char)
+        .collect();
+    let utc = text.ends_with("+00:00") || text.ends_with('Z');
+    if !utc {
+        return None;
+    }
+    let frac = text
+        .get(19..)
+        .and_then(|f| f.strip_prefix('.'))
+        .map(|f| f.chars().take_while(char::is_ascii_digit).collect::<String>())
+        .and_then(|d| format!("0.{d}").parse::<f64>().ok())
+        .unwrap_or(0.0);
+    Some(parse_rfc3339(&text)? as f64 + frac)
+}
+
+/// Each death's clip from Medal: the clip whose recording holds the death,
+/// the one with the death nearest its middle when two do, no clip used twice.
+pub fn match_medal(deaths_unix: &[f64], clips: &[MedalClip]) -> Vec<Option<Matched>> {
+    let lengths: Vec<Option<f64>> = clips.iter().map(|c| mp4_length(&c.path)).collect();
+    match_medal_with(deaths_unix, clips, &lengths)
+}
+
+fn match_medal_with(deaths_unix: &[f64], clips: &[MedalClip], lengths: &[Option<f64>]) -> Vec<Option<Matched>> {
+    let mut used = vec![false; clips.len()];
+    deaths_unix
+        .iter()
+        .map(|&t| {
+            let (i, c, len) = clips
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| Some((i, c, lengths[i]?)))
+                .filter(|(i, c, len)| !used[*i] && c.start_unix <= t && t <= c.start_unix + len)
+                .min_by(|a, b| {
+                    let off = |(_, c, len): &(usize, &MedalClip, f64)| (t - c.start_unix - len / 2.0).abs();
+                    off(a).total_cmp(&off(b))
+                })?;
+            used[i] = true;
+            Some(Matched {
+                path: c.path.clone(),
+                before_end_s: c.start_unix + len - t,
+                length_s: Some(len),
+                bytes: std::fs::metadata(&c.path).ok().map(|m| m.len()),
+            })
+        })
+        .collect()
 }
 
 /// Each death's clip: the first clip saved within `MATCH_WINDOW_S` after it
@@ -477,12 +594,12 @@ mod tests {
 
     #[test]
     fn deaths_get_the_clip_saved_just_after() {
-        let start = parse_rfc3339("2026-10-19T21:04:00Z").unwrap();
+        let start = parse_rfc3339("2026-10-19T21:04:00Z").unwrap() as f64 + REPLAY_CLOCK_LAG_S;
         let deaths = death_times("2026-10-19T21:04:00Z", &[60_000, 200_000, 400_000]).unwrap();
-        assert_eq!(deaths[0], start as f64 + 60.0);
+        assert_eq!(deaths[0], start + 60.0);
         let clip = |s: f64| Clip {
             path: format!("{s}.mp4").into(),
-            saved_unix: start as f64 + s,
+            saved_unix: start + s,
         };
         let clips = [clip(70.0), clip(75.0), clip(500.0)];
         let m = match_deaths(&deaths, &clips);
@@ -496,6 +613,32 @@ mod tests {
         // A 30 s clip saved 40 s after the death starts after it: skipped for the 60 s one.
         let m = match_deaths_with(&deaths[..1], &clips[..2], &[Some(5.0), Some(60.0)]);
         assert_eq!(m[0].as_ref().unwrap().before_end_s, 15.0);
+    }
+
+    #[test]
+    fn medal_clips_saved_after_the_match_still_match_their_deaths() {
+        // Medal's metadata around the time: a length byte, then the text.
+        let mut meta = b"\x97title\x97Death\xc7clipStartTime\xc7\x1d".to_vec();
+        meta.extend(b"2026-10-22T09:18:08.398+00:00\xc7\x11activeWindowTitle");
+        let start = clip_start(&meta).unwrap();
+        assert!((start - (parse_rfc3339("2026-10-22T09:18:08Z").unwrap() as f64 + 0.398)).abs() < 1e-6);
+        assert_eq!(clip_start(b"clipStartTime\x1d2026-10-22T19:48:08.398+10:30"), None);
+        assert_eq!(clip_start(b"no time here"), None);
+
+        // Two deaths 140 s apart, each in a 20 s clip starting 10 s before it;
+        // both clips saved long after, which matching by save time can't use.
+        let deaths = [start + 10.0, start + 150.0];
+        let clip = |s: f64| MedalClip {
+            path: format!("{s}.mp4").into(),
+            start_unix: start + s,
+        };
+        let clips = [clip(0.0), clip(140.0)];
+        let m = match_medal_with(&deaths, &clips, &[Some(20.0), Some(20.0)]);
+        assert_eq!(m[0].as_ref().unwrap().path, clips[0].path);
+        assert!((m[1].as_ref().unwrap().before_end_s - 10.0).abs() < 1e-6);
+        // A death no clip holds, and a clip of unknown length, get nothing.
+        let m = match_medal_with(&[start + 60.0, start + 150.0], &clips, &[Some(20.0), None]);
+        assert!(m[0].is_none() && m[1].is_none());
     }
 
     #[test]

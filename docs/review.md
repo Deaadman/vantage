@@ -28,7 +28,7 @@ The minimap, drawn in the terminal, with your deaths and your best and worst spo
 
 ## Clips
 
-Your clips matched to your deaths, with each clip's length and size. A clip counts when your clip app saved it within 90 seconds of the death.
+Your clips matched to your deaths, with each clip's length and size. Medal's clips are matched using Medal's own records of which match and moment each clip is from, so it doesn't matter that Medal saves them all when the match ends. Other apps' clips count when the app saved them within 90 seconds of the death.
 
 The first time, Vantage looks for Medal's clips in `C:\Medal\Clips\Valorant`, where Medal saves them unless you moved its capture folder, and lets you pick it.
 
