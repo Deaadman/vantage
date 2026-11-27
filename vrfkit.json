@@ -1,9 +1,9 @@
 {
-  "tag": "v0.3.0",
-  "zip_url": "https://github.com/yakisoba0728/vrfkit/releases/download/v0.3.0/vrfkit-v0.3.0-windows-x64.zip",
-  "zip_sha256": "58cd76fb926642de931e74d70b3ad3db1e696ffbd752e4a1a60fc6686c4540df",
-  "exe_sha256": "1a211eebbaf0a794201baefa2b32162d74c93fec38a8db3a793c0d93429ba0ca",
-  "builds": ["11.06", "13.08"],
-  "notes": ["Supports VALORANT 13.08"],
+  "tag": "v0.7.0",
+  "zip_url": "https://github.com/yakisoba0728/vrfkit/releases/download/v0.7.0/vrfkit-v0.7.0-windows-x64.zip",
+  "zip_sha256": "e86db1486422cc6868640478ce11ae9c788b1ef66dcc582a4a3c9c52be8e47eb",
+  "exe_sha256": "39265140cd32453f979adafe21438232e177bf118a91c8895b22726fd781a91c",
+  "builds": ["11.06", "13.10"],
+  "notes": ["Supports VALORANT 13.10"],
   "min_vantage": "0.1.0"
 }
